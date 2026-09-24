@@ -1,0 +1,5 @@
+/evidence/
+/work/
+*.qcow2
+*.img
+*.iso
