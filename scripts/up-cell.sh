@@ -19,6 +19,17 @@ mem=$(jq -r '.cell.docker_host.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.docker_host.disk_gib' <<<"$RESOLVED")
 domain="lab-${CELL}-dockerhost"
 
+# Deterministic per-domain MACs (OUI 52:54:00, libvirt's own range) so
+# the netplan match in network-config.tmpl.yaml is exact and stable
+# across re-runs of an idempotent bring-up, without depending on
+# whatever NIC names the guest kernel happens to assign (see that
+# template's comment for why a name-only match doesn't work here).
+mac_from() {
+	echo -n "$1" | md5sum | cut -c1-6 | sed -E 's/(..)(..)(..)/52:54:00:\1:\2:\3/'
+}
+mgmt_mac=$(mac_from "${domain}-mgmt")
+seg_mac=$(mac_from "${domain}-seg")
+
 echo "== segment bridge =="
 "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
 
@@ -41,6 +52,7 @@ mkdir -p "$seed_dir"
 sed -e "s#__PLUGIN_TAG__#$plugin_tag#g" -e "s#__SSH_PUBKEY__#$pubkey#" \
 	"$REPO_ROOT/cloud-init/docker-host-user-data.tmpl.yaml" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
+	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
 	"$REPO_ROOT/cloud-init/network-config.tmpl.yaml" >"$seed_dir/network-config"
 : >"$seed_dir/meta-data"
 echo "instance-id: $domain" >"$seed_dir/meta-data"
@@ -84,8 +96,8 @@ if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 		--memory "$mem" --vcpus "$vcpus" \
 		--disk path="$overlay",format=qcow2,bus=virtio \
 		--disk path="$seed_iso",device=cdrom \
-		--network network=net-mgmt,model=virtio \
-		--network bridge="$bridge",model=virtio \
+		--network network=net-mgmt,model=virtio,mac="$mgmt_mac" \
+		--network bridge="$bridge",model=virtio,mac="$seg_mac" \
 		--os-variant debian13 \
 		--cpu host-model \
 		--boot loader="$ovmf_code",loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template="$ovmf_vars_template",nvram="$nvram" \

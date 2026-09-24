@@ -1,16 +1,28 @@
-# Two NICs, in PCI/virtio attach order: eth0 is the management NIC (NAT,
-# static -- no DHCP anywhere in this repo, track file), eth1 is the
-# segment NIC, deliberately address-less: only its link state matters, it
-# is the macvlan parent for the plugin under test.
+# Two NICs, matched by MAC and renamed to fixed names: the base image's
+# kernel cmdline does not set net.ifnames=0, so systemd's predictable
+# naming gives each NIC a name like enp1s0/enp2s0, not eth0/eth1 -- a
+# match on "eth0"/"eth1" alone never fires and both NICs stay
+# unconfigured (measured: zero tx packets on either NIC, no cloud-init
+# error, live run of issue #1). up-cell.sh pins the MACs it hands to
+# virt-install so the match here is exact. eth0 (by set-name) is the
+# management NIC (NAT, static -- no DHCP anywhere in this repo, track
+# file); eth1 is the segment NIC, deliberately address-less: only its
+# link state matters, it is the macvlan parent for the plugin under test.
 network:
   version: 2
   ethernets:
-    eth0:
+    mgmt0:
+      match:
+        macaddress: __MGMT_MAC__
+      set-name: eth0
       addresses: [__MGMT_ADDR__]
       gateway4: __MGMT_GW__
       nameservers:
         addresses: [__MGMT_GW__]
-    eth1:
+    seg0:
+      match:
+        macaddress: __SEG_MAC__
+      set-name: eth1
       dhcp4: false
       dhcp6: false
       accept-ra: false
