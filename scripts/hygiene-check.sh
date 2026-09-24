@@ -12,10 +12,9 @@ cd "$REPO_ROOT"
 # loopback, link-local, and the RFC 5737 / RFC 3849 documentation ranges.
 ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
 
-# Session process detail: the working-session agent names this project
-# hands out (e.g. lab-impl-9, lab-rev-z) and its review-exchange markers
-# (e.g. exchange-1). Neither belongs in a public tracked file; caught by
-# shape, so this line names no actual agent or exchange itself.
+# Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z) and review
+# markers (e.g. exchange-1) never belong in a public tracked file;
+# caught by shape, so no real tag appears here.
 PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b'
 
 fail=0
