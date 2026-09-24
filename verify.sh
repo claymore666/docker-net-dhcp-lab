@@ -65,9 +65,8 @@ echo "== segment bridge refusal tests =="
 ./scripts/build-bridge-test.sh
 
 echo "== build-bridge-test fails loudly (never skips) under CI when unshare is unavailable =="
-# Drives lab-rev-a's exchange-3 observer directly: a failing unshare stub
-# under CI=true must make build-bridge-test.sh exit non-zero, never a
-# quiet skip.
+# A failing unshare stub under CI=true must make build-bridge-test.sh
+# exit non-zero, never a quiet skip.
 ci_stub=$(mktemp -d)
 trap 'rm -rf "$ci_stub"' EXIT
 cat >"$ci_stub/unshare" <<'EOF'

@@ -47,8 +47,18 @@ run_case "lab-range address, with trailing newline" \
 	$'note: host at 10.200.1.1\n' ok || fail=1
 # No candidate address at all.
 run_case "no address" $'note: nothing here\n' ok || fail=1
+# A session agent name or a review-exchange marker must be caught even
+# with no address anywhere on the line.
+run_case "agent-name marker, no address" \
+	$'note: ping lab-rev-z about this\n' fail || fail=1
+run_case "exchange marker, no address" \
+	$'note: closed at exchange-1\n' fail || fail=1
+# Plain "lab" prose must still pass -- only the dashed agent-name shape
+# and the exchange-N shape are process detail.
+run_case "plain lab prose, no marker" \
+	$'note: the lab host reads lab.yaml\n' ok || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 5 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 8 cases behaved as expected"
