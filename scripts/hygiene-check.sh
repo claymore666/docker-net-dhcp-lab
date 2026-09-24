@@ -1,0 +1,40 @@
+#!/bin/bash
+# Publication hygiene (track file: "no address or name from the home
+# network"). Pattern-based, not a name list: this script names no home
+# address itself, so a failure prints only where the hit is, never what
+# it is, and the check's own source stays safe to publish even red.
+set -euo pipefail
+
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$REPO_ROOT"
+
+# Everything the lab is allowed to publish: its own /16, its own ULA,
+# loopback, link-local, and the RFC 5737 / RFC 3849 documentation ranges.
+ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200:)'
+
+fail=0
+while IFS= read -r -d '' f; do
+	case "$f" in
+	*/.git/*) continue ;;
+	esac
+	line_no=0
+	while IFS= read -r line; do
+		line_no=$((line_no + 1))
+		# RFC1918 and link-local candidates only; a public IP is not house detail.
+		matches=$(grep -oE '\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b' <<<"$line" || true)
+		[ -z "$matches" ] && continue
+		while IFS= read -r m; do
+			[ -z "$m" ] && continue
+			if ! [[ "$m" =~ $ALLOWED_RE ]]; then
+				echo "hygiene: candidate at $f:$line_no" >&2
+				fail=1
+			fi
+		done <<<"$matches"
+	done <"$f"
+done < <(git ls-files -z -- . ':!images/*.sha256')
+
+if [ "$fail" -ne 0 ]; then
+	echo "hygiene-check: FAILED -- an address outside the lab's declared ranges was found" >&2
+	exit 1
+fi
+echo "hygiene-check: ok"

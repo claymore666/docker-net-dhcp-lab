@@ -1,0 +1,157 @@
+// Package labyaml parses and validates lab.yaml (issue #1). It is the one
+// place that knows the file's shape; scripts/up-cell.sh calls `labctl
+// resolve` instead of parsing YAML themselves.
+package labyaml
+
+import (
+	"bytes"
+	"fmt"
+	"net/netip"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Management struct {
+	LibvirtNetwork string `yaml:"libvirt_network"`
+	Subnet         string `yaml:"subnet"`
+	Gateway        string `yaml:"gateway"`
+}
+
+type Segment struct {
+	Bridge string `yaml:"bridge"`
+	Subnet string `yaml:"subnet"`
+}
+
+type DockerHost struct {
+	BaseImage   string `yaml:"base_image"`
+	MgmtAddress string `yaml:"mgmt_address"`
+	PluginTag   string `yaml:"plugin_tag"`
+	VCPUs       int    `yaml:"vcpus"`
+	MemoryMiB   int    `yaml:"memory_mib"`
+	DiskGiB     int    `yaml:"disk_gib"`
+}
+
+type Cell struct {
+	Name        string      `yaml:"name"`
+	Description string      `yaml:"description"`
+	Segment     Segment     `yaml:"segment"`
+	Source      interface{} `yaml:"source"` // null in P1; a source type/version once #2 lands
+	DockerHost  DockerHost  `yaml:"docker_host"`
+}
+
+type Config struct {
+	Management Management `yaml:"management"`
+	ULAPrefix  string     `yaml:"ula_prefix"`
+	Cells      []Cell     `yaml:"cells"`
+}
+
+// Load reads and validates path. Every error names the field that failed.
+func Load(path string) (*Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c Config
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// Validate enforces the lab's own safety rule: nothing here may name an
+// address outside the lab's declared ranges (track file, "Same process as
+// the plugin repo" / L13). It does not check the rest of the repo; that is
+// scripts/hygiene-check.sh's job.
+func (c *Config) Validate() error {
+	if c.Management.LibvirtNetwork == "" {
+		return fmt.Errorf("management.libvirt_network is required")
+	}
+	mgmtPrefix, err := netip.ParsePrefix(c.Management.Subnet)
+	if err != nil {
+		return fmt.Errorf("management.subnet: %w", err)
+	}
+	if err := mustBeLabRange(mgmtPrefix); err != nil {
+		return fmt.Errorf("management.subnet: %w", err)
+	}
+	if len(c.Cells) == 0 {
+		return fmt.Errorf("at least one cell is required")
+	}
+	seenBridge := map[string]bool{}
+	seenSubnet := map[string]bool{}
+	for i, cell := range c.Cells {
+		if cell.Name == "" {
+			return fmt.Errorf("cells[%d]: name is required", i)
+		}
+		if cell.Segment.Bridge == "" {
+			return fmt.Errorf("cell %s: segment.bridge is required", cell.Name)
+		}
+		if seenBridge[cell.Segment.Bridge] {
+			return fmt.Errorf("cell %s: bridge %s reused by another cell", cell.Name, cell.Segment.Bridge)
+		}
+		seenBridge[cell.Segment.Bridge] = true
+		segPrefix, err := netip.ParsePrefix(cell.Segment.Subnet)
+		if err != nil {
+			return fmt.Errorf("cell %s: segment.subnet: %w", cell.Name, err)
+		}
+		if err := mustBeLabRange(segPrefix); err != nil {
+			return fmt.Errorf("cell %s: segment.subnet: %w", cell.Name, err)
+		}
+		if seenSubnet[segPrefix.String()] {
+			return fmt.Errorf("cell %s: subnet %s reused by another cell", cell.Name, segPrefix)
+		}
+		seenSubnet[segPrefix.String()] = true
+		if overlaps(segPrefix, mgmtPrefix) {
+			return fmt.Errorf("cell %s: segment.subnet overlaps the management subnet", cell.Name)
+		}
+		if cell.DockerHost.BaseImage == "" {
+			return fmt.Errorf("cell %s: docker_host.base_image is required", cell.Name)
+		}
+		if cell.DockerHost.PluginTag == "" {
+			return fmt.Errorf("cell %s: docker_host.plugin_tag is required", cell.Name)
+		}
+		mgmtAddr, err := netip.ParsePrefix(cell.DockerHost.MgmtAddress)
+		if err != nil {
+			return fmt.Errorf("cell %s: docker_host.mgmt_address: %w", cell.Name, err)
+		}
+		if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+			return fmt.Errorf("cell %s: docker_host.mgmt_address is not inside management.subnet", cell.Name)
+		}
+	}
+	return nil
+}
+
+// mustBeLabRange refuses any subnet that is not inside 10.200.0.0/16: the
+// one range this repository is allowed to publish (track file §"become
+// public").
+func mustBeLabRange(p netip.Prefix) error {
+	lab := netip.MustParsePrefix("10.200.0.0/16")
+	if !p.Addr().Is4() {
+		return fmt.Errorf("%s is not IPv4", p)
+	}
+	// A prefix is inside the lab range only if every address it covers is:
+	// compare against the lab range by masking both to /16.
+	if !lab.Contains(p.Addr()) {
+		return fmt.Errorf("%s is outside the lab's published range 10.200.0.0/16", p)
+	}
+	return nil
+}
+
+func overlaps(a, b netip.Prefix) bool {
+	return a.Contains(b.Addr()) || b.Contains(a.Addr())
+}
+
+// CellByName finds a cell or returns an error naming what was searched.
+func (c *Config) CellByName(name string) (*Cell, error) {
+	for i := range c.Cells {
+		if c.Cells[i].Name == name {
+			return &c.Cells[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no cell named %q in lab.yaml", name)
+}

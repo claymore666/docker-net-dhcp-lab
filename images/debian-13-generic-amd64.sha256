@@ -1,0 +1,4 @@
+# Pinned checksum for the Debian 13 generic cloud image (issue #1, "base
+# image cache with checksum verification"). Update by hand when the base
+# image is meant to move: `sha256sum` the new file and paste the line
+# below. fetch-base-image.sh refuses any download that does not match.

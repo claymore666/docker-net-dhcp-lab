@@ -1,0 +1,17 @@
+# Two NICs, in PCI/virtio attach order: eth0 is the management NIC (NAT,
+# static -- no DHCP anywhere in this repo, track file), eth1 is the
+# segment NIC, deliberately address-less: only its link state matters, it
+# is the macvlan parent for the plugin under test.
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses: [__MGMT_ADDR__]
+      gateway4: __MGMT_GW__
+      nameservers:
+        addresses: [__MGMT_GW__]
+    eth1:
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
