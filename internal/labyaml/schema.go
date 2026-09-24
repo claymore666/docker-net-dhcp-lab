@@ -137,8 +137,10 @@ func mustBeLabRange(p netip.Prefix) error {
 	if !p.Addr().Is4() {
 		return fmt.Errorf("%s is not IPv4", p)
 	}
-	// A prefix is inside the lab range only if every address it covers is:
-	// compare against the lab range by masking both to /16.
+	// Checks the prefix's own network address against the lab range. A
+	// prefix wider than the lab's /16 (e.g. a /8) still gets refused: its
+	// caller also runs overlaps() against sibling subnets, and a /8
+	// containing 10.200.0.0/16 fails that check instead.
 	if !lab.Contains(p.Addr()) {
 		return fmt.Errorf("%s is outside the lab's published range 10.200.0.0/16", p)
 	}

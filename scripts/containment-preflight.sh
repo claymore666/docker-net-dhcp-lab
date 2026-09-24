@@ -1,14 +1,13 @@
 #!/bin/bash
 # Refuse to attach a VM to net-mgmt unless the host's ci_dmz forward hook
-# is actually in place, at the priority the lead's firewall design fixes
-# it to (issue #1, coordinator decision "every lab VM boots under UEFI",
-# task 2). ci_dmz itself is a separate, lead-owned fix (defeat list, "Open
-# finding, owned by the lead"); this script only checks it exists, it
-# never creates or edits it.
+# is actually in place and enforcing something (issue #1). ci_dmz itself
+# is a separate host fix, tracked outside this repo; this script only
+# checks it, it never creates or edits it.
 #
-# Exit 0: the hook is present at priority -10. Exit 1 otherwise, including
-# when `nft` is missing or the table/chain does not exist yet -- both are
-# expected today, before the firewall fix lands.
+# Exit 0: the hook is present at priority -10 AND the chain has at least
+# one rule beyond the hook/policy line. Exit 1 otherwise, including when
+# `nft` is missing or the table/chain does not exist yet -- both are
+# expected today, before the host fix lands.
 set -euo pipefail
 
 if ! out=$(nft list chain inet ci_dmz forward 2>&1); then
@@ -29,4 +28,14 @@ if ! grep -qE '(^|[^0-9-])-10([^0-9]|$)' <<<"$hook_line" && ! grep -qE 'filter[[
 	exit 1
 fi
 
-echo "containment-preflight: ok (ci_dmz forward hook at priority -10)"
+# A hook with nothing but "type filter hook forward priority ...; policy
+# accept;" enforces nothing: that's a chain that exists, not containment.
+# Strip the structural lines (table/chain declarations, the hook line
+# itself, braces, blanks) and require something left over.
+body=$(grep -vE '^[[:space:]]*(table[[:space:]]|chain[[:space:]]+forward[[:space:]]*\{|\}[[:space:]]*$|type[[:space:]]+filter[[:space:]]+hook[[:space:]]+forward[[:space:]]+priority|[[:space:]]*$)' <<<"$out" || true)
+if [ -z "$body" ]; then
+	echo "containment-preflight: REFUSED -- ci_dmz forward hook has no rules, nothing is actually enforced" >&2
+	exit 1
+fi
+
+echo "containment-preflight: ok (ci_dmz forward hook at priority -10, enforcing rules)"

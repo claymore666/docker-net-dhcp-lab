@@ -37,6 +37,18 @@ go run ./cmd/labctl validate lab.yaml
 echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
 
+echo "== containment preflight is wired into up-cell.sh =="
+if ! grep -q 'containment-preflight.sh' scripts/up-cell.sh; then
+	echo "verify.sh: up-cell.sh no longer calls containment-preflight.sh" >&2
+	exit 1
+fi
+
+echo "== segment bridge refusal tests =="
+./scripts/build-bridge-test.sh
+
+echo "== hygiene fixture tests =="
+./scripts/hygiene-check-test.sh
+
 echo "== no AI attribution =="
 if git rev-parse --verify origin/dev >/dev/null 2>&1; then
 	range="origin/dev..HEAD"

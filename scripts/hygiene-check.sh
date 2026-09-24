@@ -20,7 +20,10 @@ while IFS= read -r -d '' f; do
 	*_test.go) continue ;;               # synthetic fixtures in a TempDir, never shipped or run anywhere real
 	esac
 	line_no=0
-	while IFS= read -r line; do
+	# `|| [ -n "$line" ]` picks up a last line with no trailing newline:
+	# plain `read` returns non-zero there and a bare `while read` would
+	# silently skip that line's body.
+	while IFS= read -r line || [ -n "$line" ]; do
 		line_no=$((line_no + 1))
 		# RFC1918 and link-local candidates only; a public IP is not house detail.
 		matches=$(grep -oE '\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b' <<<"$line" || true)

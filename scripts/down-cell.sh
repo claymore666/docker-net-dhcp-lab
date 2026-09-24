@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tear down one cell brought up by up-cell.sh: destroy and undefine its
-# domain (its per-VM NVRAM copy included, issue #1 task 1), then remove
+# domain (its per-VM NVRAM copy included, issue #1), then remove
 # its work directory. Never touches the segment bridge or net-mgmt
 # themselves -- other cells may still use them. Idempotent: safe to run
 # on a cell that is already down or was never fully brought up.
