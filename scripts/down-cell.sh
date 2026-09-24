@@ -18,5 +18,23 @@ if virsh dominfo "$domain" >/dev/null 2>&1; then
 	virsh undefine "$domain" --nvram >/dev/null 2>&1 || virsh undefine "$domain" >/dev/null 2>&1 || true
 fi
 
+# Move any observer pcaps out to an evidence directory, outside $WORK,
+# before it is removed below -- a real pcap was lost this way once
+# already (issue #1: captured, then deleted unread by this same rm -rf,
+# before it was copied off the host). A sibling of $WORK, not inside it,
+# so this rm -rf can never reach it again.
+evidence_dir="${LAB_EVIDENCE_DIR:-$(dirname "$WORK")/evidence}"
+if [ -d "$WORK" ]; then
+	mapfile -t pcaps < <(find "$WORK" -type f -name '*.pcap')
+	if [ "${#pcaps[@]}" -gt 0 ]; then
+		mkdir -p "$evidence_dir"
+		ts=$(date -u +%Y%m%dT%H%M%SZ)
+		for f in "${pcaps[@]}"; do
+			mv "$f" "$evidence_dir/${CELL}-${ts}-$(basename "$f")"
+		done
+		echo "down-cell: moved ${#pcaps[@]} pcap(s) to $evidence_dir"
+	fi
+fi
+
 rm -rf "$WORK"
 echo "down-cell: $CELL torn down, $WORK removed"

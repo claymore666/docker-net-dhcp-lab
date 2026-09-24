@@ -74,6 +74,16 @@ echo "== containment preflight =="
 # outright instead of hanging on a password.
 sudo -n "$REPO_ROOT/scripts/containment-preflight.sh"
 
+echo "== lab segment firewall =="
+# Unconditional here, unlike build-bridge.sh's own call to the same
+# script (which stays gated behind LAB_SEG_APPLY_FIREWALL, off by
+# default, for CI and the unshare-isolated test suite): a real bring-up
+# on this host needs bridged segment traffic actually forwarded, or the
+# reference Docker host and a source VM sharing a segment (issue #2)
+# lose it exactly the way DHCP did before this fix. up-cell.sh already
+# runs as root via sudo -n for the preflight above, for the same reason.
+sudo -n "$REPO_ROOT/scripts/lab-seg-firewall.sh"
+
 # UEFI (OVMF), not the default SeaBIOS: works around a guest-initiated
 # triple-fault under libvirt's -S/cont startup (issue #1); the exact
 # SeaBIOS-side mechanism is unconfirmed. The per-VM NVRAM copy lives

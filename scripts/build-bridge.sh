@@ -67,8 +67,9 @@ fi
 # dropped by Docker's own FORWARD-chain policy otherwise). This script
 # also runs unprivileged, in CI and in build-bridge-test.sh's netns, so
 # the firewall call is opt-in and OFF by default -- only a caller that
-# explicitly sets LAB_SEG_APPLY_FIREWALL=1 (the real lab host, once
-# approved) ever invokes real iptables here.
+# explicitly sets LAB_SEG_APPLY_FIREWALL=1 ever invokes real iptables
+# here. up-cell.sh, the real bring-up path, does not set it: it calls
+# lab-seg-firewall.sh itself, unconditionally, after its own preflight.
 if [ "${LAB_SEG_APPLY_FIREWALL:-0}" = "1" ]; then
 	"$(dirname "${BASH_SOURCE[0]}")/lab-seg-firewall.sh"
 fi

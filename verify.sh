@@ -74,6 +74,25 @@ if [ "$preflight_line" -ge "$start_line" ]; then
 	exit 1
 fi
 
+# lab-seg-firewall.sh must run unconditionally in up-cell.sh (never
+# behind a flag there -- that gate belongs to build-bridge.sh's own,
+# separate, CI-safe call), after the preflight and before the VM ever
+# starts: applied too late, a real bring-up's segment traffic (and #2's
+# server-to-host traffic) is silently dropped until the next re-run.
+firewall_line=$(grep -nE '^[[:space:]]*sudo[[:space:]]+-n[[:space:]]+"\$REPO_ROOT/scripts/lab-seg-firewall\.sh"[[:space:]]*$' scripts/up-cell.sh | head -1 | cut -d: -f1)
+if [ -z "$firewall_line" ]; then
+	echo "verify.sh: up-cell.sh does not call lab-seg-firewall.sh as its own, unmodified, unconditional command" >&2
+	exit 1
+fi
+if [ "$firewall_line" -le "$preflight_line" ]; then
+	echo "verify.sh: lab-seg-firewall.sh (line $firewall_line) does not run after the preflight (line $preflight_line)" >&2
+	exit 1
+fi
+if [ "$firewall_line" -ge "$start_line" ]; then
+	echo "verify.sh: lab-seg-firewall.sh (line $firewall_line) does not run before the VM start (line $start_line)" >&2
+	exit 1
+fi
+
 echo "== segment bridge refusal tests =="
 ./scripts/build-bridge-test.sh
 
