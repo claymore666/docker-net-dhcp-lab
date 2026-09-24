@@ -16,8 +16,9 @@ fail=0
 while IFS= read -r -d '' f; do
 	case "$f" in
 	*/.git/*) continue ;;
-	scripts/hygiene-check.sh) continue ;; # its own regex literals look like addresses but are not
-	*_test.go) continue ;;               # synthetic fixtures in a TempDir, never shipped or run anywhere real
+	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
+	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
+	*_test.go) continue ;;                     # synthetic fixtures in a TempDir, never shipped or run anywhere real
 	esac
 	line_no=0
 	# `|| [ -n "$line" ]` picks up a last line with no trailing newline:

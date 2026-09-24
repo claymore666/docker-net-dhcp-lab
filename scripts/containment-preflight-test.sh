@@ -63,8 +63,8 @@ if PATH="$tmp/case-wrong-prio:$PATH" "$PREFLIGHT" >/dev/null 2>&1; then
 	fail=1
 fi
 
-# Case 4a: the hook at priority -10, numeric spelling, plus a real rule.
-# Must pass.
+# Case 4a: the hook at priority -10, numeric spelling, plus a real
+# destination-based drop rule. Must pass.
 mkdir -p "$tmp/case-ok-numeric"
 cat >"$tmp/case-ok-numeric/nft" <<'EOF'
 #!/bin/bash
@@ -72,19 +72,19 @@ cat <<'OUT'
 table inet ci_dmz {
 	chain forward {
 		type filter hook forward priority -10; policy accept;
-		ip daddr 10.200.0.0/16 accept
+		ip daddr 192.0.2.0/24 drop
 	}
 }
 OUT
 EOF
 chmod +x "$tmp/case-ok-numeric/nft"
 if ! PATH="$tmp/case-ok-numeric:$PATH" "$PREFLIGHT" >/dev/null 2>&1; then
-	echo "containment-preflight-test: FAIL -- refused a valid numeric -10 hook with a rule" >&2
+	echo "containment-preflight-test: FAIL -- refused a valid numeric -10 hook with a drop rule" >&2
 	fail=1
 fi
 
-# Case 4b: the hook at priority -10, symbolic spelling, plus a real rule.
-# Must pass.
+# Case 4b: the hook at priority -10, symbolic spelling, plus a real
+# destination-based drop rule. Must pass.
 mkdir -p "$tmp/case-ok-symbolic"
 cat >"$tmp/case-ok-symbolic/nft" <<'EOF'
 #!/bin/bash
@@ -92,20 +92,19 @@ cat <<'OUT'
 table inet ci_dmz {
 	chain forward {
 		type filter hook forward priority filter - 10; policy accept;
-		ip daddr 10.200.0.0/16 accept
+		ip daddr 192.0.2.0/24 drop
 	}
 }
 OUT
 EOF
 chmod +x "$tmp/case-ok-symbolic/nft"
 if ! PATH="$tmp/case-ok-symbolic:$PATH" "$PREFLIGHT" >/dev/null 2>&1; then
-	echo "containment-preflight-test: FAIL -- refused a valid 'filter - 10' hook with a rule" >&2
+	echo "containment-preflight-test: FAIL -- refused a valid 'filter - 10' hook with a drop rule" >&2
 	fail=1
 fi
 
-# Case 5: the hook at priority -10 but the chain enforces nothing --
-# just "policy accept" and no rules. Must refuse: a hook with nothing
-# behind it is not containment.
+# Case 5: the hook at priority -10 but the chain enforces nothing at
+# all -- just "policy accept" and no rules. Must refuse.
 mkdir -p "$tmp/case-hook-no-rules"
 cat >"$tmp/case-hook-no-rules/nft" <<'EOF'
 #!/bin/bash
@@ -123,7 +122,36 @@ if PATH="$tmp/case-hook-no-rules:$PATH" "$PREFLIGHT" >/dev/null 2>&1; then
 	fail=1
 fi
 
+# Cases 6a-6d: the hook at priority -10 with one rule each that proves
+# the chain exists but drops nothing by destination -- an accept, a
+# counter, a match with an implicit accept, and a bare comment. All four
+# must refuse: none of them is containment.
+run_inert_case() {
+	local name=$1 rule=$2
+	mkdir -p "$tmp/$name"
+	cat >"$tmp/$name/nft" <<EOF
+#!/bin/bash
+cat <<OUT
+table inet ci_dmz {
+	chain forward {
+		type filter hook forward priority -10; policy accept;
+		$rule
+	}
+}
+OUT
+EOF
+	chmod +x "$tmp/$name/nft"
+	if PATH="$tmp/$name:$PATH" "$PREFLIGHT" >/dev/null 2>&1; then
+		echo "containment-preflight-test: FAIL -- passed an inert rule ($name: $rule)" >&2
+		fail=1
+	fi
+}
+run_inert_case case-inert-accept 'accept'
+run_inert_case case-inert-counter 'counter packets 0 bytes 0'
+run_inert_case case-inert-iifname-lo 'iifname "lo" accept'
+run_inert_case case-inert-comment 'comment "todo"'
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "containment-preflight-test: PASS -- all 6 cases behaved as expected"
+echo "containment-preflight-test: PASS -- all 10 cases behaved as expected"

@@ -1,13 +1,20 @@
 #!/bin/bash
 # Refuse to attach a VM to net-mgmt unless the host's ci_dmz forward hook
-# is actually in place and enforcing something (issue #1). ci_dmz itself
-# is a separate host fix, tracked outside this repo; this script only
-# checks it, it never creates or edits it.
+# is present at priority -10 and contains a rule that drops by
+# destination (issue #1). ci_dmz itself is a separate host firewall fix,
+# owned outside this repo; this script only checks it, it never creates
+# or edits it.
 #
-# Exit 0: the hook is present at priority -10 AND the chain has at least
-# one rule beyond the hook/policy line. Exit 1 otherwise, including when
-# `nft` is missing or the table/chain does not exist yet -- both are
-# expected today, before the host fix lands.
+# Limit: this is a presence check, an honest yes/no on whether the hook
+# and a drop rule exist in the ruleset text. It cannot prove the rule
+# set is correct, complete, or that traffic is actually blocked end to
+# end -- that proof is `dmz-probe.sh ""` run inside the Docker host VM
+# at a live run, never this script.
+#
+# Exit 0: the hook is present at priority -10 AND at least one rule
+# matches `ip daddr ... drop`. Exit 1 otherwise, including when `nft`
+# is missing or the table/chain does not exist yet -- both are expected
+# today, before the host firewall fix lands.
 set -euo pipefail
 
 if ! out=$(nft list chain inet ci_dmz forward 2>&1); then
@@ -28,14 +35,11 @@ if ! grep -qE '(^|[^0-9-])-10([^0-9]|$)' <<<"$hook_line" && ! grep -qE 'filter[[
 	exit 1
 fi
 
-# A hook with nothing but "type filter hook forward priority ...; policy
-# accept;" enforces nothing: that's a chain that exists, not containment.
-# Strip the structural lines (table/chain declarations, the hook line
-# itself, braces, blanks) and require something left over.
-body=$(grep -vE '^[[:space:]]*(table[[:space:]]|chain[[:space:]]+forward[[:space:]]*\{|\}[[:space:]]*$|type[[:space:]]+filter[[:space:]]+hook[[:space:]]+forward[[:space:]]+priority|[[:space:]]*$)' <<<"$out" || true)
-if [ -z "$body" ]; then
-	echo "containment-preflight: REFUSED -- ci_dmz forward hook has no rules, nothing is actually enforced" >&2
+# An accept, counter or comment rule proves the chain exists, not that
+# it drops anything: require an explicit destination-based drop.
+if ! grep -qE 'ip[[:space:]]+daddr[[:space:]].*\bdrop\b' <<<"$out"; then
+	echo "containment-preflight: REFUSED -- ci_dmz forward has no 'ip daddr ... drop' rule: $out" >&2
 	exit 1
 fi
 
-echo "containment-preflight: ok (ci_dmz forward hook at priority -10, enforcing rules)"
+echo "containment-preflight: ok (ci_dmz forward hook at priority -10, with a destination-based drop rule)"

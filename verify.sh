@@ -38,8 +38,11 @@ echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
 
 echo "== containment preflight is wired into up-cell.sh =="
-if ! grep -q 'containment-preflight.sh' scripts/up-cell.sh; then
-	echo "verify.sh: up-cell.sh no longer calls containment-preflight.sh" >&2
+# An exact, anchored line match: not a bare substring grep, so a neutered
+# call (a leading ":", a trailing "|| true", commenting the line out)
+# fails this just as much as deleting the call outright.
+if ! grep -qE '^[[:space:]]*"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh; then
+	echo "verify.sh: up-cell.sh does not call containment-preflight.sh as its own, unmodified command" >&2
 	exit 1
 fi
 

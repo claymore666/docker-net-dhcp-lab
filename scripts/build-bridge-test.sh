@@ -9,7 +9,11 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BUILD_BRIDGE="$REPO_ROOT/scripts/build-bridge.sh"
 
 if ! unshare -rnm true 2>/dev/null; then
-	echo "build-bridge-test: SKIP -- unshare -rnm not available here" >&2
+	if [ "${CI:-}" = "true" ]; then
+		echo "build-bridge-test: FAIL -- unshare -rnm not available in CI; a gate never goes quietly green" >&2
+		exit 1
+	fi
+	echo "build-bridge-test: SKIP -- unshare -rnm not available here (not CI)" >&2
 	exit 0
 fi
 
