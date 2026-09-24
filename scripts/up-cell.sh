@@ -71,8 +71,14 @@ ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
 nvram="$WORK/${domain}-VARS.fd"
 
 echo "== VM =="
-if ! virsh dominfo "$domain" >/dev/null 2>&1; then
-	virt-install \
+# net-mgmt and the segment bridge are libvirt networks/devices under
+# qemu:///system, not the per-user qemu:///session a plain virsh/
+# virt-install connects to; reaching qemu:///system without group
+# membership needs polkit, which has no agent in a headless session.
+# sudo -n reaches it directly and never prompts, same reasoning as the
+# preflight above.
+if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
+	sudo -n virt-install \
 		--name "$domain" \
 		--memory "$mem" --vcpus "$vcpus" \
 		--disk path="$overlay",format=qcow2,bus=virtio \
@@ -86,7 +92,7 @@ if ! virsh dominfo "$domain" >/dev/null 2>&1; then
 		--noautoconsole \
 		--import
 else
-	virsh start "$domain" >/dev/null 2>&1 || true
+	sudo -n virsh start "$domain" >/dev/null 2>&1 || true
 fi
 
 echo "== wait for cloud-init (bounded) =="

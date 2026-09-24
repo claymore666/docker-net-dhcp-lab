@@ -51,7 +51,7 @@ fi
 # after virt-install/virsh start already touched libvirt is too late to
 # refuse anything. Whichever of the two starts the VM comes first in the
 # file is the one that matters.
-start_line=$(grep -nE '^\s*(virt-install\b|virsh start\b)' scripts/up-cell.sh | head -1 | cut -d: -f1)
+start_line=$(grep -nE '^\s*(sudo[[:space:]]+-n[[:space:]]+)?(virt-install\b|virsh start\b)' scripts/up-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$start_line" ]; then
 	echo "verify.sh: up-cell.sh has no virt-install/virsh start call to order the preflight against" >&2
 	exit 1
