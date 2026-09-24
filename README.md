@@ -23,7 +23,8 @@ Every VM boots UEFI (OVMF); its per-VM NVRAM copy lives under the cell's
 work directory and `down-cell.sh` removes it. `up-cell.sh` refuses to
 attach a VM to `net-mgmt` unless the host's `ci_dmz` firewall chain is
 present at priority -10 with a rule that drops by destination
-(`scripts/containment-preflight.sh`). That check only reads the ruleset
-text; it cannot prove traffic is actually blocked end to end. The proof
-of that is `dmz-probe.sh ""` run inside the Docker host VM at a live run,
-not this preflight.
+(`scripts/containment-preflight.sh`, run via `sudo -n` since reading
+nftables state needs root). That check only reads the ruleset text; it
+cannot prove traffic is actually blocked end to end. The proof of that
+is `dmz-probe.sh ""` run inside the Docker host VM at a live run, not
+this preflight.

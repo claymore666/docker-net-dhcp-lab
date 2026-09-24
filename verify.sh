@@ -41,7 +41,7 @@ echo "== containment preflight is wired into up-cell.sh =="
 # An exact, anchored line match: not a bare substring grep, so a neutered
 # call (a leading ":", a trailing "|| true", commenting the line out)
 # fails this just as much as deleting the call outright.
-preflight_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh | head -1 | cut -d: -f1)
+preflight_line=$(grep -nE '^[[:space:]]*sudo[[:space:]]+-n[[:space:]]+"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$preflight_line" ]; then
 	echo "verify.sh: up-cell.sh does not call containment-preflight.sh as its own, unmodified command" >&2
 	exit 1
