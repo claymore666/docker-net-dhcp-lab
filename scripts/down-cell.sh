@@ -10,12 +10,26 @@ CELL=${1:?usage: down-cell.sh <cell-name> <work-dir>}
 WORK=${2:?usage: down-cell.sh <cell-name> <work-dir>}
 domain="lab-${CELL}-dockerhost"
 
-if virsh dominfo "$domain" >/dev/null 2>&1; then
-	virsh destroy "$domain" >/dev/null 2>&1 || true
+# sudo -n, matching up-cell.sh: net-mgmt and this domain live under
+# qemu:///system, not the empty per-user qemu:///session a plain virsh
+# reaches. A plain virsh here would silently miss the real domain under
+# an unprivileged caller, and everything below would still run as if the
+# teardown had succeeded.
+if sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
+	sudo -n virsh destroy "$domain" >/dev/null 2>&1 || true
 	# --nvram also removes libvirt's own record of the per-VM VARS copy;
 	# harmless if that copy already lives under $WORK and gets removed
 	# below by the rm -rf.
-	virsh undefine "$domain" --nvram >/dev/null 2>&1 || virsh undefine "$domain" >/dev/null 2>&1 || true
+	sudo -n virsh undefine "$domain" --nvram >/dev/null 2>&1 || sudo -n virsh undefine "$domain" >/dev/null 2>&1 || true
+fi
+
+# Verified, not assumed: only proceed to remove $WORK and report success
+# once the domain is actually gone. Printing "torn down" while it still
+# exists would leave a running or defined domain with no local record of
+# it at all.
+if sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
+	echo "down-cell: REFUSED -- $domain still exists after destroy/undefine; not touching $WORK" >&2
+	exit 1
 fi
 
 # Move any observer pcaps out to an evidence directory, outside $WORK,

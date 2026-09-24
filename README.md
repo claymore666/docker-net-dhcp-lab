@@ -16,8 +16,7 @@ scripts/down-cell.sh ref-only <work-dir>  # tear it back down
 ```
 
 `lab.yaml` declares the cells; `verify.sh` is the arbiter (CI runs it on
-every push and PR). See `docs/` in the plugin repo's track file for the
-full design.
+every push and PR).
 
 Every VM boots UEFI (OVMF); its per-VM NVRAM copy lives under the cell's
 work directory and `down-cell.sh` removes it. `up-cell.sh` refuses to

@@ -13,8 +13,9 @@
 #
 # Exit 0: the hook is present at priority -10 AND at least one rule
 # matches `ip daddr ... drop`. Exit 1 otherwise, including when `nft`
-# is missing or the table/chain does not exist yet -- both are expected
-# today, before the host firewall fix lands.
+# is missing or the table/chain does not exist -- the table is owned
+# and maintained outside this repo, so its absence or presence depends
+# on that host's own state, not on anything here.
 set -euo pipefail
 
 if ! out=$(nft list chain inet ci_dmz forward 2>&1); then

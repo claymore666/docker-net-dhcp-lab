@@ -34,6 +34,27 @@ fi
 echo "== schema self-check =="
 go run ./cmd/labctl validate lab.yaml
 
+# Prints the if/for/while/until/case nesting depth in effect immediately
+# before $line in $file, relying on this repo's own style convention of
+# putting control keywords and their closing keywords on their own line
+# with zero leading whitespace for every top-level statement. A line at
+# depth 0 is unconditional; depth > 0 means some call was wrapped in an
+# "if" (or similar) without changing the matched line's own text, which
+# an anchored grep alone cannot tell apart from a truly unconditional call.
+depth_at_line() {
+	local file=$1 line=$2
+	awk -v target="$line" '
+	NR>=target { exit }
+	{
+		l = $0
+		sub(/^[[:space:]]+/, "", l)
+		if (l ~ /^(if|for|while|until|case)([[:space:]]|\()/) depth++
+		else if (l ~ /^(fi|done|esac)([[:space:];]|$)/) depth--
+	}
+	END { print depth + 0 }
+	' "$file"
+}
+
 echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
 
@@ -44,6 +65,11 @@ echo "== containment preflight is wired into up-cell.sh =="
 preflight_line=$(grep -nE '^[[:space:]]*sudo[[:space:]]+-n[[:space:]]+"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$preflight_line" ]; then
 	echo "verify.sh: up-cell.sh does not call containment-preflight.sh as its own, unmodified command" >&2
+	exit 1
+fi
+preflight_depth=$(depth_at_line scripts/up-cell.sh "$preflight_line")
+if [ "$preflight_depth" -ne 0 ]; then
+	echo "verify.sh: containment-preflight.sh's call in up-cell.sh (line $preflight_line) sits inside a conditional block (depth $preflight_depth); it must be unconditional" >&2
 	exit 1
 fi
 
@@ -84,6 +110,11 @@ if [ -z "$firewall_line" ]; then
 	echo "verify.sh: up-cell.sh does not call lab-seg-firewall.sh as its own, unmodified, unconditional command" >&2
 	exit 1
 fi
+firewall_depth=$(depth_at_line scripts/up-cell.sh "$firewall_line")
+if [ "$firewall_depth" -ne 0 ]; then
+	echo "verify.sh: lab-seg-firewall.sh's call in up-cell.sh (line $firewall_line) sits inside a conditional block (depth $firewall_depth); it must be unconditional" >&2
+	exit 1
+fi
 if [ "$firewall_line" -le "$preflight_line" ]; then
 	echo "verify.sh: lab-seg-firewall.sh (line $firewall_line) does not run after the preflight (line $preflight_line)" >&2
 	exit 1
@@ -115,6 +146,9 @@ trap - EXIT
 
 echo "== lab segment firewall refusal/idempotency tests =="
 ./scripts/lab-seg-firewall-test.sh
+
+echo "== down-cell refusal and pcap-preservation tests =="
+./scripts/down-cell-test.sh
 
 echo "== build-bridge.sh never touches real iptables unless explicitly enabled =="
 # Stub iptables/ip6tables that fail loudly if called at all; a default,
@@ -161,6 +195,18 @@ fi
 attributed=$(git log "$range" --format='%an <%ae>%n%cn <%ce>%n%B' 2>/dev/null | grep -iE 'claude|anthropic|co-authored|generated with' || true)
 if [ -n "$attributed" ]; then
 	echo "verify.sh: AI attribution found in commit metadata" >&2
+	exit 1
+fi
+
+echo "== no process/role words in commit messages =="
+# Same range as the AI-attribution scan above: how this project is
+# worked on (who staffs it, work-tracking tags, review rounds) never
+# belongs in a commit that ships. Subjects and bodies only -- author/
+# committer identity is real and is not in scope here.
+processy=$(git log "$range" --format='%B' 2>/dev/null | grep -inE '\b(lead|coordinator|maintainer|reviewer|lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b' || true)
+if [ -n "$processy" ]; then
+	echo "verify.sh: process/role word found in a commit message:" >&2
+	echo "$processy" >&2
 	exit 1
 fi
 

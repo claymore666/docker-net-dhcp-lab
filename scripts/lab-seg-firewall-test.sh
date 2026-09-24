@@ -192,6 +192,22 @@ if STATE_DIR="$v6" PATH="$tmp:$PATH" iptables -L DOCKER-USER -n >/dev/null 2>&1;
 	fail=1
 fi
 
+# The LAB-SEG rule body itself, not just the jump to it: a mutant that
+# drops "-o lab-br+" or reduces the rule to a bare "-j ACCEPT" (accepting
+# everything forwarded after the DMZ jump, not just bridged lab traffic)
+# must be caught here.
+expected_rule='-m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACCEPT'
+v4_labseg_rule=$(cat "$v4/rules_LAB-SEG" 2>/dev/null || true)
+if [ "$v4_labseg_rule" != "$expected_rule" ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 2: v4 LAB-SEG chain rule body is \"$v4_labseg_rule\", not \"$expected_rule\"" >&2
+	fail=1
+fi
+v6_labseg_rule=$(cat "$v6/rules_LAB-SEG" 2>/dev/null || true)
+if [ "$v6_labseg_rule" != "$expected_rule" ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 2: v6 LAB-SEG chain rule body is \"$v6_labseg_rule\", not \"$expected_rule\"" >&2
+	fail=1
+fi
+
 # Case 3: iptables DOCKER-USER has its DMZ jump, but ip6tables FORWARD
 # does not. Must refuse -- never install the v6 rule at a guessed
 # position (e.g. the top of FORWARD).
@@ -233,7 +249,37 @@ if [ "$(count_of "$v4" DOCKER-USER "CI DMZ containment")" -ne 1 ] ||
 	fail=1
 fi
 
+# Case 5: iptables DOCKER-USER does not exist as a chain at all (not
+# merely missing the DMZ jump). Must refuse loudly, never exit silently.
+case5=$(new_case)
+v4=$case5/v4-nonexistent
+v6=$case5/v6-unused
+if out=$(run_firewall "$v4" "$v6" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 5: passed with no DOCKER-USER chain at all" >&2
+	fail=1
+fi
+if ! grep -q "does not exist" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 5: no loud refusal message when DOCKER-USER does not exist at all" >&2
+	echo "$out" >&2
+	fail=1
+fi
+
+# Case 6: the DMZ jump is present, but an earlier, unconditional RETURN
+# already sits above where the LAB-SEG jump would land. Installing the
+# jump there would leave it dead on arrival; must verify the final order
+# and refuse instead of exiting 0.
+case6=$(new_case)
+v4=$case6/v4
+v6=$case6/v6
+seed_chain "$v4" DOCKER-USER '-j RETURN'
+seed_chain "$v4" DOCKER-USER '-m comment --comment "CI DMZ containment" -j CI-DMZ-FWD'
+seed_chain "$v6" FORWARD '-m comment --comment "CI DMZ containment" -j CI-DMZ-V6'
+if run_firewall "$v4" "$v6" >/dev/null 2>&1; then
+	echo "lab-seg-firewall-test: FAIL -- case 6: passed although its own jump would land after an earlier RETURN in DOCKER-USER" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: PASS -- all 4 cases behaved as expected"
+echo "lab-seg-firewall-test: PASS -- all 6 cases behaved as expected"

@@ -12,10 +12,12 @@ cd "$REPO_ROOT"
 # loopback, link-local, and the RFC 5737 / RFC 3849 documentation ranges.
 ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
 
-# Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z) and review
-# markers (e.g. exchange-1) never belong in a public tracked file;
-# caught by shape, so no real tag appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b'
+# Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
+# markers (e.g. exchange-1), and role words that name how this project is
+# worked on (lead, coordinator, maintainer, reviewer) never belong in a
+# public tracked file; caught by shape, so no real tag or role word
+# appears here.
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer)\b'
 
 fail=0
 while IFS= read -r -d '' f; do
@@ -23,6 +25,7 @@ while IFS= read -r -d '' f; do
 	*/.git/*) continue ;;
 	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
 	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
+	verify.sh) continue ;;                     # carries the same kind of regex literal, for the commit-message scan
 	*_test.go) continue ;;                     # synthetic fixtures in a TempDir, never shipped or run anywhere real
 	esac
 	line_no=0
@@ -50,7 +53,7 @@ while IFS= read -r -d '' f; do
 done < <(git ls-files -z -- . ':!images/*.sha256')
 
 if [ "$fail" -ne 0 ]; then
-	echo "hygiene-check: FAILED -- an address outside the lab's declared ranges was found" >&2
+	echo "hygiene-check: FAILED -- a disallowed address or an internal work-tracking tag was found" >&2
 	exit 1
 fi
 echo "hygiene-check: ok"

@@ -31,7 +31,12 @@ mgmt_mac=$(mac_from "${domain}-mgmt")
 seg_mac=$(mac_from "${domain}-seg")
 
 echo "== segment bridge =="
-"$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
+# Under sudo -n, matching every other privileged call in this script: the
+# bridge is a host device under qemu:///system's own network namespace,
+# not something an unprivileged caller can create or inspect reliably.
+# Without this, a bring-up worked only because some earlier privileged
+# run had already created the bridge, not because this call could.
+sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
 
 echo "== base image cache =="
 base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh")
@@ -80,8 +85,8 @@ echo "== lab segment firewall =="
 # default, for CI and the unshare-isolated test suite): a real bring-up
 # on this host needs bridged segment traffic actually forwarded, or the
 # reference Docker host and a source VM sharing a segment (issue #2)
-# lose it exactly the way DHCP did before this fix. up-cell.sh already
-# runs as root via sudo -n for the preflight above, for the same reason.
+# lose it exactly the way DHCP did before this fix. Runs under sudo -n,
+# same as the preflight above and for the same reason.
 sudo -n "$REPO_ROOT/scripts/lab-seg-firewall.sh"
 
 # UEFI (OVMF), not the default SeaBIOS: works around a guest-initiated

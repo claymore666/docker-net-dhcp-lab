@@ -56,6 +56,15 @@ jump_line() {
 hook_after_dmz() {
 	local ipt=$1 chain=$2 proto=$3
 	build_chain "$ipt"
+
+	# Checked explicitly and first, never folded into the jump_line lookup
+	# below: a chain that does not exist at all must refuse loudly, not
+	# just come back with an empty (and therefore ambiguous) jump line.
+	if ! "$ipt" -L "$chain" -n >/dev/null 2>&1; then
+		echo "lab-seg-firewall: REFUSED -- $proto chain $chain does not exist; refusing to guess a position" >&2
+		exit 1
+	fi
+
 	local dmz_line
 	dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	if [ -z "$dmz_line" ]; then
@@ -64,6 +73,22 @@ hook_after_dmz() {
 	fi
 	delete_own_jump "$ipt" "$chain"
 	"$ipt" -I "$chain" "$((dmz_line + 1))" -m comment --comment "$LAB_COMMENT" -j LAB-SEG
+
+	# Re-read the chain after inserting: exiting 0 on the insert command
+	# alone proved nothing about whether the jump actually landed where it
+	# was asked to, or whether some earlier unconditional RETURN in the
+	# same chain makes it dead on arrival either way.
+	local final_line return_line
+	final_line=$(jump_line "$ipt" "$chain" "$LAB_COMMENT")
+	if [ -z "$final_line" ] || [ "$final_line" -ne "$((dmz_line + 1))" ]; then
+		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump landed at line ${final_line:-none} in $chain, not $((dmz_line + 1)) as inserted" >&2
+		exit 1
+	fi
+	return_line=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v l="$final_line" '$0 ~ /-j[[:space:]]+RETURN([[:space:]]|$)/ && $1 < l {print $1; exit}')
+	if [ -n "$return_line" ]; then
+		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after a RETURN at line $return_line; it would never run" >&2
+		exit 1
+	fi
 	echo "lab-seg-firewall: $proto LAB-SEG jump installed in $chain after \"$DMZ_COMMENT\" (line $dmz_line)"
 }
 

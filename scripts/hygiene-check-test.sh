@@ -57,8 +57,22 @@ run_case "exchange marker, no address" \
 # and the exchange-N shape are process detail.
 run_case "plain lab prose, no marker" \
 	$'note: the lab host reads lab.yaml\n' ok || fail=1
+# Role words that name how this project is worked on must be caught,
+# each on its own, with no address anywhere on the line.
+run_case "role word: lead" \
+	$'note: ask the lead about this\n' fail || fail=1
+run_case "role word: coordinator" \
+	$'note: the coordinator asked for this\n' fail || fail=1
+run_case "role word: maintainer" \
+	$'note: the maintainer approved it\n' fail || fail=1
+run_case "role word: reviewer" \
+	$'note: the reviewer held it\n' fail || fail=1
+# A word that merely contains a role word as a substring must stay clean
+# (word-boundary check, not a bare substring match).
+run_case "substring, not a role word" \
+	$'note: a leading indent, a leaderboard entry\n' ok || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 8 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 13 cases behaved as expected"

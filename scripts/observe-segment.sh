@@ -42,7 +42,8 @@ docker network disconnect bridge "$CONTAINER"
 # saw every IPv6 neighbor-discovery/multicast frame (that chain's IPv6
 # counterpart defaults to accept) but not one DHCP broadcast. That is
 # fixed at the host level by a lab-owned LAB-SEG accept rule
-# (lab-seg-firewall.sh, called from build-bridge.sh), not here.
+# (lab-seg-firewall.sh, applied unconditionally by up-cell.sh before the
+# VM starts), not here.
 ip link add "$VETH_HOST" type veth peer name "$VETH_PEER"
 "$(dirname "${BASH_SOURCE[0]}")/build-bridge.sh" "$BRIDGE" --add-port "$VETH_HOST"
 pid=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER")
