@@ -41,13 +41,46 @@ echo "== containment preflight is wired into up-cell.sh =="
 # An exact, anchored line match: not a bare substring grep, so a neutered
 # call (a leading ":", a trailing "|| true", commenting the line out)
 # fails this just as much as deleting the call outright.
-if ! grep -qE '^[[:space:]]*"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh; then
+preflight_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/containment-preflight\.sh"[[:space:]]*$' scripts/up-cell.sh | head -1 | cut -d: -f1)
+if [ -z "$preflight_line" ]; then
 	echo "verify.sh: up-cell.sh does not call containment-preflight.sh as its own, unmodified command" >&2
+	exit 1
+fi
+
+# The call must also run before the VM is ever started -- a passing call
+# after virt-install/virsh start already touched libvirt is too late to
+# refuse anything. Whichever of the two starts the VM comes first in the
+# file is the one that matters.
+start_line=$(grep -nE '^\s*(virt-install\b|virsh start\b)' scripts/up-cell.sh | head -1 | cut -d: -f1)
+if [ -z "$start_line" ]; then
+	echo "verify.sh: up-cell.sh has no virt-install/virsh start call to order the preflight against" >&2
+	exit 1
+fi
+if [ "$preflight_line" -ge "$start_line" ]; then
+	echo "verify.sh: containment-preflight.sh (line $preflight_line) does not run before the VM start (line $start_line)" >&2
 	exit 1
 fi
 
 echo "== segment bridge refusal tests =="
 ./scripts/build-bridge-test.sh
+
+echo "== build-bridge-test fails loudly (never skips) under CI when unshare is unavailable =="
+# Drives lab-rev-a's exchange-3 observer directly: a failing unshare stub
+# under CI=true must make build-bridge-test.sh exit non-zero, never a
+# quiet skip.
+ci_stub=$(mktemp -d)
+trap 'rm -rf "$ci_stub"' EXIT
+cat >"$ci_stub/unshare" <<'EOF'
+#!/bin/bash
+exit 1
+EOF
+chmod +x "$ci_stub/unshare"
+if CI=true PATH="$ci_stub:$PATH" ./scripts/build-bridge-test.sh >/dev/null 2>&1; then
+	echo "verify.sh: build-bridge-test.sh must fail under CI=true when unshare is unavailable, but it exited 0" >&2
+	exit 1
+fi
+rm -rf "$ci_stub"
+trap - EXIT
 
 echo "== hygiene fixture tests =="
 ./scripts/hygiene-check-test.sh
