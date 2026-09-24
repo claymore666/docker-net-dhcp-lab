@@ -46,28 +46,32 @@ func TestLoadGood(t *testing.T) {
 	}
 }
 
-// A house-LAN address must be refused, not silently accepted (drive the
-// absence: the guard the whole check exists for).
-func TestRejectsHouseLANSubnet(t *testing.T) {
-	bad := strings.Replace(goodMin, "10.200.0.0/24", "192.168.0.0/24", 1)
+// A private address outside the lab's own /16 must be refused, not
+// silently accepted (drive the absence: the guard the whole check exists
+// for). The values here are fictional placeholders, not any real
+// network's address: the point is that the guard compares against the
+// lab's own range, not against a specific forbidden list.
+func TestRejectsOtherPrivateSubnet(t *testing.T) {
+	bad := strings.Replace(goodMin, "10.200.0.0/24", "172.20.0.0/24", 1)
 	if _, err := Load(write(t, bad)); err == nil {
-		t.Fatal("a 192.168.0.0/24 segment subnet was accepted")
+		t.Fatal("a 172.20.0.0/24 segment subnet was accepted")
 	}
 }
 
-func TestRejectsHouseLANManagementSubnet(t *testing.T) {
-	bad := strings.Replace(goodMin, "10.200.255.0/24", "192.168.1.0/24", 1)
+func TestRejectsOtherPrivateManagementSubnet(t *testing.T) {
+	bad := strings.Replace(goodMin, "10.200.255.0/24", "172.20.1.0/24", 1)
 	if _, err := Load(write(t, bad)); err == nil {
-		t.Fatal("a 192.168.1.0/24 management subnet was accepted")
+		t.Fatal("a 172.20.1.0/24 management subnet was accepted")
 	}
 }
 
 func TestRejectsSubnetOutsideLabRangeButPrivate(t *testing.T) {
-	// 10.9.0.0/24 is the house VPN pool (track file §8): still private,
-	// still not ours, must still be refused even though it is a /8.
-	bad := strings.Replace(goodMin, "10.200.0.0/24", "10.9.0.0/24", 1)
+	// Still a 10.x/24, still private, but outside the lab's declared
+	// 10.200.0.0/16: a check that only compares first octets would wrongly
+	// accept this.
+	bad := strings.Replace(goodMin, "10.200.0.0/24", "10.55.0.0/24", 1)
 	if _, err := Load(write(t, bad)); err == nil {
-		t.Fatal("10.9.0.0/24 (outside 10.200.0.0/16) was accepted")
+		t.Fatal("10.55.0.0/24 (outside 10.200.0.0/16) was accepted")
 	}
 }
 

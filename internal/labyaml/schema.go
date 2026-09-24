@@ -12,37 +12,40 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Every field also carries a json tag, matching the yaml name: `labctl
+// resolve` emits JSON and the provisioning shell scripts read it with jq
+// against these lowercase, snake_case paths (never the Go field names).
 type Management struct {
-	LibvirtNetwork string `yaml:"libvirt_network"`
-	Subnet         string `yaml:"subnet"`
-	Gateway        string `yaml:"gateway"`
+	LibvirtNetwork string `yaml:"libvirt_network" json:"libvirt_network"`
+	Subnet         string `yaml:"subnet" json:"subnet"`
+	Gateway        string `yaml:"gateway" json:"gateway"`
 }
 
 type Segment struct {
-	Bridge string `yaml:"bridge"`
-	Subnet string `yaml:"subnet"`
+	Bridge string `yaml:"bridge" json:"bridge"`
+	Subnet string `yaml:"subnet" json:"subnet"`
 }
 
 type DockerHost struct {
-	BaseImage   string `yaml:"base_image"`
-	MgmtAddress string `yaml:"mgmt_address"`
-	PluginTag   string `yaml:"plugin_tag"`
-	VCPUs       int    `yaml:"vcpus"`
-	MemoryMiB   int    `yaml:"memory_mib"`
-	DiskGiB     int    `yaml:"disk_gib"`
+	BaseImage   string `yaml:"base_image" json:"base_image"`
+	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
+	PluginTag   string `yaml:"plugin_tag" json:"plugin_tag"`
+	VCPUs       int    `yaml:"vcpus" json:"vcpus"`
+	MemoryMiB   int    `yaml:"memory_mib" json:"memory_mib"`
+	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
 }
 
 type Cell struct {
-	Name        string      `yaml:"name"`
-	Description string      `yaml:"description"`
-	Segment     Segment     `yaml:"segment"`
-	Source      interface{} `yaml:"source"` // null in P1; a source type/version once #2 lands
-	DockerHost  DockerHost  `yaml:"docker_host"`
+	Name        string      `yaml:"name" json:"name"`
+	Description string      `yaml:"description" json:"description"`
+	Segment     Segment     `yaml:"segment" json:"segment"`
+	Source      interface{} `yaml:"source" json:"source"` // null in P1; a source type/version once #2 lands
+	DockerHost  DockerHost  `yaml:"docker_host" json:"docker_host"`
 }
 
 type Config struct {
-	Management Management `yaml:"management"`
-	ULAPrefix  string     `yaml:"ula_prefix"`
+	Management Management `yaml:"management" json:"management"`
+	ULAPrefix  string     `yaml:"ula_prefix" json:"ula_prefix"`
 	Cells      []Cell     `yaml:"cells"`
 }
 

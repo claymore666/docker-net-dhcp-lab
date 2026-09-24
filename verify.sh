@@ -34,6 +34,9 @@ fi
 echo "== schema self-check =="
 go run ./cmd/labctl validate lab.yaml
 
+echo "== containment preflight refusal tests =="
+./scripts/containment-preflight-test.sh
+
 echo "== no AI attribution =="
 if git rev-parse --verify origin/dev >/dev/null 2>&1; then
 	range="origin/dev..HEAD"

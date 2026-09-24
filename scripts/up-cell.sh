@@ -50,6 +50,23 @@ seed_iso="$WORK/${domain}-seed.iso"
 genisoimage -output "$seed_iso" -volid cidata -joliet -rock \
 	"$seed_dir/user-data" "$seed_dir/meta-data" "$seed_dir/network-config" >/dev/null
 
+echo "== containment preflight =="
+# Every cell here attaches net-mgmt (task 2, issue #1): the reference
+# Docker host reaches apt/GHCR only through it. Refuse before touching
+# libvirt if the host's ci_dmz forward hook isn't in place; the table is a
+# separate, lead-owned fix (defeat list) and does not exist yet, so this
+# is expected to refuse today.
+"$REPO_ROOT/scripts/containment-preflight.sh"
+
+# UEFI (OVMF), not the default SeaBIOS: workaround for a guest-initiated
+# triple-fault under libvirt's -S/cont startup, cause unconfirmed (defeat
+# list, "Decision and status correction"). The per-VM NVRAM copy lives
+# under $WORK, not libvirt's system-wide nvram path, so down-cell.sh can
+# delete it with the rest of the cell's run state.
+ovmf_code=/usr/share/OVMF/OVMF_CODE_4M.fd
+ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
+nvram="$WORK/${domain}-VARS.fd"
+
 echo "== VM =="
 if ! virsh dominfo "$domain" >/dev/null 2>&1; then
 	virt-install \
@@ -60,6 +77,8 @@ if ! virsh dominfo "$domain" >/dev/null 2>&1; then
 		--network network=net-mgmt,model=virtio \
 		--network bridge="$bridge",model=virtio \
 		--os-variant debian13 \
+		--cpu host-model \
+		--boot loader="$ovmf_code",loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template="$ovmf_vars_template",nvram="$nvram" \
 		--graphics none \
 		--noautoconsole \
 		--import
