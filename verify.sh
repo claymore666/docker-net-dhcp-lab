@@ -47,13 +47,26 @@ if [ -z "$preflight_line" ]; then
 	exit 1
 fi
 
-# The call must also run before the VM is ever started -- a passing call
-# after virt-install/virsh start already touched libvirt is too late to
-# refuse anything. Whichever of the two starts the VM comes first in the
-# file is the one that matters.
-start_line=$(grep -nE '^\s*(sudo[[:space:]]+-n[[:space:]]+)?(virt-install\b|virsh start\b)' scripts/up-cell.sh | head -1 | cut -d: -f1)
+# Every virt-install/virsh start call must itself run under sudo -n:
+# net-mgmt and the segment bridge live under qemu:///system, and an
+# unprefixed call would silently reach the empty per-user
+# qemu:///session instead of failing loudly (same reasoning as the
+# preflight call above). Catch a call missing the prefix anywhere in
+# the file, not just the first one.
+unprivileged_start=$(grep -nE '^[[:space:]]*(virt-install\b|virsh start\b)' scripts/up-cell.sh || true)
+if [ -n "$unprivileged_start" ]; then
+	echo "verify.sh: up-cell.sh calls virt-install/virsh start without sudo -n:" >&2
+	echo "$unprivileged_start" >&2
+	exit 1
+fi
+
+# The preflight call must also run before the VM is ever started -- a
+# passing call after virt-install/virsh start already touched libvirt is
+# too late to refuse anything. Whichever of the two starts the VM comes
+# first in the file is the one that matters.
+start_line=$(grep -nE '^[[:space:]]*sudo[[:space:]]+-n[[:space:]]+(virt-install\b|virsh start\b)' scripts/up-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$start_line" ]; then
-	echo "verify.sh: up-cell.sh has no virt-install/virsh start call to order the preflight against" >&2
+	echo "verify.sh: up-cell.sh has no sudo -n virt-install/virsh start call to order the preflight against" >&2
 	exit 1
 fi
 if [ "$preflight_line" -ge "$start_line" ]; then

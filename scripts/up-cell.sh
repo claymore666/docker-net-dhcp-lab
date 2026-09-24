@@ -53,12 +53,13 @@ genisoimage -output "$seed_iso" -volid cidata -joliet -rock \
 echo "== containment preflight =="
 # Every cell here attaches net-mgmt (issue #1): the reference Docker host
 # reaches apt/GHCR only through it. Refuse before touching libvirt if the
-# host's ci_dmz forward hook isn't in place and enforcing something; that
-# table is a separate host fix and does not exist yet, so this is
-# expected to refuse today. Reading nftables state needs root, which an
-# unprivileged shell does not have (and does not carry /usr/sbin on its
-# PATH either); sudo -n supplies both and never prompts, so a missing
-# grant fails this outright instead of hanging on a password.
+# host's ci_dmz forward hook isn't in place and enforcing something; the
+# table is a separate host fix, maintained outside this repo, so whether
+# this refuses depends on that host's current state, not on anything
+# here. Reading nftables state needs root, which an unprivileged shell
+# does not have (and does not carry /usr/sbin on its PATH either);
+# sudo -n supplies both and never prompts, so a missing grant fails this
+# outright instead of hanging on a password.
 sudo -n "$REPO_ROOT/scripts/containment-preflight.sh"
 
 # UEFI (OVMF), not the default SeaBIOS: works around a guest-initiated
