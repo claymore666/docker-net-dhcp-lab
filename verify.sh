@@ -94,6 +94,42 @@ fi
 rm -rf "$ci_stub"
 trap - EXIT
 
+echo "== lab segment firewall refusal/idempotency tests =="
+./scripts/lab-seg-firewall-test.sh
+
+echo "== build-bridge.sh never touches real iptables unless explicitly enabled =="
+# Stub iptables/ip6tables that fail loudly if called at all; a default,
+# unprivileged build-bridge.sh run (LAB_SEG_APPLY_FIREWALL unset) must
+# never invoke them.
+gate_stub=$(mktemp -d)
+trap 'rm -rf "$gate_stub"' EXIT
+for bin in iptables ip6tables; do
+	cat >"$gate_stub/$bin" <<EOF
+#!/bin/bash
+echo "gate-stub: $bin was called with LAB_SEG_APPLY_FIREWALL unset/0 -- gate is broken" >&2
+exit 1
+EOF
+	chmod +x "$gate_stub/$bin"
+done
+if ! unshare -rnm true 2>/dev/null; then
+	if [ "${CI:-}" = "true" ]; then
+		echo "verify.sh: FAIL -- unshare -rnm not available in CI for the build-bridge gate check" >&2
+		exit 1
+	fi
+	echo "verify.sh: SKIP -- unshare -rnm not available here (not CI), skipping the build-bridge gate check" >&2
+else
+	gate_inner='
+set -euo pipefail
+mount -t sysfs sysfs /sys
+ip link set lo up
+"$1" gate-bridge >/dev/null
+echo "verify.sh: build-bridge.sh left iptables/ip6tables untouched with the gate off"
+'
+	unshare -rnm env PATH="$gate_stub:$PATH" bash -c "$gate_inner" bash "$REPO_ROOT/scripts/build-bridge.sh"
+fi
+rm -rf "$gate_stub"
+trap - EXIT
+
 echo "== hygiene fixture tests =="
 ./scripts/hygiene-check-test.sh
 

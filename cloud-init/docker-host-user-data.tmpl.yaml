@@ -24,5 +24,11 @@ runcmd:
   - apt-get update
   - apt-get install -y docker-ce docker-ce-cli containerd.io
   - systemctl enable --now docker
+  # The plugin mounts /var/lib/net-dhcp for its own state; docker plugin
+  # install does not create it, so without this line the plugin installs
+  # but stays disabled (measured live, issue #1: "open /var/lib/net-dhcp:
+  # no such file or directory", cloud-init's runcmd does not stop on the
+  # failure, so bootstrap-done still gets set with the plugin unusable).
+  - install -m 0755 -d /var/lib/net-dhcp
   - docker plugin install --grant-all-permissions --alias net-dhcp-under-test __PLUGIN_TAG__
   - touch /var/lib/cloud/lab-bootstrap-done

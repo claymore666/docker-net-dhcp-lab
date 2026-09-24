@@ -62,4 +62,15 @@ if [ -n "$add_port" ]; then
 	ip link set "$add_port" up
 fi
 
+# lab-seg-firewall.sh touches real iptables/ip6tables state on the host
+# (issue #1: bridged IPv4 between two ordinary ports of any bridge is
+# dropped by Docker's own FORWARD-chain policy otherwise). This script
+# also runs unprivileged, in CI and in build-bridge-test.sh's netns, so
+# the firewall call is opt-in and OFF by default -- only a caller that
+# explicitly sets LAB_SEG_APPLY_FIREWALL=1 (the real lab host, once
+# approved) ever invokes real iptables here.
+if [ "${LAB_SEG_APPLY_FIREWALL:-0}" = "1" ]; then
+	"$(dirname "${BASH_SOURCE[0]}")/lab-seg-firewall.sh"
+fi
+
 echo "build-bridge: $bridge ok"
