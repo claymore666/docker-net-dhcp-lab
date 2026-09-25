@@ -103,8 +103,21 @@ run_case "verify.sh, same words with no marker" \
 run_case "verify.sh, prose ending with the marker is not exempt" \
 	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
 	fail verify.sh || fail=1
+# A review finding's own number must be caught, with no address or role
+# word anywhere on the line.
+run_case "finding number" \
+	$'note: fixed in finding 5\n' fail || fail=1
+# A review verdict word, all-caps, must be caught even alone on the line.
+run_case "verdict word: HOLD" \
+	$'note: the review came back HOLD\n' fail || fail=1
+run_case "verdict word: CLEAR" \
+	$'note: the review gave a CLEAR\n' fail || fail=1
+# The ordinary English verb, lowercase, is not the verdict word and must
+# stay clean.
+run_case "ordinary prose, not a verdict word" \
+	$'note: this fix will hold up, and make the intent clear\n' ok || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 19 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 23 cases behaved as expected"

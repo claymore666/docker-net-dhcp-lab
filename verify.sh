@@ -138,7 +138,11 @@ echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
 
 echo "== DHCP four-message check, against real pcap fixtures =="
-./scripts/dhcp-exchange-check-test.sh
+if command -v tcpdump >/dev/null; then
+	./scripts/dhcp-exchange-check-test.sh
+else
+	echo "verify.sh: tcpdump not installed, skipping" >&2
+fi
 
 echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
 ./scripts/lab-known-hosts-test.sh

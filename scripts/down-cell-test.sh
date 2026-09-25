@@ -213,8 +213,8 @@ STUB
 	fi
 fi
 
-# Case 5: the source domain persists no matter what (issue #2 HOLD
-# finding 2). The docker-host domain never existed, which isolates the
+# Case 5: the source domain persists no matter what (issue #2). The
+# docker-host domain never existed, which isolates the
 # source domain's own refusal. Must refuse, must not remove $WORK, and
 # the recheck must have gone through sudo -n exactly twice -- the same
 # shape as case 2's docker-host assertion, but for the source domain.
@@ -254,7 +254,7 @@ if [ ! -d "$work5" ]; then
 fi
 
 # Case 6: the source domain exists once, then is gone on the recheck
-# (issue #2 HOLD finding 2) -- teardown succeeds, which lets this case
+# (issue #2) -- teardown succeeds, which lets this case
 # assert destroy/undefine were actually called for it, not just that
 # dominfo agreed to be asked. A dominfo call count alone cannot tell
 # "destroy ran and the VM died" apart from "destroy never ran and dominfo

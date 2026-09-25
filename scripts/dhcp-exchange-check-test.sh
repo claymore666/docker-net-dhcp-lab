@@ -1,5 +1,5 @@
 #!/bin/bash
-# Offline cases for dhcp-exchange-check.sh (issue #2 HOLD finding 1),
+# Offline cases for dhcp-exchange-check.sh (issue #2),
 # against real pcap fixtures (scripts/testdata/, built by
 # gen-dhcp-fixtures.py) -- not synthetic decoded text. Case A is the
 # positive control: a genuine four-message exchange must pass.

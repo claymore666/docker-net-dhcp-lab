@@ -3,8 +3,9 @@
 # bring up a source cell (docker host + source VM), fire a real DHCP
 # exchange from a test container, and prove the observer captured all
 # four message types (tied to the container's own MAC and one xid), the
-# source's own table (through the Go adapter) shows the same lease, and
-# containment held throughout.
+# source's own table (through the Go adapter) shows the same lease, no
+# DHCP server reply reached the management bridge, and the segment
+# bridge carries only its expected ports.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -24,7 +25,7 @@ source_mgmt_ip=${source_mgmt_ip%%/*}
 
 "$REPO_ROOT/scripts/up-cell.sh" "$CELL" "$WORK"
 
-# Containment (issue #2 HOLD finding 5): capture on the management
+# Containment (issue #2): capture on the management
 # bridge for the whole exchange below, so the demo log itself proves no
 # DHCP server reply ever reaches it, not just the segment bridge the
 # source is meant to answer on. sudo -n, same as every other privileged
@@ -35,7 +36,11 @@ sudo -n rm -f "$MGMT_PCAP"
 sudo -n timeout 40 tcpdump -n -i virbr-mgmt -w "$MGMT_PCAP" 'udp port 67 or udp port 68' >/dev/null 2>&1 &
 mgmt_pid=$!
 mgmt_waited=0
-until sudo -n pgrep -f "tcpdump -n -i virbr-mgmt" >/dev/null 2>&1; do
+# -x, not -f: the sudo wrapper's own argv already carries the substring
+# "tcpdump -n -i virbr-mgmt" as its arguments, so a -f match returns true
+# before tcpdump itself has even started. -x matches the running
+# process's own name only, which "sudo" never has.
+until sudo -n pgrep -x tcpdump >/dev/null 2>&1; do
 	mgmt_waited=$((mgmt_waited + 1))
 	if [ "$mgmt_waited" -ge 50 ]; then
 		echo "demo-source-cell: FAIL -- mgmt-bridge capture did not start inside the 5s bound" >&2
@@ -85,7 +90,7 @@ if [ "$mgmt_replies" -ne 0 ]; then
 	echo "demo-source-cell: FAIL -- $mgmt_replies DHCP server reply frame(s) on virbr-mgmt (source port 67); a source reply must never reach the management network" >&2
 	exit 1
 fi
-echo "demo-source-cell: containment ok -- 0 DHCP server replies on virbr-mgmt"
+echo "demo-source-cell: no DHCP server reply on the management bridge; segment not wired to it"
 
 echo "== containment: $bridge port list (raw) =="
 vnet_count=0
@@ -125,4 +130,4 @@ if ! awk -v mac="$mac" -v addr="$addr" \
 	exit 1
 fi
 
-echo "demo-source-cell: PASS -- $CELL ($source_type) leased $mac -> $addr, all four DHCP message types captured, lease confirmed in the source's own table, containment held"
+echo "demo-source-cell: PASS -- $CELL ($source_type) leased $mac -> $addr, all four DHCP message types captured, lease confirmed in the source's own table, no server reply on the management bridge, segment bridge ports as expected"

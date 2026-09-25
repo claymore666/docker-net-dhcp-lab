@@ -17,11 +17,16 @@ cd "$REPO_ROOT"
 ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
 
 # Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
-# markers (e.g. exchange-1), and role words that name how this project is
-# worked on (lead, coordinator, maintainer, reviewer) never belong in a
-# public tracked file; caught by shape, so no real tag or role word
-# appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer)\b'
+# markers (e.g. exchange-1), role words that name how this project is
+# worked on (lead, coordinator, maintainer, reviewer), and a review
+# finding's own number never belong in a public tracked file; caught by
+# shape, so no real tag or role word appears here.
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|finding [0-9]+)\b'
+# A review verdict word is all-caps only in real use; the ordinary
+# English verb a comment might use ("this will hold", "make it clear")
+# is lowercase and must stay clean, so this one is matched
+# case-sensitively instead of joining PROCESS_RE above.
+VERDICT_RE='\b(HOLD|CLEAR)\b'
 
 fail=0
 while IFS= read -r -d '' f; do
@@ -61,7 +66,7 @@ while IFS= read -r -d '' f; do
 				continue
 			fi
 		fi
-		if grep -qiE "$PROCESS_RE" <<<"$line"; then
+		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi

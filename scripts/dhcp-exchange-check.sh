@@ -1,5 +1,5 @@
 #!/bin/bash
-# Shared library, sourced never executed (issue #2 HOLD finding 1): was
+# Shared library, sourced never executed (issue #2): was
 # demo-source-cell.sh's own inline loop, which matched all four message
 # names anywhere in the whole decode, including the BOOTP header's own
 # "Request from <mac>" text, with no tie to one xid or one MAC, and

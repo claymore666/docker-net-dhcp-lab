@@ -1,7 +1,7 @@
 #!/bin/bash
-# Static check for a known injection risk (issue #2): a source
-# daemon must bind only eth1 (the segment), never eth0/mgmt or "all
-# interfaces" -- refuses any cloud-init template that says anything else.
+# Static check that each source daemon's config binds only eth1 (the
+# segment), never eth0/mgmt or "all interfaces" (issue #2) -- refuses any
+# cloud-init template that says anything else.
 # Complements, never replaces, the live capture on virbr-mgmt during a
 # real bring-up.
 set -euo pipefail

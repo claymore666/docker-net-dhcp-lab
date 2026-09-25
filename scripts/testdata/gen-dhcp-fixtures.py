@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Builds small, valid DHCPv4-over-Ethernet pcap fixtures for
-dhcp-exchange-check-test.sh (issue #2, HOLD finding 1). No scapy on this
+dhcp-exchange-check-test.sh (issue #2). No scapy on this
 host, so packets are assembled by hand from struct-packed bytes -- real
 pcap files a real tcpdump decodes, not synthetic decoded-text stand-ins.
 """
@@ -129,7 +129,7 @@ write_pcap("dhcp-ends-in-nak.pcap", [
 
 # A complete, well-formed exchange -- for a MAC other than the one the
 # check is asked about. Proves the check does not just look for "any
-# complete exchange in the capture" (issue #2 HOLD finding 1).
+# complete exchange in the capture" (issue #2).
 write_pcap("dhcp-wrong-mac.pcap", full_exchange(OTHER_MAC, OTHER_XID))
 
 print("wrote 4 fixtures")
