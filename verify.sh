@@ -34,114 +34,16 @@ fi
 echo "== schema self-check =="
 go run ./cmd/labctl validate lab.yaml
 
-# Prints the if/for/while/until/case nesting depth in effect immediately
-# before $line in $file, relying on this repo's own style convention of
-# putting control keywords and their closing keywords on their own line
-# with zero leading whitespace for every top-level statement. A line at
-# depth 0 is unconditional; depth > 0 means some call was wrapped in an
-# "if" (or similar) without changing the matched line's own text, which
-# an anchored grep alone cannot tell apart from a truly unconditional call.
-depth_at_line() {
-	local file=$1 line=$2
-	awk -v target="$line" '
-	NR>=target { exit }
-	{
-		l = $0
-		sub(/^[[:space:]]+/, "", l)
-		if (l ~ /^(if|for|while|until|case)([[:space:]]|\()/) depth++
-		else if (l ~ /^(fi|done|esac)([[:space:];]|$)/) depth--
-	}
-	END { print depth + 0 }
-	' "$file"
-}
-
-# True if $line in $file sits inside a heredoc BODY (data, never code) --
-# tracks the one active "<<TAG" opener up to $line and clears it on a
-# line that is exactly TAG, the same no-op idiom (": <<'SKIP' ... SKIP")
-# that comments out a block while an anchored grep still finds the text.
-in_heredoc_body() {
-	local file=$1 line=$2
-	awk -v target="$line" '
-	NR>=target { exit }
-	{
-		if (tag == "") {
-			p = index($0, "<<")
-			if (p > 0) {
-				rest = substr($0, p + 2)
-				sub(/^-/, "", rest)
-				sub(/^[[:space:]]+/, "", rest)
-				gsub(/[\x27\x22]/, "", rest)
-				split(rest, parts, /[^A-Za-z0-9_]/)
-				if (parts[1] != "") tag = parts[1]
-			}
-		} else {
-			t = $0
-			gsub(/^[[:space:]]+/, "", t)
-			gsub(/[[:space:]]+$/, "", t)
-			if (t == tag) tag = ""
-		}
-	}
-	END { print (tag != "") ? 1 : 0 }
-	' "$file"
-}
-
-# Name of the function $line in $file sits inside, or empty at top level.
-# Tracks only this repo's own convention -- "name() {" on its own line,
-# a lone "}" closing it -- the same shape every function in this repo
-# already uses, never a full parser.
-enclosing_function() {
-	local file=$1 line=$2
-	awk -v target="$line" '
-	NR>=target { exit }
-	{
-		if (fn == "" && $0 ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{[[:space:]]*$/) {
-			name = $0
-			sub(/\(\).*/, "", name)
-			fn = name
-		} else if (fn != "" && $0 ~ /^\}[[:space:]]*$/) {
-			fn = ""
-		}
-	}
-	END { print fn }
-	' "$file"
-}
-
-# True if the line immediately before $line in $file ends with a
-# "&& \" line-continuation guard -- a condition on the call that changes
-# neither the call's own text nor its column, so an anchored grep at
-# depth 0 cannot tell it apart from a truly unconditional call.
-and_guarded() {
-	local file=$1 line=$2
-	[ "$line" -le 1 ] && return 1
-	local prev
-	prev=$(sed -n "$((line - 1))p" "$file")
-	[[ "$prev" =~ \&\&[[:space:]]*\\$ ]]
-}
-
-# Combines all four evasions this file guards against into one reason
-# string, empty when $line in $file is a real, unconditional, reachable
-# statement. Callers treat any non-empty result as a wiring failure.
-unreachable_reason() {
-	local file=$1 line=$2 reason="" depth fn
-
-	depth=$(depth_at_line "$file" "$line")
-	if [ "$depth" -ne 0 ]; then
-		reason="sits inside a conditional block (depth $depth)"
-	elif [ "$(in_heredoc_body "$file" "$line")" = 1 ]; then
-		reason="sits inside a heredoc block, which is data, not code"
-	elif and_guarded "$file" "$line"; then
-		reason="is guarded by a leading \"&&\" line-continuation condition"
-	else
-		fn=$(enclosing_function "$file" "$line")
-		if [ -n "$fn" ] && ! grep -qE "^[[:space:]]*${fn}([[:space:]]|\$)" "$file"; then
-			reason="sits inside function \"$fn\", which is never called"
-		fi
-	fi
-	echo "$reason"
-}
+# unreachable_reason and its four evasion detectors live in
+# wiring-check.sh, shared with wiring-check-test.sh's mutation cases below
+# so the same code path that gates up-cell.sh is what gets mutated.
+. "$REPO_ROOT/scripts/wiring-check.sh"
 
 echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
+
+echo "== wiring-check catches all four evasions (mutation-tested) =="
+./scripts/wiring-check-test.sh
 
 echo "== containment preflight is wired into up-cell.sh =="
 # An exact, anchored line match: not a bare substring grep, so a neutered
