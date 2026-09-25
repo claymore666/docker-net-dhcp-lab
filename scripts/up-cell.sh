@@ -76,6 +76,15 @@ echo "instance-id: $domain" >"$seed_dir/meta-data"
 echo "local-hostname: lab-docker-host" >>"$seed_dir/meta-data"
 
 seed_iso="$WORK/${domain}-seed.iso"
+# Removed, never overwritten in place: libvirt's dynamic_ownership chowns
+# an attached disk (this ISO included) to libvirt-qemu once the domain has
+# started once, and kamienc is in neither the libvirt nor the kvm group
+# (issue #1/#3 direction) -- measured live, an idempotent re-run against a
+# work dir whose VM had already started once failed genisoimage outright
+# with "Permission denied" on the existing, now libvirt-qemu-owned file.
+# Deleting it needs only write permission on $WORK, which kamienc already
+# has, regardless of who currently owns the file being deleted.
+rm -f "$seed_iso"
 genisoimage -output "$seed_iso" -volid cidata -joliet -rock \
 	"$seed_dir/user-data" "$seed_dir/meta-data" "$seed_dir/network-config" >/dev/null
 
