@@ -299,6 +299,9 @@ if [ -n "$processy" ]; then
 	exit 1
 fi
 
+echo "== source daemons bind eth1 only =="
+./scripts/source-bind-check.sh
+
 echo "== publication hygiene =="
 ./scripts/hygiene-check.sh
 

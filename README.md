@@ -27,3 +27,18 @@ nftables state needs root). That check only reads the ruleset text; it
 cannot prove traffic is actually blocked end to end. The proof of that
 is `dmz-probe.sh ""` run inside the Docker host VM at a live run, not
 this preflight.
+
+## Bring up a source cell
+
+Kea, ISC dhcpd and dnsmasq each get their own cell, apt-installed with a
+stock config plus a pool (issue #2). A Go adapter reads each source's
+own lease table (control API, `dhcpd.leases`, or the dnsmasq lease
+file) rather than trusting the plugin's own report.
+
+```
+scripts/demo-source-cell.sh kea        # or isc-dhcp, or dnsmasq
+scripts/down-cell.sh kea <work-dir>
+```
+
+`labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
+source's table on its own, through the same adapter.
