@@ -88,15 +88,23 @@ run_case "verify.sh, agent tag and role word no longer exempt" \
 	$'# as the lead asked at exchange-2, ping lab-rev-z\n' fail verify.sh || fail=1
 # A line that IS the pattern definition (the marker verify.sh itself
 # carries on its process/role-word grep) must stay clean, on a file that
-# is otherwise fully scanned.
+# is otherwise fully scanned. The words are joined by "|", the same
+# regex-alternation shape verify.sh's own grep uses, not plain prose.
 run_case "verify.sh, marked pattern-literal line stays clean" \
-	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
+	$'match \\b(lead|coordinator|maintainer|reviewer)\\b # hygiene: pattern literal, not prose\n' \
 	ok verify.sh || fail=1
 # The same line without the marker is ordinary prose and must be caught.
 run_case "verify.sh, same words with no marker" \
 	$'match lead coordinator maintainer reviewer\n' fail verify.sh || fail=1
+# Round 4: prose that merely ends with the exact marker text, with no
+# "|" alternation anywhere on the line, must NOT be exempted -- the
+# marker on its own used to be enough, and this is exactly the shape
+# that let real prose ride through as if it were a pattern literal.
+run_case "verify.sh, prose ending with the marker is not exempt" \
+	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
+	fail verify.sh || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 18 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 19 cases behaved as expected"

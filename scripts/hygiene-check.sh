@@ -49,8 +49,17 @@ while IFS= read -r -d '' f; do
 		# trailing marker and is exempt from this one check only -- the
 		# address check above still runs on it. Matched case-sensitively,
 		# so it cannot be smuggled in by a differently-cased comment.
+		# The marker alone is not enough: prose can carry the same
+		# trailing text (round 4). A genuine pattern literal joins its
+		# words with "|", regex alternation syntax with no space either
+		# side; two flagged words with nothing but plain whitespace
+		# between them is prose, marker or not, and the line still goes
+		# through the check below in that case.
 		if grep -qE '#[[:space:]]*hygiene:[[:space:]]*pattern literal, not prose[[:space:]]*$' <<<"$line"; then
-			continue
+			stripped=$(sed -E 's/#[[:space:]]*hygiene:[[:space:]]*pattern literal, not prose[[:space:]]*$//' <<<"$line")
+			if [[ "$stripped" == *'|'* ]] && ! grep -qiE "($PROCESS_RE)[[:space:]]+($PROCESS_RE)" <<<"$stripped"; then
+				continue
+			fi
 		fi
 		if grep -qiE "$PROCESS_RE" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
