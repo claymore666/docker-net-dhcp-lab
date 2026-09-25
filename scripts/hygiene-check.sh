@@ -2,7 +2,10 @@
 # Publication hygiene (track file: "no address or name from the home
 # network"). Pattern-based, not a name list: this script names no home
 # address itself, so a failure prints only where the hit is, never what
-# it is, and the check's own source stays safe to publish even red.
+# it is, and the check's own source stays safe to publish even red. The
+# pattern-literal marker below is a heuristic against accidental prose,
+# not a proof: a line with a stray "|" elsewhere and its flagged words
+# separated by filler could still slip past it.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -44,17 +47,13 @@ while IFS= read -r -d '' f; do
 				fi
 			done <<<"$matches"
 		fi
-		# A line that IS the pattern definition, not prose using it (e.g. a
-		# regex literal naming these same words), carries this exact
-		# trailing marker and is exempt from this one check only -- the
-		# address check above still runs on it. Matched case-sensitively,
-		# so it cannot be smuggled in by a differently-cased comment.
-		# The marker alone is not enough: prose can carry the same
-		# trailing text (round 4). A genuine pattern literal joins its
-		# words with "|", regex alternation syntax with no space either
-		# side; two flagged words with nothing but plain whitespace
-		# between them is prose, marker or not, and the line still goes
-		# through the check below in that case.
+		# A line that IS the pattern definition, not prose using it, carries
+		# this exact trailing marker and is exempt from this one check only
+		# -- matched case-sensitively so a differently-cased comment cannot
+		# smuggle it in. The marker alone is not enough: prose can carry
+		# the same trailing text too, so it is honored only when the line
+		# also joins its flagged words with "|" and no space, the shape a
+		# real pattern literal has and prose does not.
 		if grep -qE '#[[:space:]]*hygiene:[[:space:]]*pattern literal, not prose[[:space:]]*$' <<<"$line"; then
 			stripped=$(sed -E 's/#[[:space:]]*hygiene:[[:space:]]*pattern literal, not prose[[:space:]]*$//' <<<"$line")
 			if [[ "$stripped" == *'|'* ]] && ! grep -qiE "($PROCESS_RE)[[:space:]]+($PROCESS_RE)" <<<"$stripped"; then

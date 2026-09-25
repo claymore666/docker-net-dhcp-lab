@@ -5,9 +5,9 @@
 # the same way it would still pass with the preflight/firewall call in
 # up-cell.sh wrapped in each of these. A clean, unconditional call
 # (case E) proves the check does not also flag real, reachable calls.
-# Cases F and G (round 4) close two more: a "true || \" guard that reads
-# like and_guarded's shape but never runs at all, and a function whose
-# only apparent caller is itself unreachable, which a single-level
+# Cases F and G close two more: a "true || \" guard that reads like
+# and_guarded's shape but never runs at all, and a function whose only
+# apparent caller is itself unreachable, which a single-level
 # reachability check would miss.
 set -euo pipefail
 

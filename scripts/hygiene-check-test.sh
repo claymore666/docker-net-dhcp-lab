@@ -96,10 +96,10 @@ run_case "verify.sh, marked pattern-literal line stays clean" \
 # The same line without the marker is ordinary prose and must be caught.
 run_case "verify.sh, same words with no marker" \
 	$'match lead coordinator maintainer reviewer\n' fail verify.sh || fail=1
-# Round 4: prose that merely ends with the exact marker text, with no
-# "|" alternation anywhere on the line, must NOT be exempted -- the
-# marker on its own used to be enough, and this is exactly the shape
-# that let real prose ride through as if it were a pattern literal.
+# Prose that merely ends with the exact marker text, with no "|"
+# alternation anywhere on the line, must NOT be exempted -- the marker
+# on its own used to be enough, and this is exactly the shape that let
+# real prose ride through as if it were a pattern literal.
 run_case "verify.sh, prose ending with the marker is not exempt" \
 	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
 	fail verify.sh || fail=1

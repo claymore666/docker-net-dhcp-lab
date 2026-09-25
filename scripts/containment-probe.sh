@@ -54,25 +54,15 @@ fi
 connected=""
 for t in "${TARGETS[@]}"; do
 	for port in "${PORTS[@]}"; do
-		# Expected to fail every time -- the probe's job is to generate the
-		# attempt and let the host firewall drop it, not to connect. A
-		# successful connection is checked explicitly by its own marker,
-		# never inferred from ssh's exit code -- ssh itself can fail for
-		# reasons (a dropped control session, a remote timeout) that have
-		# nothing to do with whether the target actually answered.
-		#
-		# CONNECTED (rc 0): the port answered outright.
-		# REACHED: bash's own connect() came straight back with
-		# "connection refused" -- a RST, sent by the target's own
-		# kernel, proves the SYN reached it past the firewall, so this
-		# counts as a failure too. LC_ALL=C pins the message to English
-		# regardless of the remote host's locale, the same reason
-		# numeric awk/sort runs under LC_ALL=C elsewhere in this repo.
-		# BLOCKED: a genuine 2s timeout (rc 124, the SYN was silently
-		# dropped) or any other fast failure such as "no route to
-		# host"/"network unreachable" -- a routing fact, not evidence
-		# the packet reached anything -- both the expected, passing
-		# outcome.
+		# Expected to fail every time; success is checked by its own
+		# marker, never ssh's exit code (which can fail for unrelated
+		# reasons). CONNECTED (rc 0): the port answered. REACHED: the
+		# remote connect() reported "refused" -- a RST proves the SYN
+		# reached the target, so this counts as a failure too. LC_ALL=C
+		# pins that text to English regardless of the remote host's
+		# locale. BLOCKED: a genuine timeout (rc 124) or any other fast
+		# failure ("no route to host" etc, a routing fact, not evidence
+		# of reaching anything) -- both pass.
 		raw=$(ssh_run "out=\$(LC_ALL=C timeout 2 bash -c 'echo >/dev/tcp/$t/$port' 2>&1); rc=\$?; printf '%s|RC=%s' \"\$out\" \"\$rc\"" 2>/dev/null || printf '|RC=124')
 		rc=${raw##*RC=}
 		msg=${raw%|RC=*}

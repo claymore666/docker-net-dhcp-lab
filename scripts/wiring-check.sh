@@ -2,9 +2,12 @@
 # Shared library, sourced (never executed) by verify.sh and by this file's
 # own companion, wiring-check-test.sh. Detects whether a call site that an
 # anchored grep matched by text is actually unconditional and reachable, or
-# only looks that way -- four evasions that change nothing about the
+# only looks that way -- several evasions that change nothing about the
 # matched line's own text or column, so a grep alone cannot tell them apart
-# from a real, unconditional call.
+# from a real, unconditional call. A heuristic against accidental guards,
+# not a proof: it does not chase every dead-code shape (e.g. a bare
+# "cmd || \" continuation, "[ -d / ] || \", or two functions whose only
+# callers are each other).
 
 # Prints the if/for/while/until/case nesting depth in effect immediately
 # before $line in $file, relying on this repo's own style convention of
@@ -109,10 +112,9 @@ true_or_guarded() {
 # statement. Callers treat any non-empty result as a wiring failure.
 # $3 is an internal recursion depth (never passed by callers): the
 # function-uncalled check below re-runs this same check on each
-# candidate caller line, to catch a caller that is itself unreachable
-# (issue #1 round 4); the cap only guards against a call cycle (a
-# function whose only caller is itself), never hit by this repo's own
-# scripts.
+# candidate caller line, to catch a caller that is itself unreachable.
+# The cap only guards against a call cycle (a function whose only
+# caller is itself), never hit by this repo's own scripts.
 unreachable_reason() {
 	local file=$1 line=$2 depth=${3:-0} reason="" d fn
 

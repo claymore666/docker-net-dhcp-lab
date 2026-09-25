@@ -123,18 +123,13 @@ if ! (hook_after_dmz "$IPT" DOCKER-USER iptables); then
 fi
 
 ### ---------- IPv6: FORWARD directly, never DOCKER-USER ----------
-# The DMZ script hooks its own v6 jump into FORWARD, not DOCKER-USER,
-# because Docker only creates an ip6 DOCKER-USER chain once its IPv6
-# iptables support is switched on -- true today and unconditionally, so
-# this script does the same, and never creates or touches DOCKER-USER
-# under ip6tables. If Docker's v6 support switches on later, Docker
-# starts owning ip6 DOCKER-USER; this rule stays in FORWARD, where it
-# keeps working either way, and this script still never touches that
-# chain.
-#
-# If v6 refuses, the v4 jump above already landed; take it back out so
-# a v6-only problem never leaves v4 alone half-applied. All or nothing
-# across both protocols.
+# The DMZ script hooks its own v6 jump into FORWARD, not DOCKER-USER:
+# Docker only creates an ip6 DOCKER-USER chain once its v6 iptables
+# support is on, which is off today, so this rule lives in FORWARD and
+# never touches DOCKER-USER under ip6tables either way, before or after
+# that switches. If v6 refuses, the v4 jump above already landed; take
+# it back out so a v6-only problem never leaves v4 half-applied, all or
+# nothing across both protocols.
 if ! (hook_after_dmz "$IPT6" FORWARD ip6tables); then
 	echo "lab-seg-firewall: rolling back the IPv4 jump because IPv6 refused" >&2
 	delete_own_jump "$IPT" DOCKER-USER
