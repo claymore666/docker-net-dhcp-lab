@@ -12,6 +12,7 @@ set -euo pipefail
 CELL=${1:?usage: down-cell.sh <cell-name> <work-dir>}
 WORK=${2:?usage: down-cell.sh <cell-name> <work-dir>}
 domain="lab-${CELL}-dockerhost"
+source_domain="lab-${CELL}-source"
 
 # Same naming as observe-segment.sh's own container and host-side veth
 # (its comment there has the IFNAMSIZ reasoning for the hash); recomputed
@@ -43,6 +44,19 @@ fi
 # it at all.
 if sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 	echo "down-cell: REFUSED -- $domain still exists after destroy/undefine; not touching $WORK" >&2
+	exit 1
+fi
+
+# A cell's own IP source VM (issue #2), same shape as the docker host
+# above: its own overlay/NVRAM under $WORK, the shared base image never
+# touched. A cell with no source (issue #1's ref-only) has none defined,
+# so every call here is a harmless no-op.
+if sudo -n virsh dominfo "$source_domain" >/dev/null 2>&1; then
+	sudo -n virsh destroy "$source_domain" >/dev/null 2>&1 || true
+	sudo -n virsh undefine "$source_domain" --nvram >/dev/null 2>&1 || sudo -n virsh undefine "$source_domain" >/dev/null 2>&1 || true
+fi
+if sudo -n virsh dominfo "$source_domain" >/dev/null 2>&1; then
+	echo "down-cell: REFUSED -- $source_domain still exists after destroy/undefine; not touching $WORK" >&2
 	exit 1
 fi
 

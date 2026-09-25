@@ -1,0 +1,54 @@
+#cloud-config
+# Kea source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it -- no cloud-init
+# module-ordering assumption between write_files and package install.
+hostname: lab-kea-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  - apt-get install -y kea-dhcp4-server kea-ctrl-agent jq
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
+  - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
+  - echo '[]' >/etc/kea/reservations.json
+  - |
+    cat >/etc/kea/kea-dhcp4.conf <<'KEAEOF'
+    {
+    "Dhcp4": {
+      "interfaces-config": { "interfaces": [ "eth1" ] },
+      "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
+      "lease-database": { "type": "memfile", "persist": true },
+      "valid-lifetime": 3600,
+      "subnet4": [
+        {
+          "subnet": "__SEG_SUBNET__",
+          "pools": [ { "pool": "__POOL_START__ - __POOL_END__" } ],
+          "reservations": <?include "/etc/kea/reservations.json"?>
+        }
+      ]
+    }
+    }
+    KEAEOF
+  - |
+    cat >/etc/kea/kea-ctrl-agent.conf <<'KEAEOF'
+    {
+    "CtrlAgent": {
+      "http-host": "127.0.0.1",
+      "http-port": 8000,
+      "control-sockets": {
+        "dhcp4": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" }
+      }
+    }
+    }
+    KEAEOF
+  - systemctl enable --now kea-dhcp4-server
+  - systemctl enable --now kea-ctrl-agent
+  - touch /var/lib/cloud/lab-bootstrap-done

@@ -1,0 +1,31 @@
+#cloud-config
+# dnsmasq source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-dnsmasq-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  - apt-get install -y dnsmasq
+  - systemctl stop dnsmasq
+  - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
+  - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock
+  - touch /etc/dnsmasq.d/lab-reservations.conf
+  - |
+    cat >/etc/dnsmasq.conf <<'DNSMASQEOF'
+    interface=eth1
+    bind-interfaces
+    except-interface=eth0
+    dhcp-authoritative
+    dhcp-range=__POOL_START__,__POOL_END__,12h
+    conf-dir=/etc/dnsmasq.d/,*.conf
+    DNSMASQEOF
+  - systemctl enable --now dnsmasq
+  - touch /var/lib/cloud/lab-bootstrap-done

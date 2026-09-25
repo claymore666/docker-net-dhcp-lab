@@ -1,0 +1,37 @@
+#cloud-config
+# ISC dhcpd source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-isc-dhcp-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  - apt-get install -y isc-dhcp-server
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
+  - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock
+  - touch /etc/dhcp/lab-reservations.conf
+  - |
+    cat >/etc/dhcp/dhcpd.conf <<'DHCPDEOF'
+    default-lease-time 600;
+    max-lease-time 7200;
+    authoritative;
+    subnet __SEG_NETWORK__ netmask __SEG_NETMASK__ {
+      range __POOL_START__ __POOL_END__;
+    }
+    include "/etc/dhcp/lab-reservations.conf";
+    DHCPDEOF
+  - |
+    cat >/etc/default/isc-dhcp-server <<'DHCPDEOF'
+    INTERFACESv4="eth1"
+    INTERFACESv6=""
+    DHCPDEOF
+  - systemctl enable --now isc-dhcp-server
+  - touch /var/lib/cloud/lab-bootstrap-done
