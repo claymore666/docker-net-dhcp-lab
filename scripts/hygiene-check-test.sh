@@ -1,0 +1,110 @@
+#!/bin/bash
+# Fixture tests for hygiene-check.sh (issue #1). Runs the real script
+# against a throwaway git repo, never the working tree, so a case can
+# carry a disallowed address without ever being published itself.
+set -euo pipefail
+
+REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fixture_repo="$tmp/repo"
+mkdir -p "$fixture_repo/scripts"
+git init -q "$fixture_repo"
+git -C "$fixture_repo" config user.email test@example.invalid
+git -C "$fixture_repo" config user.name test
+cp "$REPO_ROOT/scripts/hygiene-check.sh" "$fixture_repo/scripts/hygiene-check.sh"
+
+run_case() {
+	local desc=$1 content=$2 want=$3 file=${4:-note.txt} # want: ok | fail
+	# Every fixture file this suite ever writes to starts each case clean,
+	# so a violation left behind by an earlier case (in a file other than
+	# the one this case targets) can never leak forward and contaminate
+	# a later "ok" expectation.
+	: >"$fixture_repo/note.txt"
+	: >"$fixture_repo/verify.sh"
+	printf '%s' "$content" >"$fixture_repo/$file"
+	git -C "$fixture_repo" add -A
+	if (cd "$fixture_repo" && ./scripts/hygiene-check.sh) >/dev/null 2>&1; then
+		got=ok
+	else
+		got=fail
+	fi
+	if [ "$got" != "$want" ]; then
+		echo "hygiene-check-test: FAIL -- $desc: wanted $want, got $got" >&2
+		return 1
+	fi
+}
+
+fail=0
+# The reported bug: a disallowed address on the file's last line, with no
+# trailing newline, must still be caught.
+run_case "disallowed address, no trailing newline" \
+	$'note: host at 192.168.7.7' fail || fail=1
+# Same address, same line, but with the trailing newline the original
+# code already handled -- must stay caught.
+run_case "disallowed address, with trailing newline" \
+	$'note: host at 192.168.7.7\n' fail || fail=1
+# A lab-range address must still pass, on both an unterminated and a
+# terminated last line.
+run_case "lab-range address, no trailing newline" \
+	$'note: host at 10.200.1.1' ok || fail=1
+run_case "lab-range address, with trailing newline" \
+	$'note: host at 10.200.1.1\n' ok || fail=1
+# No candidate address at all.
+run_case "no address" $'note: nothing here\n' ok || fail=1
+# A session agent name or a review-exchange marker must be caught even
+# with no address anywhere on the line.
+run_case "agent-name marker, no address" \
+	$'note: ping lab-rev-z about this\n' fail || fail=1
+run_case "exchange marker, no address" \
+	$'note: closed at exchange-1\n' fail || fail=1
+# Plain "lab" prose must still pass -- only the dashed agent-name shape
+# and the exchange-N shape are process detail.
+run_case "plain lab prose, no marker" \
+	$'note: the lab host reads lab.yaml\n' ok || fail=1
+# Role words that name how this project is worked on must be caught,
+# each on its own, with no address anywhere on the line.
+run_case "role word: lead" \
+	$'note: ask the lead about this\n' fail || fail=1
+run_case "role word: coordinator" \
+	$'note: the coordinator asked for this\n' fail || fail=1
+run_case "role word: maintainer" \
+	$'note: the maintainer approved it\n' fail || fail=1
+run_case "role word: reviewer" \
+	$'note: the reviewer held it\n' fail || fail=1
+# A word that merely contains a role word as a substring must stay clean
+# (word-boundary check, not a bare substring match).
+run_case "substring, not a role word" \
+	$'note: a leading indent, a leaderboard entry\n' ok || fail=1
+# A capitalised role word must be caught too -- the reviewer's own case.
+run_case "role word, capitalised" \
+	$'Lead and Reviewer agreed this in round 2.\n' fail || fail=1
+# verify.sh must no longer be blanket-exempt: the same address and role-
+# word violations that are caught in any other file must be caught here.
+run_case "verify.sh, address no longer exempt" \
+	$'note: host at 192.168.7.7\n' fail verify.sh || fail=1
+run_case "verify.sh, agent tag and role word no longer exempt" \
+	$'# as the lead asked at exchange-2, ping lab-rev-z\n' fail verify.sh || fail=1
+# A line that IS the pattern definition (the marker verify.sh itself
+# carries on its process/role-word grep) must stay clean, on a file that
+# is otherwise fully scanned. The words are joined by "|", the same
+# regex-alternation shape verify.sh's own grep uses, not plain prose.
+run_case "verify.sh, marked pattern-literal line stays clean" \
+	$'match \\b(lead|coordinator|maintainer|reviewer)\\b # hygiene: pattern literal, not prose\n' \
+	ok verify.sh || fail=1
+# The same line without the marker is ordinary prose and must be caught.
+run_case "verify.sh, same words with no marker" \
+	$'match lead coordinator maintainer reviewer\n' fail verify.sh || fail=1
+# Prose that merely ends with the exact marker text, with no "|"
+# alternation anywhere on the line, must NOT be exempted -- the marker
+# on its own used to be enough, and this is exactly the shape that let
+# real prose ride through as if it were a pattern literal.
+run_case "verify.sh, prose ending with the marker is not exempt" \
+	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
+	fail verify.sh || fail=1
+
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+echo "hygiene-check-test: PASS -- all 19 cases behaved as expected"

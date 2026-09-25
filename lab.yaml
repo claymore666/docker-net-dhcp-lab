@@ -1,0 +1,30 @@
+# Cell declarations for the lab controller (labctl). Every address here
+# stays inside 10.200.0.0/16 (IPv4) or the ULA /48 below (RFC 4193): both
+# are ours to publish. No cell may declare a subnet outside these ranges;
+# `labctl validate` refuses one that does (issue #1).
+management:
+  # Nested VMs reach the internet through this libvirt network only, for
+  # apt and image pulls. No DHCP server runs on it: the address below is
+  # rendered into each VM's cloud-init network-config instead.
+  libvirt_network: net-mgmt
+  subnet: 10.200.255.0/24
+  gateway: 10.200.255.1
+
+ula_prefix: "fd42:200::/48"
+
+cells:
+  - name: ref-only
+    description: >
+      Reference Docker host with no IP source: proves the bring-up path,
+      the segment bridge and the observer capture. Issue #1.
+    segment:
+      bridge: lab-br-ref-only
+      subnet: 10.200.0.0/24
+    source: null
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.10/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

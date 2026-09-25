@@ -1,0 +1,33 @@
+name: verify
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - name: shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: openssh-server
+        # lab-known-hosts-test.sh runs a real sshd on loopback to prove the
+        # per-cell known_hosts fix; without this it would only SKIP here.
+        run: sudo apt-get update && sudo apt-get install -y openssh-server
+      - name: allow unprivileged user namespaces
+        # Ubuntu 24.04 runners restrict plain `unshare --user` via AppArmor
+        # by default; build-bridge-test.sh needs it to drive real `ip link`
+        # refusal checks inside an isolated netns. Runner-only, gone with
+        # the VM at the end of the job -- not a host firewall change.
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: fetch dev for the attribution check's diff range
+        run: git fetch origin dev:refs/remotes/origin/dev || true
+      - name: verify
+        run: ./verify.sh
