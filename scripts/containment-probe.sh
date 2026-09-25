@@ -3,16 +3,12 @@
 # containment-preflight.sh only proves the ci_dmz drop rule is present in
 # the ruleset text -- it never proves traffic is actually dropped. This
 # generates real outbound TCP attempts from inside the cell's Docker host
-# VM and confirms the host's own /24 drop counter rises because of them.
-#
-# No literal home-network address is written into this file. The targets
-# are supplied by the caller at the command line and never stored in any
-# tracked file; the /24 drop rule itself is matched by shape (an nft rule
-# that drops by a /24 destination), the same way containment-preflight.sh
-# matches its own rule by shape rather than by address. This is this
-# repo's own small, committed version of the proof containment-
-# preflight.sh's header names -- `dmz-probe.sh`, a private script that is
-# never copied into this repo.
+# VM, fails outright if any of them actually connects, and confirms the
+# host's own /24 drop counter also rose. No literal home-network address
+# is written here: targets come from the caller's command line and are
+# never stored, and the drop rule is matched by shape, the same way
+# containment-preflight.sh matches its own rule. This repo's own version
+# of the proof named in that script's header (`dmz-probe.sh`, private).
 set -euo pipefail
 
 MGMT_IP=${1:?usage: containment-probe.sh <mgmt-ip> <work-dir> <target-ip> [<target-ip> ...]}
@@ -49,13 +45,25 @@ if [ -z "$before" ]; then
 	exit 1
 fi
 
+connected=""
 for t in "${TARGETS[@]}"; do
 	for port in 80 443 22; do
 		# Expected to fail every time -- the probe's job is to generate the
-		# attempt and let the host firewall drop it, not to connect.
-		ssh_run "timeout 2 bash -c 'echo >/dev/tcp/$t/$port' " >/dev/null 2>&1 || true
+		# attempt and let the host firewall drop it, not to connect. A
+		# successful connection is checked explicitly by its own marker,
+		# never inferred from ssh's exit code -- ssh itself can fail for
+		# reasons (a dropped control session, a remote timeout) that have
+		# nothing to do with whether the target actually answered.
+		result=$(ssh_run "timeout 2 bash -c 'echo >/dev/tcp/$t/$port' 2>/dev/null && echo CONNECTED || echo BLOCKED" 2>/dev/null || echo BLOCKED)
+		if [ "$result" = "CONNECTED" ]; then
+			echo "containment-probe: FAIL -- connected to $t:$port; containment did not hold" >&2
+			connected=1
+		fi
 	done
 done
+if [ -n "$connected" ]; then
+	exit 1
+fi
 
 after=$(dmz_drop_counter || true)
 if [ -z "$after" ]; then

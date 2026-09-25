@@ -24,8 +24,8 @@ exec "$@"
 STUB
 chmod +x "$tmp/sudo"
 
-# A no-op ssh: every real call in the script is wrapped in `|| true`, so
-# this only needs to exist and return control.
+# A no-op ssh: prints nothing, so the script's own CONNECTED/BLOCKED
+# marker check never sees a false CONNECTED from this stub.
 cat >"$tmp/ssh" <<'STUB'
 #!/bin/bash
 exit 0
@@ -137,7 +137,43 @@ if ! grep -q 'PASS' <<<"$out5"; then
 	fail=1
 fi
 
+# Case 6: the counter rises exactly as case 5's, but one attempt actually
+# connects. Must refuse -- a rising drop counter proves nothing about the
+# other targets/ports the probe also tried, so a live connection anywhere
+# must fail the whole run on its own, independent of the counter.
+mkdir -p "$tmp/case6-bin"
+cp "$tmp/sudo" "$tmp/case6-bin/"
+cat >"$tmp/case6-bin/ssh" <<'STUB'
+#!/bin/bash
+echo CONNECTED
+STUB
+chmod +x "$tmp/case6-bin/ssh"
+cat >"$tmp/case6-bin/nft" <<STUB
+#!/bin/bash
+count_file="$tmp/case6-bin/.calls"
+n=0
+[ -f "\$count_file" ] && n=\$(cat "\$count_file")
+n=\$((n + 1))
+echo "\$n" >"\$count_file"
+if [ "\$n" -eq 1 ]; then
+	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
+else
+	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
+fi
+STUB
+chmod +x "$tmp/case6-bin/nft"
+if out6=$(PATH="$tmp/case6-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1); then
+	echo "containment-probe-test: FAIL -- case 6: passed although a target actually connected" >&2
+	echo "$out6" >&2
+	fail=1
+fi
+if ! grep -q 'FAIL -- connected to' <<<"${out6:-}"; then
+	echo "containment-probe-test: FAIL -- case 6: did not name the connected target" >&2
+	echo "${out6:-}" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "containment-probe-test: PASS -- all 5 cases behaved as expected"
+echo "containment-probe-test: PASS -- all 6 cases behaved as expected"
