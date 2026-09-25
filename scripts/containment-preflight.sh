@@ -1,21 +1,14 @@
 #!/bin/bash
 # Refuse to attach a VM to net-mgmt unless the host's ci_dmz forward hook
 # is present at priority -10 and contains a rule that drops by
-# destination (issue #1). ci_dmz itself is a separate host firewall fix,
-# owned outside this repo; this script only checks it, it never creates
-# or edits it.
-#
-# Limit: this is a presence check, an honest yes/no on whether the hook
-# and a drop rule exist in the ruleset text. It cannot prove the rule
-# set is correct, complete, or that traffic is actually blocked end to
-# end -- that proof is `dmz-probe.sh ""` run inside the Docker host VM
-# at a live run, never this script.
-#
-# Exit 0: the hook is present at priority -10 AND at least one rule
-# matches `ip daddr ... drop`. Exit 1 otherwise, including when `nft`
-# is missing or the table/chain does not exist -- the table is owned
-# and maintained outside this repo, so its absence or presence depends
-# on that host's own state, not on anything here.
+# destination (issue #1). ci_dmz is a separate host firewall fix, owned
+# outside this repo; this script only checks it, never creates or edits
+# it. Presence only: an honest yes/no on the ruleset text, never proof
+# traffic is actually blocked end to end -- that proof is `dmz-probe.sh
+# ""` inside the Docker host VM at a live run, never this script. Exit 0
+# needs the hook AND a matching `ip daddr ... drop` rule; exit 1
+# otherwise, including a missing `nft` or an absent table/chain, since
+# that table's state is this host's own, not anything owned here.
 set -euo pipefail
 
 if ! out=$(nft list chain inet ci_dmz forward 2>&1); then

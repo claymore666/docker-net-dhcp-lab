@@ -1,17 +1,14 @@
 #!/bin/bash
 # Give the observer container a leg on one segment and capture on it
 # (issue #1, done means: "the observer captures" a DHCPDISCOVER). The
-# container itself never touches the segment's IP space; it only listens.
-#
-# Every privileged call here (docker, plus every ip/nsenter call that
-# touches a real host netns or interface) runs under sudo -n (issue
-# #1/#3 direction): this script runs directly on the lab host as the
-# unprivileged operator, who is deliberately not in the docker group and
-# has no bare CAP_NET_ADMIN either -- same privilege shape as up-cell.sh's
-# own sudo -n calls. build-bridge.sh itself stays privilege-agnostic (no
-# internal sudo -n): build-bridge-test.sh depends on running it unprivileged
-# inside its own unshare -rnm namespace, so this script elevates at its
-# own call site instead, the same way up-cell.sh already does.
+# container itself never touches the segment's IP space; it only
+# listens. Every privileged call here (docker, plus every ip/nsenter
+# call touching a real host netns or interface) runs under sudo -n: this
+# script runs as the unprivileged lab-host operator, in neither the
+# docker group nor holding bare CAP_NET_ADMIN, same shape as up-cell.sh.
+# build-bridge.sh itself stays privilege-agnostic so build-bridge-test.sh
+# can run it unprivileged inside its own unshare -rnm namespace; this
+# script elevates at its own call site instead, as up-cell.sh does.
 set -euo pipefail
 
 CELL=${1:?usage: observe-segment.sh <cell-name> <bridge> <pcap-path> <seconds>}
