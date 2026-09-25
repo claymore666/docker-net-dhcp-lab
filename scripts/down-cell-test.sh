@@ -155,7 +155,64 @@ if ! grep -qE "^ip link del veth-obs-${hash3}h\$" "$calls3"; then
 	fail=1
 fi
 
+# Case 4: proves the LAB_SUDO_LOG mechanism above catches a real
+# regression on down-cell.sh itself, not only on a well-behaved script.
+# Dropping "sudo -n" from just the "domain still exists" re-check (the
+# second dominfo call, distinct from the pre-destroy existence check
+# above it) is invisible to exit code and output alike: the pass-through
+# sudo stub reaches the same stub virsh either way. Mutates a temp copy
+# of the real down-cell.sh -- not a fixture -- so this proves the
+# mechanism against the actual re-check line, wherever it is in the file.
+# shellcheck disable=SC2016 # intentional: literal "$domain", not expansion
+orig_recheck_count=$(grep -cE '^if sudo -n virsh dominfo "\$domain" >/dev/null 2>&1; then$' "$SCRIPT")
+if [ "$orig_recheck_count" -ne 2 ]; then
+	echo "down-cell-test: FAIL -- case 4 setup: expected exactly 2 \"sudo -n virsh dominfo\" existence-check lines in down-cell.sh (initial check + recheck), found $orig_recheck_count -- this test needs updating to match the current script" >&2
+	fail=1
+else
+	mutant_script="$tmp/down-cell-mutant.sh"
+	awk '
+	/^if sudo -n virsh dominfo "\$domain" >\/dev\/null 2>&1; then$/ {
+		n++
+		if (n == 2) {
+			print "if virsh dominfo \"$domain\" >/dev/null 2>&1; then"
+			next
+		}
+	}
+	{ print }
+	' "$SCRIPT" >"$mutant_script"
+	chmod +x "$mutant_script"
+	# shellcheck disable=SC2016 # intentional: literal "$domain", not expansion
+	mutated_recheck_count=$(grep -cE '^if virsh dominfo "\$domain" >/dev/null 2>&1; then$' "$mutant_script" || true)
+	if [ "$mutated_recheck_count" -ne 1 ]; then
+		echo "down-cell-test: FAIL -- case 4 setup: mutation did not produce exactly 1 bare \"virsh dominfo\" re-check line, found $mutated_recheck_count -- the awk pattern needs updating" >&2
+		fail=1
+	else
+		# Same stub shape as case 2: the domain persists no matter what, so
+		# the recheck path always runs.
+		case4=$(mktemp -d "$tmp/case4-XXXXXX")
+		work4="$case4/work"
+		mkdir -p "$work4"
+		cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+case "$1" in
+dominfo) exit 0 ;;
+*) exit 0 ;;
+esac
+STUB
+		chmod +x "$tmp/virsh"
+		evdir4="$case4/evidence"
+		sudolog4="$case4/sudo.log"
+		: >"$sudolog4"
+		LAB_EVIDENCE_DIR="$evdir4" LAB_SUDO_LOG="$sudolog4" PATH="$tmp:$PATH" "$mutant_script" case4cell "$work4" >/dev/null 2>&1 || true
+		mutant_dominfo_calls=$(grep -cE '^virsh dominfo lab-case4cell-dockerhost$' "$sudolog4" || true)
+		if [ "$mutant_dominfo_calls" -eq 2 ]; then
+			echo "down-cell-test: FAIL -- case 4: the sudo-log mechanism did not catch a bare-virsh re-check; still saw 2 logged calls with the mutant (expected 1: only the untouched initial check goes through sudo)" >&2
+			fail=1
+		fi
+	fi
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- all three cases behaved as expected"
+echo "down-cell-test: PASS -- all four cases behaved as expected"
