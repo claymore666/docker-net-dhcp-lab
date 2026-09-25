@@ -13,9 +13,13 @@ trap 'rm -rf "$tmp"' EXIT
 # A pass-through sudo: down-cell.sh must call every virsh through it, so a
 # case that stubs virsh directly (without going through this) exposes a
 # call that skipped sudo -n.
+# LAB_SUDO_LOG, when set, also records every call this stub passes
+# through -- proving a specific command went via sudo -n, not just
+# reached the real stub underneath it by some other, unprefixed path.
 cat >"$tmp/sudo" <<'STUB'
 #!/bin/bash
 [ "${1:-}" = "-n" ] && shift
+[ -n "${LAB_SUDO_LOG:-}" ] && echo "$*" >>"$LAB_SUDO_LOG"
 exec "$@"
 STUB
 chmod +x "$tmp/sudo"
@@ -32,11 +36,23 @@ exit 1
 STUB
 chmod +x "$tmp/virsh"
 evdir1="$case1/evidence"
-out1=$(LAB_EVIDENCE_DIR="$evdir1" PATH="$tmp:$PATH" "$SCRIPT" case1cell "$work1" 2>&1) || {
+sudolog1="$case1/sudo.log"
+: >"$sudolog1"
+out1=$(LAB_EVIDENCE_DIR="$evdir1" LAB_SUDO_LOG="$sudolog1" PATH="$tmp:$PATH" "$SCRIPT" case1cell "$work1" 2>&1) || {
 	echo "down-cell-test: FAIL -- case 1: refused although the domain never existed" >&2
 	echo "$out1" >&2
 	fail=1
 }
+# Proves both the initial existence check and the post-destroy recheck went
+# through sudo -n specifically: a call that goes through bare virsh instead
+# never reaches this stub at all, so it would never appear in the log --
+# a plain pass-through sudo (with no log) cannot tell the two apart.
+dominfo_calls1=$(grep -cE '^virsh dominfo lab-case1cell-dockerhost$' "$sudolog1" || true)
+if [ "$dominfo_calls1" -ne 2 ]; then
+	echo "down-cell-test: FAIL -- case 1: expected 2 sudo -n virsh dominfo calls (initial check + recheck), saw $dominfo_calls1" >&2
+	cat "$sudolog1" >&2
+	fail=1
+fi
 if ! find "$evdir1" -maxdepth 1 -name '*case1cell*capture.pcap' 2>/dev/null | grep -q .; then
 	echo "down-cell-test: FAIL -- case 1: pcap was not moved to the evidence dir" >&2
 	fail=1
@@ -67,11 +83,19 @@ esac
 STUB
 chmod +x "$tmp/virsh"
 evdir2="$case2/evidence"
-if out2=$(LAB_EVIDENCE_DIR="$evdir2" PATH="$tmp:$PATH" "$SCRIPT" case2cell "$work2" 2>&1); then
+sudolog2="$case2/sudo.log"
+: >"$sudolog2"
+if out2=$(LAB_EVIDENCE_DIR="$evdir2" LAB_SUDO_LOG="$sudolog2" PATH="$tmp:$PATH" "$SCRIPT" case2cell "$work2" 2>&1); then
 	echo "down-cell-test: FAIL -- case 2: exited 0 although the domain still exists" >&2
 	fail=1
 else
 	out2_captured="$out2"
+fi
+dominfo_calls2=$(grep -cE '^virsh dominfo lab-case2cell-dockerhost$' "$sudolog2" || true)
+if [ "$dominfo_calls2" -ne 2 ]; then
+	echo "down-cell-test: FAIL -- case 2: expected 2 sudo -n virsh dominfo calls (initial check + recheck), saw $dominfo_calls2" >&2
+	cat "$sudolog2" >&2
+	fail=1
 fi
 if grep -q "torn down" <<<"${out2_captured:-}"; then
 	echo "down-cell-test: FAIL -- case 2: printed the torn-down confirmation although the domain still exists" >&2
