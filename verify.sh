@@ -55,6 +55,91 @@ depth_at_line() {
 	' "$file"
 }
 
+# True if $line in $file sits inside a heredoc BODY (data, never code) --
+# tracks the one active "<<TAG" opener up to $line and clears it on a
+# line that is exactly TAG, the same no-op idiom (": <<'SKIP' ... SKIP")
+# that comments out a block while an anchored grep still finds the text.
+in_heredoc_body() {
+	local file=$1 line=$2
+	awk -v target="$line" '
+	NR>=target { exit }
+	{
+		if (tag == "") {
+			p = index($0, "<<")
+			if (p > 0) {
+				rest = substr($0, p + 2)
+				sub(/^-/, "", rest)
+				sub(/^[[:space:]]+/, "", rest)
+				gsub(/[\x27\x22]/, "", rest)
+				split(rest, parts, /[^A-Za-z0-9_]/)
+				if (parts[1] != "") tag = parts[1]
+			}
+		} else {
+			t = $0
+			gsub(/^[[:space:]]+/, "", t)
+			gsub(/[[:space:]]+$/, "", t)
+			if (t == tag) tag = ""
+		}
+	}
+	END { print (tag != "") ? 1 : 0 }
+	' "$file"
+}
+
+# Name of the function $line in $file sits inside, or empty at top level.
+# Tracks only this repo's own convention -- "name() {" on its own line,
+# a lone "}" closing it -- the same shape every function in this repo
+# already uses, never a full parser.
+enclosing_function() {
+	local file=$1 line=$2
+	awk -v target="$line" '
+	NR>=target { exit }
+	{
+		if (fn == "" && $0 ~ /^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{[[:space:]]*$/) {
+			name = $0
+			sub(/\(\).*/, "", name)
+			fn = name
+		} else if (fn != "" && $0 ~ /^\}[[:space:]]*$/) {
+			fn = ""
+		}
+	}
+	END { print fn }
+	' "$file"
+}
+
+# True if the line immediately before $line in $file ends with a
+# "&& \" line-continuation guard -- a condition on the call that changes
+# neither the call's own text nor its column, so an anchored grep at
+# depth 0 cannot tell it apart from a truly unconditional call.
+and_guarded() {
+	local file=$1 line=$2
+	[ "$line" -le 1 ] && return 1
+	local prev
+	prev=$(sed -n "$((line - 1))p" "$file")
+	[[ "$prev" =~ \&\&[[:space:]]*\\$ ]]
+}
+
+# Combines all four evasions this file guards against into one reason
+# string, empty when $line in $file is a real, unconditional, reachable
+# statement. Callers treat any non-empty result as a wiring failure.
+unreachable_reason() {
+	local file=$1 line=$2 reason="" depth fn
+
+	depth=$(depth_at_line "$file" "$line")
+	if [ "$depth" -ne 0 ]; then
+		reason="sits inside a conditional block (depth $depth)"
+	elif [ "$(in_heredoc_body "$file" "$line")" = 1 ]; then
+		reason="sits inside a heredoc block, which is data, not code"
+	elif and_guarded "$file" "$line"; then
+		reason="is guarded by a leading \"&&\" line-continuation condition"
+	else
+		fn=$(enclosing_function "$file" "$line")
+		if [ -n "$fn" ] && ! grep -qE "^[[:space:]]*${fn}([[:space:]]|\$)" "$file"; then
+			reason="sits inside function \"$fn\", which is never called"
+		fi
+	fi
+	echo "$reason"
+}
+
 echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
 
@@ -67,9 +152,9 @@ if [ -z "$preflight_line" ]; then
 	echo "verify.sh: up-cell.sh does not call containment-preflight.sh as its own, unmodified command" >&2
 	exit 1
 fi
-preflight_depth=$(depth_at_line scripts/up-cell.sh "$preflight_line")
-if [ "$preflight_depth" -ne 0 ]; then
-	echo "verify.sh: containment-preflight.sh's call in up-cell.sh (line $preflight_line) sits inside a conditional block (depth $preflight_depth); it must be unconditional" >&2
+preflight_reason=$(unreachable_reason scripts/up-cell.sh "$preflight_line")
+if [ -n "$preflight_reason" ]; then
+	echo "verify.sh: containment-preflight.sh's call in up-cell.sh (line $preflight_line) $preflight_reason; it must be unconditional and reachable" >&2
 	exit 1
 fi
 
@@ -110,9 +195,9 @@ if [ -z "$firewall_line" ]; then
 	echo "verify.sh: up-cell.sh does not call lab-seg-firewall.sh as its own, unmodified, unconditional command" >&2
 	exit 1
 fi
-firewall_depth=$(depth_at_line scripts/up-cell.sh "$firewall_line")
-if [ "$firewall_depth" -ne 0 ]; then
-	echo "verify.sh: lab-seg-firewall.sh's call in up-cell.sh (line $firewall_line) sits inside a conditional block (depth $firewall_depth); it must be unconditional" >&2
+firewall_reason=$(unreachable_reason scripts/up-cell.sh "$firewall_line")
+if [ -n "$firewall_reason" ]; then
+	echo "verify.sh: lab-seg-firewall.sh's call in up-cell.sh (line $firewall_line) $firewall_reason; it must be unconditional and reachable" >&2
 	exit 1
 fi
 if [ "$firewall_line" -le "$preflight_line" ]; then
@@ -175,25 +260,14 @@ if [ -n "$offenders" ]; then
 fi
 
 echo "== no host-side script calls other privileged commands bare =="
-# Same reasoning and shape as the docker check above, extended to every
-# other command that needs CAP_NET_ADMIN/CAP_SYS_ADMIN or root on this
-# host (issue #1/#3 direction: audit every host-side script in one pass,
-# not one call at a time). The file list this runs against excludes, by
-# name rather than a weaker regex:
-#   - build-bridge.sh, lab-seg-firewall.sh, containment-preflight.sh stay
-#     privilege-agnostic by design: they run already-elevated when a
-#     caller wraps the whole script in sudo -n (up-cell.sh does this for
-#     all three), and unprivileged inside build-bridge-test.sh's /
-#     lab-seg-firewall-test.sh's / containment-preflight-test.sh's own
-#     unshare -rnm namespace or PATH-stubbed fakes -- sudo -n inside them
-#     would break that second, CI-safe use, which has no real root to ask.
-#   - bootstrap-host.sh is a documented one-time "run this as root"
-#     host-setup script (its own header says so); it is never invoked by
-#     verify.sh or any other script here, so it is not part of the
-#     per-run pipeline this check is about.
-#   - every *-test.sh file runs its privileged-looking commands against a
-#     PATH-stubbed fake or inside an unshare'd namespace, never the real
-#     host, for the same reason as the first point.
+# Same reasoning and shape as the docker check above, for every other
+# command needing CAP_NET_ADMIN/CAP_SYS_ADMIN or root here. Excluded by
+# name: build-bridge.sh/lab-seg-firewall.sh/containment-preflight.sh run
+# already-elevated under a caller's own sudo -n wrap (up-cell.sh) and
+# unprivileged inside their *-test.sh's unshare -rnm or PATH-stubbed
+# fakes, where sudo -n would break the CI-safe path; bootstrap-host.sh
+# is a documented one-time root setup script, never invoked here; every
+# *-test.sh runs against a fake or a namespace, never the real host.
 priv_targets=()
 for f in scripts/*.sh; do
 	case "$f" in
@@ -296,7 +370,7 @@ echo "== no process/role words in commit messages =="
 # worked on (who staffs it, work-tracking tags, review rounds) never
 # belongs in a commit that ships. Subjects and bodies only -- author/
 # committer identity is real and is not in scope here.
-processy=$(git log "$range" --format='%B' 2>/dev/null | grep -inE '\b(lead|coordinator|maintainer|reviewer|lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b' || true)
+processy=$(git log "$range" --format='%B' 2>/dev/null | grep -inE '\b(lead|coordinator|maintainer|reviewer|lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b' || true) # hygiene: pattern literal, not prose
 if [ -n "$processy" ]; then
 	echo "verify.sh: process/role word found in a commit message:" >&2
 	echo "$processy" >&2
