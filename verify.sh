@@ -137,6 +137,9 @@ echo "== lab segment firewall refusal/idempotency tests =="
 echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
 
+echo "== DHCP four-message check, against real pcap fixtures =="
+./scripts/dhcp-exchange-check-test.sh
+
 echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
 ./scripts/lab-known-hosts-test.sh
 

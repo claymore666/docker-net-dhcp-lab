@@ -1,5 +1,5 @@
 #!/bin/bash
-# Defeat list item 2 (issue #2): Kea's control agent binds 127.0.0.1 only
+# issue #2: Kea's control agent binds 127.0.0.1 only
 # (source-bind-check.sh's sibling check would be a second static check;
 # this is the live half). Only Kea has a network-facing control port at
 # all -- isc-dhcp and dnsmasq here have neither omapi nor a control

@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// DnsmasqAdapter reads dnsmasq's own lease file directly. ReserveMAC and
-// restart/stop/start are live-run measured (issue #2); declared here
-// only after that run confirmed each one.
+// DnsmasqAdapter reads dnsmasq's own lease file directly. ReserveMAC's
+// command construction is unit-tested against a fake runner
+// (adapter_test.go); restart/stop/start are implemented but not yet
+// exercised against a live instance.
 type DnsmasqAdapter struct {
 	Runner Runner
 }
@@ -30,7 +31,7 @@ func (a *DnsmasqAdapter) Leases(ctx context.Context) ([]Lease, error) {
 // <client-id>". A blank file (dnsmasq creates it at startup even with
 // zero leases) is a genuine empty table; a line with too few fields, or
 // a MAC that does not parse, is a truncated or malformed read and must
-// fail rather than silently drop that row (issue #2 defeat list).
+// fail rather than silently drop that row (issue #2).
 func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	trimmed := strings.TrimRight(raw, "\n")
 	if trimmed == "" {

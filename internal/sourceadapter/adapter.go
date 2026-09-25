@@ -14,7 +14,7 @@ import (
 
 // Capability is a source's declared ability. A declared capability is a
 // claim until a real run against that source exercises it; see each
-// adapter's own comment for what this round actually measured.
+// adapter's own comment for what has actually been measured so far.
 type Capability string
 
 const (
@@ -51,13 +51,13 @@ type Runner interface {
 	Run(ctx context.Context, remoteCmd string) (string, error)
 }
 
-// validateMAC and validateAddr are the guard the defeat list asks for:
+// validateMAC and validateAddr are the injection guard issue #2 asks for:
 // ReserveMAC's arguments reach a remote shell/JSON command only after
 // they round-trip through Go's own MAC/IP parsers, which accept nothing
 // but a MAC or an IPv4 literal -- no quote, brace or shell metacharacter
 // can survive that round trip, so the value that reaches the command
 // line was never attacker-controlled text, it is stdlib's own
-// normalized form of a real MAC or address (issue #2 defeat list).
+// normalized form of a real MAC or address (issue #2).
 func validateMAC(mac string) (string, error) {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {

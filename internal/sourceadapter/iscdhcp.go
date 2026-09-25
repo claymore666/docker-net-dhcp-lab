@@ -9,9 +9,9 @@ import (
 )
 
 // ISCDHCPAdapter reads dhcpd.leases directly -- the source's own on-disk
-// table, ISC dhcpd has no query API. ReserveMAC and restart/stop/start
-// are live-run measured (issue #2); declared here only after that run
-// confirmed each one.
+// table, ISC dhcpd has no query API. ReserveMAC's command construction
+// is unit-tested against a fake runner (adapter_test.go); restart/stop/
+// start are implemented but not yet exercised against a live instance.
 type ISCDHCPAdapter struct {
 	Runner Runner
 }
@@ -40,7 +40,7 @@ var (
 // at the end of the file) and drops any address whose latest block is not
 // "active". A lease-block count that does not match the number of blocks
 // this parsed cleanly means the file was cut mid-write, and that is an
-// error, never an empty table (issue #2 defeat list); a file with no
+// error, never an empty table (issue #2); a file with no
 // "lease " blocks at all (a fresh install before any DISCOVER) is a
 // genuine empty table.
 func parseISCLeases(raw string) ([]Lease, error) {

@@ -10,8 +10,9 @@ import (
 // bound to 127.0.0.1 only (never the segment or mgmt network) and
 // reached over the same SSH connection as the service itself -- the
 // control channel never opens a port beyond what SSH already reaches.
-// ReserveMAC and restart/stop/start are live-run measured (issue #2);
-// declared here only after that run confirmed each one.
+// ReserveMAC's command construction is unit-tested against a fake
+// runner (adapter_test.go); restart/stop/start are implemented but not
+// yet exercised against a live Kea instance.
 type KeaAdapter struct {
 	Runner Runner
 }
@@ -48,7 +49,7 @@ func (a *KeaAdapter) Leases(ctx context.Context) ([]Lease, error) {
 
 // parseKeaLeases separates a genuinely empty table (result 3) from a
 // truncated or malformed reply, which must fail rather than read as
-// zero leases (issue #2 defeat list).
+// zero leases (issue #2).
 func parseKeaLeases(raw string) ([]Lease, error) {
 	var resp []keaResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err != nil {

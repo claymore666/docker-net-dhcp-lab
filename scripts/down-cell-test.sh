@@ -1,6 +1,7 @@
 #!/bin/bash
-# Refusal and pcap-preservation tests for down-cell.sh (issue #1). CI-safe:
-# every case runs against a stubbed sudo/virsh on PATH, never real libvirt.
+# Refusal and pcap-preservation tests for down-cell.sh (issue #1), plus
+# the source VM's own teardown (issue #2, cases 5-6). CI-safe: every case
+# runs against a stubbed sudo/virsh on PATH, never real libvirt.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -212,7 +213,92 @@ STUB
 	fi
 fi
 
+# Case 5: the source domain persists no matter what (issue #2 HOLD
+# finding 2). The docker-host domain never existed, which isolates the
+# source domain's own refusal. Must refuse, must not remove $WORK, and
+# the recheck must have gone through sudo -n exactly twice -- the same
+# shape as case 2's docker-host assertion, but for the source domain.
+case5=$(mktemp -d "$tmp/case5-XXXXXX")
+work5="$case5/work"
+mkdir -p "$work5"
+cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+case "$2" in
+*-dockerhost) exit 1 ;;
+*) exit 0 ;;
+esac
+STUB
+chmod +x "$tmp/virsh"
+evdir5="$case5/evidence"
+sudolog5="$case5/sudo.log"
+: >"$sudolog5"
+if out5=$(LAB_EVIDENCE_DIR="$evdir5" LAB_SUDO_LOG="$sudolog5" PATH="$tmp:$PATH" "$SCRIPT" case5cell "$work5" 2>&1); then
+	echo "down-cell-test: FAIL -- case 5: exited 0 although the source domain still exists" >&2
+	fail=1
+else
+	out5_captured="$out5"
+fi
+dominfo_calls5=$(grep -cE '^virsh dominfo lab-case5cell-source$' "$sudolog5" || true)
+if [ "$dominfo_calls5" -ne 2 ]; then
+	echo "down-cell-test: FAIL -- case 5: expected 2 sudo -n virsh dominfo calls on the source domain (initial check + recheck), saw $dominfo_calls5" >&2
+	cat "$sudolog5" >&2
+	fail=1
+fi
+if grep -q "torn down" <<<"${out5_captured:-}"; then
+	echo "down-cell-test: FAIL -- case 5: printed the torn-down confirmation although the source domain still exists" >&2
+	fail=1
+fi
+if [ ! -d "$work5" ]; then
+	echo "down-cell-test: FAIL -- case 5: work dir was removed although the source domain still exists" >&2
+	fail=1
+fi
+
+# Case 6: the source domain exists once, then is gone on the recheck
+# (issue #2 HOLD finding 2) -- teardown succeeds, which lets this case
+# assert destroy/undefine were actually called for it, not just that
+# dominfo agreed to be asked. A dominfo call count alone cannot tell
+# "destroy ran and the VM died" apart from "destroy never ran and dominfo
+# just says so" -- only the log lines below can.
+case6=$(mktemp -d "$tmp/case6-XXXXXX")
+work6="$case6/work"
+mkdir -p "$work6"
+cat >"$tmp/virsh" <<STUB
+#!/bin/bash
+case "\$2" in
+*-dockerhost) exit 1 ;;
+*-source)
+	if [ "\$1" = "dominfo" ]; then
+		n=\$(cat "$case6/dominfo-n" 2>/dev/null || echo 0)
+		n=\$((n + 1))
+		echo "\$n" >"$case6/dominfo-n"
+		[ "\$n" -eq 1 ] && exit 0 || exit 1
+	fi
+	exit 0
+	;;
+*) exit 0 ;;
+esac
+STUB
+chmod +x "$tmp/virsh"
+evdir6="$case6/evidence"
+sudolog6="$case6/sudo.log"
+: >"$sudolog6"
+out6=$(LAB_EVIDENCE_DIR="$evdir6" LAB_SUDO_LOG="$sudolog6" PATH="$tmp:$PATH" "$SCRIPT" case6cell "$work6" 2>&1) || {
+	echo "down-cell-test: FAIL -- case 6: teardown failed although the source domain was gone by the recheck" >&2
+	echo "$out6" >&2
+	fail=1
+}
+if ! grep -qE '^virsh destroy lab-case6cell-source$' "$sudolog6"; then
+	echo "down-cell-test: FAIL -- case 6: the source domain was never destroyed" >&2
+	cat "$sudolog6" >&2
+	fail=1
+fi
+if ! grep -qE '^virsh undefine lab-case6cell-source --nvram$' "$sudolog6"; then
+	echo "down-cell-test: FAIL -- case 6: the source domain was never undefined" >&2
+	cat "$sudolog6" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- all four cases behaved as expected"
+echo "down-cell-test: PASS -- all six cases behaved as expected"

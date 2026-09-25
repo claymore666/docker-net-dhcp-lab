@@ -21,7 +21,7 @@ func (f *fakeRunner) Run(_ context.Context, cmd string) (string, error) {
 }
 
 // A MAC or address carrying shell/JSON metacharacters must never reach
-// the runner at all: this is the guard the defeat list asks for, driven
+// the runner at all: this is the injection guard issue #2 asks for, driven
 // against all three adapters, not just asserted for one.
 func TestReserveMACRejectsInjectionBeforeAnySSH(t *testing.T) {
 	bad := []string{
@@ -109,7 +109,7 @@ func TestKeaParsesLeases(t *testing.T) {
 }
 
 // Drive the absence: a truncated/garbage control-agent reply must error,
-// never read as an empty table (issue #2 defeat list, adapter #7).
+// never read as an empty table (issue #2).
 func TestKeaRejectsGarbageReply(t *testing.T) {
 	for _, raw := range []string{``, `not json`, `{"result":0}`, `[{"result":0`} {
 		if _, err := parseKeaLeases(raw); err == nil {
