@@ -174,6 +174,58 @@ if [ -n "$offenders" ]; then
 	exit 1
 fi
 
+echo "== no host-side script calls other privileged commands bare =="
+# Same reasoning and shape as the docker check above, extended to every
+# other command that needs CAP_NET_ADMIN/CAP_SYS_ADMIN or root on this
+# host (issue #1/#3 direction: audit every host-side script in one pass,
+# not one call at a time). The file list this runs against excludes, by
+# name rather than a weaker regex:
+#   - build-bridge.sh, lab-seg-firewall.sh, containment-preflight.sh stay
+#     privilege-agnostic by design: they run already-elevated when a
+#     caller wraps the whole script in sudo -n (up-cell.sh does this for
+#     all three), and unprivileged inside build-bridge-test.sh's /
+#     lab-seg-firewall-test.sh's / containment-preflight-test.sh's own
+#     unshare -rnm namespace or PATH-stubbed fakes -- sudo -n inside them
+#     would break that second, CI-safe use, which has no real root to ask.
+#   - bootstrap-host.sh is a documented one-time "run this as root"
+#     host-setup script (its own header says so); it is never invoked by
+#     verify.sh or any other script here, so it is not part of the
+#     per-run pipeline this check is about.
+#   - every *-test.sh file runs its privileged-looking commands against a
+#     PATH-stubbed fake or inside an unshare'd namespace, never the real
+#     host, for the same reason as the first point.
+priv_targets=()
+for f in scripts/*.sh; do
+	case "$f" in
+	*-test.sh | scripts/build-bridge.sh | scripts/lab-seg-firewall.sh | scripts/containment-preflight.sh | scripts/bootstrap-host.sh) ;;
+	*) priv_targets+=("$f") ;;
+	esac
+done
+offenders=$(grep -nE '(^[[:space:]]*(ip|nsenter|tc|bridge|sysctl|virsh|nft|virt-install|modprobe|mount|umount)[[:space:]]|\$\((ip|nsenter|tc|bridge|sysctl|virsh|nft|virt-install|modprobe|mount|umount)[[:space:]])' "${priv_targets[@]}" \
+	| grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' || true)
+if [ -n "$offenders" ]; then
+	echo "verify.sh: host-side privileged call(s) without sudo -n:" >&2
+	echo "$offenders" >&2
+	exit 1
+fi
+
+echo "== no host-side script live-captures with tcpdump bare =="
+# tcpdump -r (reading a saved pcap back, as demo-ref-cell.sh does at its
+# own final check) needs no privilege at all and is deliberately not
+# flagged. tcpdump -i/-w (a live capture on a real interface) does, but
+# observe-segment.sh's own live capture already runs inside the container
+# through sudo -n docker exec (the container's own root, not this host),
+# so the same file exclusions as the check above apply here too.
+offenders=$(grep -nE '(^[[:space:]]*tcpdump[[:space:]]|\$\(tcpdump[[:space:]])' "${priv_targets[@]}" \
+	| grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' \
+	| grep -E ' -[iw]([[:space:]]|$)|--interface|--write' \
+	| grep -v 'sudo -n' || true)
+if [ -n "$offenders" ]; then
+	echo "verify.sh: host-side tcpdump live-capture call(s) without sudo -n:" >&2
+	echo "$offenders" >&2
+	exit 1
+fi
+
 echo "== every lab ssh/scp call carries the per-cell known_hosts option =="
 # Every real invocation line, not a function definition (ssh_run() {) or a
 # call to one (ssh_run "..."), which the (^|[^_a-zA-Z]) alternation and the

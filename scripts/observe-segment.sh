@@ -3,11 +3,15 @@
 # (issue #1, done means: "the observer captures" a DHCPDISCOVER). The
 # container itself never touches the segment's IP space; it only listens.
 #
-# Every docker call here runs under sudo -n (issue #1/#3 direction): this
-# script runs directly on the lab host, root-equivalent for anything that
-# touches the docker socket, and the operator running it is deliberately
-# not added to the docker group for that reason -- same privilege shape
-# as up-cell.sh's own sudo -n calls.
+# Every privileged call here (docker, plus every ip/nsenter call that
+# touches a real host netns or interface) runs under sudo -n (issue
+# #1/#3 direction): this script runs directly on the lab host as the
+# unprivileged operator, who is deliberately not in the docker group and
+# has no bare CAP_NET_ADMIN either -- same privilege shape as up-cell.sh's
+# own sudo -n calls. build-bridge.sh itself stays privilege-agnostic (no
+# internal sudo -n): build-bridge-test.sh depends on running it unprivileged
+# inside its own unshare -rnm namespace, so this script elevates at its
+# own call site instead, the same way up-cell.sh already does.
 set -euo pipefail
 
 CELL=${1:?usage: observe-segment.sh <cell-name> <bridge> <pcap-path> <seconds>}
@@ -34,7 +38,7 @@ VETH_PEER="veth-obs-${cell_hash}c"
 CONTAINER="lab-observer-${CELL}"
 
 sudo -n docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-ip link del "$VETH_HOST" 2>/dev/null || true
+sudo -n ip link del "$VETH_HOST" 2>/dev/null || true
 
 # Started on Docker's own default bridge (has outbound internet via the
 # host's NAT) just long enough to install tcpdump, then disconnected
@@ -57,12 +61,12 @@ sudo -n docker network disconnect bridge "$CONTAINER"
 # fixed at the host level by a lab-owned LAB-SEG accept rule
 # (lab-seg-firewall.sh, applied unconditionally by up-cell.sh before the
 # VM starts), not here.
-ip link add "$VETH_HOST" type veth peer name "$VETH_PEER"
-"$(dirname "${BASH_SOURCE[0]}")/build-bridge.sh" "$BRIDGE" --add-port "$VETH_HOST"
+sudo -n ip link add "$VETH_HOST" type veth peer name "$VETH_PEER"
+sudo -n "$(dirname "${BASH_SOURCE[0]}")/build-bridge.sh" "$BRIDGE" --add-port "$VETH_HOST"
 pid=$(sudo -n docker inspect -f '{{.State.Pid}}' "$CONTAINER")
-ip link set "$VETH_PEER" netns "$pid"
-nsenter -t "$pid" -n ip link set lo up
-nsenter -t "$pid" -n ip link set "$VETH_PEER" name eth-obs up
+sudo -n ip link set "$VETH_PEER" netns "$pid"
+sudo -n nsenter -t "$pid" -n ip link set lo up
+sudo -n nsenter -t "$pid" -n ip link set "$VETH_PEER" name eth-obs up
 
 sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U 'udp port 67 or udp port 68'
 
