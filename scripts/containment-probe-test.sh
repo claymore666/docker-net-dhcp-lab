@@ -114,16 +114,17 @@ cp "$tmp/sudo" "$tmp/case5-bin/"
 cp "$tmp/ssh" "$tmp/case5-bin/"
 cat >"$tmp/case5-bin/nft" <<STUB
 #!/bin/bash
+# Each read must be higher than the last: the script reads the counter
+# twice per attempt now (before and after that one attempt), not once
+# for the whole run, so a stub that only changes value once no longer
+# reflects a real counter (see case 9's own comment for why that gap
+# matters).
 count_file="$tmp/case5-bin/.calls"
 n=0
 [ -f "\$count_file" ] && n=\$(cat "\$count_file")
 n=\$((n + 1))
 echo "\$n" >"\$count_file"
-if [ "\$n" -eq 1 ]; then
-	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
-else
-	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
-fi
+echo "ip daddr 192.0.2.0/24 counter packets \$((n * 3)) bytes 0 drop"
 STUB
 chmod +x "$tmp/case5-bin/nft"
 out5=$(PATH="$tmp/case5-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 192.0.2.51 2>&1) || {
@@ -152,16 +153,15 @@ STUB
 chmod +x "$tmp/case6-bin/ssh"
 cat >"$tmp/case6-bin/nft" <<STUB
 #!/bin/bash
+# Monotonic, same reasoning as case 5's stub: a real counter never
+# reads the same value twice across the run's repeated before/after
+# reads.
 count_file="$tmp/case6-bin/.calls"
 n=0
 [ -f "\$count_file" ] && n=\$(cat "\$count_file")
 n=\$((n + 1))
 echo "\$n" >"\$count_file"
-if [ "\$n" -eq 1 ]; then
-	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
-else
-	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
-fi
+echo "ip daddr 192.0.2.0/24 counter packets \$((n * 3)) bytes 0 drop"
 STUB
 chmod +x "$tmp/case6-bin/nft"
 if out6=$(PATH="$tmp/case6-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1); then
@@ -189,16 +189,13 @@ STUB
 chmod +x "$tmp/case7-bin/ssh"
 cat >"$tmp/case7-bin/nft" <<STUB
 #!/bin/bash
+# Monotonic, same reasoning as case 5's stub.
 count_file="$tmp/case7-bin/.calls"
 n=0
 [ -f "\$count_file" ] && n=\$(cat "\$count_file")
 n=\$((n + 1))
 echo "\$n" >"\$count_file"
-if [ "\$n" -eq 1 ]; then
-	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
-else
-	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
-fi
+echo "ip daddr 192.0.2.0/24 counter packets \$((n * 3)) bytes 0 drop"
 STUB
 chmod +x "$tmp/case7-bin/nft"
 if out7=$(PATH="$tmp/case7-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1); then
@@ -225,16 +222,13 @@ STUB
 chmod +x "$tmp/case8-bin/ssh"
 cat >"$tmp/case8-bin/nft" <<STUB
 #!/bin/bash
+# Monotonic, same reasoning as case 5's stub.
 count_file="$tmp/case8-bin/.calls"
 n=0
 [ -f "\$count_file" ] && n=\$(cat "\$count_file")
 n=\$((n + 1))
 echo "\$n" >"\$count_file"
-if [ "\$n" -eq 1 ]; then
-	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
-else
-	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
-fi
+echo "ip daddr 192.0.2.0/24 counter packets \$((n * 3)) bytes 0 drop"
 STUB
 chmod +x "$tmp/case8-bin/nft"
 out8=$(PATH="$tmp/case8-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1) || {
@@ -248,40 +242,51 @@ if ! grep -q 'PASS' <<<"$out8"; then
 	fail=1
 fi
 
-# Case 9: 2 targets x 3 ports = 6 attempts, every one reported "no route
-# to host" (BLOCKED, same shape as case 8), but the /24 drop counter only
-# rises by 3 -- a leak that escaped the local drop rule on half the
-# attempts while still routing nowhere, previously indistinguishable
-# from a genuine pass under a "merely rose" check. Must refuse and name
-# the shortfall.
+# Case 9: 2 targets x 3 ports = 6 attempts, every one times out (rc 124,
+# BLOCKED). Every attempt's own drop counter rises except the third
+# one's, which reads the same value before and after -- a leak on that
+# one attempt, escaping the local drop rule silently while still
+# answering nothing. Total across the run still rises by 10 against a
+# 6-attempt floor, which a total-count check would have accepted; a
+# per-attempt check must not, and must name the leak.
 mkdir -p "$tmp/case9-bin"
 cp "$tmp/sudo" "$tmp/case9-bin/"
+# A bare failure with no "RC=" marker: containment-probe.sh's own
+# fallback (`|| printf '|RC=124'`) turns this into the same rc 124 a
+# real timeout produces, without an actual 2s wait here.
 cat >"$tmp/case9-bin/ssh" <<'STUB'
 #!/bin/bash
-printf 'bash: connect: No route to host|RC=1'
+exit 1
 STUB
 chmod +x "$tmp/case9-bin/ssh"
 cat >"$tmp/case9-bin/nft" <<STUB
 #!/bin/bash
+# n=1 is the initial existence read; n=2.. are this run's 6 attempts,
+# each read twice (before, after). Every pair rises by 3 except the
+# third attempt's (n=6,7), which both read 4 -- the one leak.
 count_file="$tmp/case9-bin/.calls"
 n=0
 [ -f "\$count_file" ] && n=\$(cat "\$count_file")
 n=\$((n + 1))
 echo "\$n" >"\$count_file"
-if [ "\$n" -eq 1 ]; then
-	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
-else
-	echo 'ip daddr 192.0.2.0/24 counter packets 3 bytes 180 drop'
-fi
+case "\$n" in
+	1|2) v=0 ;;
+	3|4) v=2 ;;
+	5|6|7|8) v=4 ;;
+	9|10) v=6 ;;
+	11|12) v=8 ;;
+	*) v=10 ;;
+esac
+echo "ip daddr 192.0.2.0/24 counter packets \$v bytes 0 drop"
 STUB
 chmod +x "$tmp/case9-bin/nft"
 if out9=$(PATH="$tmp/case9-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 192.0.2.51 2>&1); then
-	echo "containment-probe-test: FAIL -- case 9: passed although the drop counter rose by fewer than the attempt count" >&2
+	echo "containment-probe-test: FAIL -- case 9: passed although one attempt's own drop counter never rose" >&2
 	echo "$out9" >&2
 	fail=1
 fi
-if ! grep -q 'wanted at least' <<<"${out9:-}"; then
-	echo "containment-probe-test: FAIL -- case 9: did not name the attempt-count shortfall" >&2
+if ! grep -q 'FAIL -- LEAK' <<<"${out9:-}"; then
+	echo "containment-probe-test: FAIL -- case 9: did not name the leaking attempt" >&2
 	echo "${out9:-}" >&2
 	fail=1
 fi

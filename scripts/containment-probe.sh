@@ -20,10 +20,14 @@ if [ "$#" -eq 0 ]; then
 fi
 TARGETS=("$@")
 PORTS=(80 443 22)
-# Every attempt below is expected to be dropped locally; the counter
-# must account for each one, not merely rise (a leak that escapes this
-# host's own drop rule can still look like a pass otherwise -- see the
-# delta check near the bottom).
+# A single blocked attempt sends a varying number of packets (the SYN,
+# plus however many retries the local stack fires before the 2s timeout
+# below cuts it off), so the counter cannot be checked against a total
+# count across every attempt. Instead the counter is read immediately
+# before and after each individual attempt, and that one attempt must
+# raise it by at least 1 -- an attempt that times out without ever
+# raising it has escaped the drop rule silently (nothing answers it, but
+# nothing dropped it locally either), and counts as a leak.
 ATTEMPTS=$((${#TARGETS[@]} * ${#PORTS[@]}))
 
 known_hosts="$WORK/known_hosts"
@@ -52,8 +56,14 @@ if [ -z "$before" ]; then
 fi
 
 connected=""
+leaked=""
 for t in "${TARGETS[@]}"; do
 	for port in "${PORTS[@]}"; do
+		pre=$(dmz_drop_counter || true)
+		if [ -z "$pre" ]; then
+			echo "containment-probe: FAIL -- /24 drop rule disappeared mid-probe" >&2
+			exit 1
+		fi
 		# Expected to fail every time; success is checked by its own
 		# marker, never ssh's exit code (which can fail for unrelated
 		# reasons). CONNECTED (rc 0): the port answered. REACHED: the
@@ -62,7 +72,8 @@ for t in "${TARGETS[@]}"; do
 		# pins that text to English regardless of the remote host's
 		# locale. BLOCKED: a genuine timeout (rc 124) or any other fast
 		# failure ("no route to host" etc, a routing fact, not evidence
-		# of reaching anything) -- both pass.
+		# of reaching anything) -- both pass this classification, but
+		# still have to clear the per-attempt counter check below.
 		raw=$(ssh_run "out=\$(LC_ALL=C timeout 2 bash -c 'echo >/dev/tcp/$t/$port' 2>&1); rc=\$?; printf '%s|RC=%s' \"\$out\" \"\$rc\"" 2>/dev/null || printf '|RC=124')
 		rc=${raw##*RC=}
 		msg=${raw%|RC=*}
@@ -79,22 +90,23 @@ for t in "${TARGETS[@]}"; do
 			echo "containment-probe: FAIL -- $result $t:$port; containment did not hold" >&2
 			connected=1
 		fi
+
+		post=$(dmz_drop_counter || true)
+		if [ -z "$post" ]; then
+			echo "containment-probe: FAIL -- /24 drop rule disappeared mid-probe" >&2
+			exit 1
+		fi
+		delta=$((post - pre))
+		if [ "$delta" -lt 1 ]; then
+			echo "containment-probe: FAIL -- LEAK $t:$port; $result but the /24 drop counter did not rise (before=$pre after=$post)" >&2
+			leaked=1
+		fi
 	done
 done
-if [ -n "$connected" ]; then
+if [ -n "$connected" ] || [ -n "$leaked" ]; then
 	exit 1
 fi
 
 after=$(dmz_drop_counter || true)
-if [ -z "$after" ]; then
-	echo "containment-probe: FAIL -- /24 drop rule disappeared mid-probe" >&2
-	exit 1
-fi
-
-echo "containment-probe: ci_dmz /24 drop counter before=$before after=$after"
-delta=$((after - before))
-if [ "$delta" -lt "$ATTEMPTS" ]; then
-	echo "containment-probe: FAIL -- /24 drop counter rose by $delta, wanted at least $ATTEMPTS (one per attempt)" >&2
-	exit 1
-fi
-echo "containment-probe: PASS -- /24 drop counter rose by $delta ($before -> $after), >= $ATTEMPTS attempts"
+echo "containment-probe: ci_dmz /24 drop counter before=$before after=${after:-$before}"
+echo "containment-probe: PASS -- all $ATTEMPTS attempts blocked, each one confirmed by its own rise in the /24 drop counter"
