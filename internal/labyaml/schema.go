@@ -68,9 +68,8 @@ func Load(path string) (*Config, error) {
 }
 
 // Validate enforces the lab's own safety rule: nothing here may name an
-// address outside the lab's declared ranges (track file, "Same process as
-// the plugin repo" / L13). It does not check the rest of the repo; that is
-// scripts/hygiene-check.sh's job.
+// address outside the lab's declared ranges. It does not check the rest of
+// the repo; that is scripts/hygiene-check.sh's job.
 func (c *Config) Validate() error {
 	if c.Management.LibvirtNetwork == "" {
 		return fmt.Errorf("management.libvirt_network is required")
@@ -130,8 +129,7 @@ func (c *Config) Validate() error {
 }
 
 // mustBeLabRange refuses any subnet that is not inside 10.200.0.0/16: the
-// one range this repository is allowed to publish (track file §"become
-// public").
+// one range this repository is allowed to publish.
 func mustBeLabRange(p netip.Prefix) error {
 	lab := netip.MustParsePrefix("10.200.0.0/16")
 	if !p.Addr().Is4() {

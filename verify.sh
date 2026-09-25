@@ -1,8 +1,8 @@
 #!/bin/bash
-# The lab repo's arbiter (track file: "verify.sh at the repo root, on the
-# untouched head, never a subset"). CI-safe: it never touches the lab
-# host, libvirt or the network. What only the lab host can prove (a real
-# bring-up, a capture) is evidence attached to the handover instead.
+# The lab repo's arbiter: run at the repo root, on the untouched head,
+# never a subset. CI-safe: it never touches the lab host, libvirt or the
+# network. What only the lab host can prove (a real bring-up, a capture)
+# is evidence recorded separately instead.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$REPO_ROOT"

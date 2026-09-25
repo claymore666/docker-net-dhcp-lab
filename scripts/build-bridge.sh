@@ -1,8 +1,9 @@
 #!/bin/bash
 # Create (or check) one lab segment bridge, and refuse if it, or the port
-# being added, would carry anything but the lab's own devices (issue #1,
-# track file "lab0 is the lab NIC"). Never touches eth0: that name is
-# refused outright, never matched against the allowlist below.
+# being added, would carry anything but the lab's own devices (issue #1):
+# only the lab's own segment NIC and its VLANs may ever be bridged this
+# way. Never touches eth0: that name is refused outright, never matched
+# against the allowlist below.
 #
 # Usage:
 #   build-bridge.sh <bridge-name>                 # create/check, no port

@@ -1,9 +1,10 @@
 #!/bin/bash
-# Publication hygiene (track file: "no address or name from the home
-# network"). Pattern-based, not a name list: this script names no home
-# address itself, so a failure prints only where the hit is, never what
-# it is, and the check's own source stays safe to publish even red. The
-# pattern-literal marker below is a heuristic against accidental prose,
+# Publication hygiene: nothing published here may carry a private address
+# or name from outside the lab's own ranges. Pattern-based, not a name
+# list: this script names no such address itself, so a failure prints only
+# where the hit is, never what it is, and the check's own source stays
+# safe to publish even red. The pattern-literal marker below is a
+# heuristic against accidental prose,
 # not a proof: a line with a stray "|" elsewhere and its flagged words
 # separated by filler could still slip past it.
 set -euo pipefail

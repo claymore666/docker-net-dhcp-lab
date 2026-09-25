@@ -1,9 +1,8 @@
 #!/bin/bash
 # One-time (idempotent) setup of the lab host: packages, a pinned Go
 # toolchain, and the management network nested VMs use for apt/image
-# pulls. Never touches eth0, ci-dmz-firewall.service or any netplan file
-# (track file, "Known and deferred"). Run as root (the lab host gives
-# passwordless sudo).
+# pulls. Never touches eth0, ci-dmz-firewall.service or any netplan file.
+# Run as root (the lab host gives passwordless sudo).
 set -euo pipefail
 
 GO_VERSION=go1.27.0
@@ -18,7 +17,8 @@ apt-get install -y --no-install-recommends \
 	docker.io tcpdump jq curl ca-certificates
 
 # libvirt's default network runs its own dnsmasq DHCP server bridged to
-# the host: the track file requires it not to exist, at all, ever.
+# the host: it must not exist here, at all, ever -- a second DHCP server
+# on the lab host is exactly what this lab must never create.
 if virsh net-info default >/dev/null 2>&1; then
 	virsh net-destroy default 2>/dev/null || true
 	virsh net-undefine default
@@ -55,4 +55,4 @@ if ! command -v go >/dev/null || [ "$(go version 2>/dev/null | awk '{print $3}')
 fi
 go version
 
-echo "bootstrap-host: done. Run dmz-probe.sh next (track file, after anything that touches netfilter)."
+echo "bootstrap-host: done. Run dmz-probe.sh next -- required after anything that touches netfilter."
