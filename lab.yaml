@@ -28,3 +28,75 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: kea
+    description: >
+      Kea 2.6, apt install, stock config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-kea
+      subnet: 10.200.1.0/24
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.21/24
+      seg_address: 10.200.1.2/24
+      pool_start: 10.200.1.100
+      pool_end: 10.200.1.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.20/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: isc-dhcp
+    description: >
+      ISC dhcpd 4.4, apt install, stock config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-isc-dhcp
+      subnet: 10.200.2.0/24
+    source:
+      type: isc-dhcp
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.31/24
+      seg_address: 10.200.2.2/24
+      pool_start: 10.200.2.100
+      pool_end: 10.200.2.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.30/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: dnsmasq
+    description: >
+      dnsmasq 2.91, apt install, default config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-dnsmasq
+      subnet: 10.200.3.0/24
+    source:
+      type: dnsmasq
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.41/24
+      seg_address: 10.200.3.2/24
+      pool_start: 10.200.3.100
+      pool_end: 10.200.3.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.40/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
