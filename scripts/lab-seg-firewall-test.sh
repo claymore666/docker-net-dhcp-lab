@@ -322,11 +322,12 @@ if [ "$fail" -ne 0 ]; then
 fi
 echo "lab-seg-firewall-test: fake-ipt cases PASS -- 7 cases behaved as expected"
 
-# Cases 8-9 run against the real iptables/ip6tables binaries in a fresh
+# Cases 8-12 run against the real iptables/ip6tables binaries in a fresh
 # user+network namespace (unshare -rnm), never the fake above: real
 # `-L -n --line-numbers` prints a target NAME in its own column
 # ("RETURN"), never a "-j RETURN" flag pair, and only the real binary
-# proves the RETURN guard and the post-delete re-read against that.
+# proves the RETURN guard, the post-delete re-read, and a genuine
+# rule-add failure against that.
 if ! unshare -rnm true 2>/dev/null; then
 	if [ "${CI:-}" = "true" ]; then
 		echo "lab-seg-firewall-test: FAIL -- unshare -rnm not available in CI; a gate never goes quietly green" >&2
@@ -422,11 +423,48 @@ if ! grep -q "conditional RETURN" <<<"$out" || grep -q "unconditional RETURN" <<
 	fail=1
 fi
 
+# Case 12: the LAB-SEG rule-add itself fails against real iptables (the
+# regression this case guards: build_chain runs inside a subshell whose
+# own -e is off, so only its own explicit check -- not -e -- can catch
+# this). Must not report "installed" and must exit non-zero.
+iptables -F DOCKER-USER
+ip6tables -F FORWARD
+iptables -F LAB-SEG 2>/dev/null || true
+iptables -X LAB-SEG 2>/dev/null || true
+iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
+ip6tables -A FORWARD -m comment --comment "CI DMZ containment" -j ACCEPT
+if out=$(LAB_SEG_IPTABLES="$2" LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 12: passed although the LAB-SEG rule add failed" >&2
+	fail=1
+fi
+if grep -qi "installed" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 12: claimed installed although the rule add failed" >&2
+	echo "$out" >&2
+	fail=1
+fi
+if [ "$(iptables -L DOCKER-USER -n --line-numbers 2>/dev/null | grep -c "lab segments")" -ne 0 ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 12: a lab-segments jump was left installed despite the rule-add failure" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: real-iptables cases PASS -- 4 cases behaved as expected"
+echo "lab-seg-firewall-test: real-iptables cases PASS -- 5 cases behaved as expected"
 '
 
-unshare -rnm bash -c "$real_inner" bash "$FIREWALL"
-echo "lab-seg-firewall-test: PASS -- all 11 cases behaved as expected"
+# Passes every call through to the real binary except the one this case
+# needs to fail: "-A LAB-SEG ..." is build_chain's own rule-add, and
+# nothing else in this script ever adds to that chain by that name.
+cat >"$tmp/ipt-fail-add" <<'WRAP'
+#!/bin/bash
+if [ "$1" = "-A" ] && [ "$2" = "LAB-SEG" ]; then
+	echo "ipt-fail-add: simulated failure" >&2
+	exit 1
+fi
+exec iptables "$@"
+WRAP
+chmod +x "$tmp/ipt-fail-add"
+
+unshare -rnm bash -c "$real_inner" bash "$FIREWALL" "$tmp/ipt-fail-add"
+echo "lab-seg-firewall-test: PASS -- all 12 cases behaved as expected"

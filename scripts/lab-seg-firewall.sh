@@ -21,8 +21,13 @@ build_chain() {
 	"$ipt" -N LAB-SEG 2>/dev/null || true
 	if ! "$ipt" -C LAB-SEG -m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACCEPT 2>/dev/null; then
 		# An accept here skips Docker's inter-network isolation, which is
-		# harmless because lab bridges are never Docker networks.
-		"$ipt" -A LAB-SEG -m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACCEPT
+		# harmless because lab bridges are never Docker networks. Checked
+		# explicitly, never left to set -e: the caller can run this inside
+		# a subshell whose own -e is off (see the top-level calls below).
+		if ! "$ipt" -A LAB-SEG -m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACCEPT; then
+			echo "lab-seg-firewall: REFUSED -- could not add the LAB-SEG rule body" >&2
+			return 1
+		fi
 	fi
 }
 
@@ -44,7 +49,9 @@ jump_line() {
 
 hook_after_dmz() {
 	local ipt=$1 chain=$2 proto=$3
-	build_chain "$ipt"
+	if ! build_chain "$ipt"; then
+		return 1
+	fi
 
 	# Checked explicitly and first, never folded into the jump_line lookup
 	# below: a chain that does not exist at all must refuse loudly, not
@@ -67,7 +74,12 @@ hook_after_dmz() {
 		echo "lab-seg-firewall: REFUSED -- no \"$DMZ_COMMENT\" jump in $proto $chain; refusing to guess a position" >&2
 		return 1
 	fi
-	"$ipt" -I "$chain" "$((dmz_line + 1))" -m comment --comment "$LAB_COMMENT" -j LAB-SEG
+	# Checked explicitly for the same reason as build_chain's -A above:
+	# this can run with the caller's own -e off.
+	if ! "$ipt" -I "$chain" "$((dmz_line + 1))" -m comment --comment "$LAB_COMMENT" -j LAB-SEG; then
+		echo "lab-seg-firewall: REFUSED -- $proto could not insert the LAB-SEG jump into $chain" >&2
+		return 1
+	fi
 
 	# Re-read the chain after inserting, both positions fresh: exiting 0
 	# on the insert alone proves nothing, and comparing the re-read jump
@@ -109,10 +121,12 @@ hook_after_dmz() {
 }
 
 ### ---------- IPv4: DOCKER-USER ----------
-# Run in a subshell so a failure here is testable without losing this
-# script's own set -e inside hook_after_dmz -- testing a function's exit
-# status directly (`if ! hook_after_dmz ...`) turns off -e for its whole
-# body for that call, in both bash and POSIX shells.
+# Run in a subshell so testing its exit status here (`if ! (...)`) does
+# not abort this script mid-function on the first failure -- but that
+# same wrapping also turns off -e inside the subshell for the whole call,
+# in both bash and POSIX shells, so hook_after_dmz and build_chain check
+# every command that writes a rule explicitly and return 1 themselves;
+# neither relies on -e to catch a failed add.
 if ! (hook_after_dmz "$IPT" DOCKER-USER iptables); then
 	exit 1
 fi
