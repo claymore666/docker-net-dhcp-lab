@@ -49,9 +49,10 @@ hook_after_dmz() {
 	# Checked explicitly and first, never folded into the jump_line lookup
 	# below: a chain that does not exist at all must refuse loudly, not
 	# just come back with an empty (and therefore ambiguous) jump line.
+	# Nothing has been written yet, so a plain return is enough here.
 	if ! "$ipt" -L "$chain" -n >/dev/null 2>&1; then
 		echo "lab-seg-firewall: REFUSED -- $proto chain $chain does not exist; refusing to guess a position" >&2
-		exit 1
+		return 1
 	fi
 
 	# delete_own_jump runs before the first real read of dmz_line: a stray
@@ -64,7 +65,7 @@ hook_after_dmz() {
 	dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	if [ -z "$dmz_line" ]; then
 		echo "lab-seg-firewall: REFUSED -- no \"$DMZ_COMMENT\" jump in $proto $chain; refusing to guess a position" >&2
-		exit 1
+		return 1
 	fi
 	"$ipt" -I "$chain" "$((dmz_line + 1))" -m comment --comment "$LAB_COMMENT" -j LAB-SEG
 
@@ -73,12 +74,15 @@ hook_after_dmz() {
 	# line back against $dmz_line (the value used to place it) would only
 	# ever agree with itself. Read the DMZ jump's line again too, and
 	# compare two independent post-insert reads against each other.
-	local final_dmz_line final_line return_line
+	local final_dmz_line final_line return_line return_cond
 	final_dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	final_line=$(jump_line "$ipt" "$chain" "$LAB_COMMENT")
 	if [ -z "$final_dmz_line" ] || [ -z "$final_line" ] || [ "$final_line" -ne "$((final_dmz_line + 1))" ]; then
 		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump landed at line ${final_line:-none} in $chain, DMZ jump now at line ${final_dmz_line:-none}" >&2
-		exit 1
+		# The jump just landed wrong; undo it rather than leave this
+		# protocol half-applied on a refusal.
+		delete_own_jump "$ipt" "$chain"
+		return 1
 	fi
 	# The target name is its own column in real -L -n --line-numbers
 	# output ("RETURN"), never a "-j RETURN" flag pair -- that syntax
@@ -86,14 +90,32 @@ hook_after_dmz() {
 	# not a substring search across the whole line.
 	return_line=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v l="$final_line" '$1 ~ /^[0-9]+$/ && $2 == "RETURN" && $1 < l {print $1; exit}')
 	if [ -n "$return_line" ]; then
-		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after a RETURN at line $return_line; it would never run" >&2
-		exit 1
+		# An unconditional RETURN (prot "all", no trailing match text)
+		# really does swallow every packet that reaches it, so nothing
+		# below ever runs. A conditional one (a protocol, port or other
+		# match) only intercepts packets matching that condition; this
+		# still refuses, because it cannot prove lab traffic can never
+		# match, but "would never run" would be a false claim about it.
+		return_cond=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v ln="$return_line" '$1 == ln { if ($3 == "all" && NF == 6) print "unconditional"; else print "conditional"; exit }')
+		if [ "$return_cond" = "unconditional" ]; then
+			echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after an unconditional RETURN at line $return_line; it would never run" >&2
+		else
+			echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after a conditional RETURN at line $return_line; it might never run for traffic that RETURN also matches" >&2
+		fi
+		delete_own_jump "$ipt" "$chain"
+		return 1
 	fi
 	echo "lab-seg-firewall: $proto LAB-SEG jump installed in $chain after \"$DMZ_COMMENT\" (line $final_dmz_line)"
 }
 
 ### ---------- IPv4: DOCKER-USER ----------
-hook_after_dmz "$IPT" DOCKER-USER iptables
+# Run in a subshell so a failure here is testable without losing this
+# script's own set -e inside hook_after_dmz -- testing a function's exit
+# status directly (`if ! hook_after_dmz ...`) turns off -e for its whole
+# body for that call, in both bash and POSIX shells.
+if ! (hook_after_dmz "$IPT" DOCKER-USER iptables); then
+	exit 1
+fi
 
 ### ---------- IPv6: FORWARD directly, never DOCKER-USER ----------
 # The DMZ script hooks its own v6 jump into FORWARD, not DOCKER-USER,
@@ -104,4 +126,12 @@ hook_after_dmz "$IPT" DOCKER-USER iptables
 # starts owning ip6 DOCKER-USER; this rule stays in FORWARD, where it
 # keeps working either way, and this script still never touches that
 # chain.
-hook_after_dmz "$IPT6" FORWARD ip6tables
+#
+# If v6 refuses, the v4 jump above already landed; take it back out so
+# a v6-only problem never leaves v4 alone half-applied. All or nothing
+# across both protocols.
+if ! (hook_after_dmz "$IPT6" FORWARD ip6tables); then
+	echo "lab-seg-firewall: rolling back the IPv4 jump because IPv6 refused" >&2
+	delete_own_jump "$IPT" DOCKER-USER
+	exit 1
+fi

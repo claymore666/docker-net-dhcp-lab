@@ -70,9 +70,24 @@ case "$1" in
 	rule="$*"
 	f=$(rules_file "$chain")
 	touch "$f"
+	# LAB_SEG_TEST_INSERT_BUG exists only for the two dedicated landing-
+	# check cases below; every other case leaves it unset and this block
+	# is a no-op.
+	if [ "${LAB_SEG_TEST_INSERT_BUG:-}" = "wrong-position" ]; then
+		pos=1
+	fi
 	tmp2=$(mktemp)
 	awk -v r="$rule" -v p="$pos" 'NR==p{print r} {print} END{if (p>NR) print r}' "$f" >"$tmp2"
 	mv "$tmp2" "$f"
+	if [ "${LAB_SEG_TEST_INSERT_BUG:-}" = "concurrent-shift" ] && [ "${rule#*lab segments}" != "$rule" ]; then
+		# Stands in for an unrelated, concurrent actor landing a rule
+		# above the DMZ jump in the instant between this script's own
+		# insert and its post-insert reads -- both jumps shift down
+		# together, staying correctly adjacent.
+		tmp3=$(mktemp)
+		{ echo '-m comment --comment "concurrent actor" -j ACCEPT'; cat "$f"; } >"$tmp3"
+		mv "$tmp3" "$f"
+	fi
 	;;
 -L)
 	chain=$2
@@ -264,12 +279,50 @@ if ! grep -q "does not exist" <<<"$out"; then
 	fail=1
 fi
 
+# Case 6: a broken insert lands the new jump at the wrong position,
+# ignoring the requested line entirely. v6 is seeded validly (unlike
+# cases 1/3/5's v6-unused) so a passing run would go on to succeed
+# outright -- nothing else in this run would otherwise catch the v4
+# bug (there is no RETURN and no stray jump, and no external position
+# assertion runs against this case), so this proves the landing check
+# has reachable value on its own, not just alongside case 7's
+# reordering assertion below or the RETURN guard. Must refuse.
+case6=$(new_case)
+v4=$case6/v4
+v6=$case6/v6
+seed_chain "$v4" DOCKER-USER '-j ACCEPT' # a harmless earlier rule
+seed_chain "$v4" DOCKER-USER '-m comment --comment "CI DMZ containment" -j CI-DMZ-FWD'
+seed_chain "$v6" FORWARD '-m comment --comment "CI DMZ containment" -j CI-DMZ-V6'
+if LAB_SEG_TEST_INSERT_BUG=wrong-position run_firewall "$v4" "$v6" >/dev/null 2>&1; then
+	echo "lab-seg-firewall-test: FAIL -- case 6: passed although the insert landed at the wrong position" >&2
+	fail=1
+fi
+
+# Case 7: a benign, concurrent insert lands above the DMZ jump in the
+# instant after this script's own insert -- both jumps shift down
+# together and stay correctly adjacent. Must NOT refuse: this is what
+# tells a fresh re-read of the DMZ jump's position (compared against
+# itself, both taken after the insert) apart from comparing back
+# against the value read before the insert, which would see only the
+# stale, pre-shift position and refuse a state that is actually fine.
+case7=$(new_case)
+v4=$case7/v4
+v6=$case7/v6
+seed_chain "$v4" DOCKER-USER '-j ACCEPT' # a harmless earlier rule
+seed_chain "$v4" DOCKER-USER '-m comment --comment "CI DMZ containment" -j CI-DMZ-FWD'
+seed_chain "$v6" FORWARD '-m comment --comment "CI DMZ containment" -j CI-DMZ-V6'
+if ! out=$(LAB_SEG_TEST_INSERT_BUG=concurrent-shift run_firewall "$v4" "$v6" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 7: refused although its own jump is still directly after the (shifted) DMZ jump" >&2
+	echo "$out" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: fake-ipt cases PASS -- 5 cases behaved as expected"
+echo "lab-seg-firewall-test: fake-ipt cases PASS -- 7 cases behaved as expected"
 
-# Cases 6-7 run against the real iptables/ip6tables binaries in a fresh
+# Cases 8-9 run against the real iptables/ip6tables binaries in a fresh
 # user+network namespace (unshare -rnm), never the fake above: real
 # `-L -n --line-numbers` prints a target NAME in its own column
 # ("RETURN"), never a "-j RETURN" flag pair, and only the real binary
@@ -280,7 +333,7 @@ if ! unshare -rnm true 2>/dev/null; then
 		exit 1
 	fi
 	echo "lab-seg-firewall-test: SKIP -- unshare -rnm not available here (not CI)" >&2
-	echo "lab-seg-firewall-test: PASS -- 5 fake-ipt cases behaved as expected, real-iptables cases skipped"
+	echo "lab-seg-firewall-test: PASS -- 7 fake-ipt cases behaved as expected, real-iptables cases skipped"
 	exit 0
 fi
 
@@ -296,7 +349,7 @@ ip link set lo up
 FIREWALL="$1"
 fail=0
 
-# Case 6: the DMZ jump is present, but an earlier, unconditional RETURN
+# Case 8: the DMZ jump is present, but an earlier, unconditional RETURN
 # already sits above where the LAB-SEG jump would land against real
 # iptables. Must refuse instead of exiting 0.
 iptables -N DOCKER-USER
@@ -304,11 +357,11 @@ iptables -A DOCKER-USER -j RETURN
 iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
 ip6tables -A FORWARD -m comment --comment "CI DMZ containment" -j ACCEPT
 if LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" >/dev/null 2>&1; then
-	echo "lab-seg-firewall-test: FAIL -- case 6: passed although its own jump would land after a real RETURN in DOCKER-USER" >&2
+	echo "lab-seg-firewall-test: FAIL -- case 8: passed although its own jump would land after a real RETURN in DOCKER-USER" >&2
 	fail=1
 fi
 
-# Case 7: a stray LAB-SEG-commented jump already sits ABOVE the DMZ
+# Case 9: a stray LAB-SEG-commented jump already sits ABOVE the DMZ
 # jump before this run (leftover state, a hand edit). delete_own_jump
 # removes it, which shifts the DMZ jump up by one line -- a dmz_line
 # read before that removal is stale by the time it is used to insert.
@@ -318,23 +371,62 @@ iptables -A LAB-SEG -m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACC
 iptables -A DOCKER-USER -m comment --comment "lab segments" -j LAB-SEG
 iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
 if ! LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" >/dev/null 2>&1; then
-	echo "lab-seg-firewall-test: FAIL -- case 7: refused with a stray jump above the DMZ jump, wanted a correct re-landing" >&2
+	echo "lab-seg-firewall-test: FAIL -- case 9: refused with a stray jump above the DMZ jump, wanted a correct re-landing" >&2
 	fail=1
 fi
 listing=$(iptables -L DOCKER-USER -n --line-numbers 2>/dev/null)
 dmz_line=$(awk "\$0 ~ /CI DMZ containment/ {print \$1; exit}" <<<"$listing")
 lab_line=$(awk "\$0 ~ /lab segments/ {print \$1; exit}" <<<"$listing")
 if [ "$(grep -c "lab segments" <<<"$listing")" -ne 1 ] || [ -z "$dmz_line" ] || [ "$lab_line" != "$((dmz_line + 1))" ]; then
-	echo "lab-seg-firewall-test: FAIL -- case 7: expected exactly one lab-segments jump directly after the DMZ jump, got:" >&2
+	echo "lab-seg-firewall-test: FAIL -- case 9: expected exactly one lab-segments jump directly after the DMZ jump, got:" >&2
 	echo "$listing" >&2
+	fail=1
+fi
+
+# Case 10: v4 is entirely fine, but the v6 FORWARD chain has an
+# unconditional RETURN sitting above where its own jump would land.
+# Must refuse overall, and must not leave the v4 jump installed either
+# -- all or nothing across both protocols, proven against real iptables
+# state, not just by reading the script.
+iptables -F DOCKER-USER
+ip6tables -F FORWARD
+iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
+ip6tables -A FORWARD -j RETURN
+ip6tables -A FORWARD -m comment --comment "CI DMZ containment" -j ACCEPT
+if LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" >/dev/null 2>&1; then
+	echo "lab-seg-firewall-test: FAIL -- case 10: passed although the v6 jump would land after a real RETURN in FORWARD" >&2
+	fail=1
+fi
+if [ "$(iptables -L DOCKER-USER -n --line-numbers 2>/dev/null | grep -c "lab segments")" -ne 0 ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 10: the v4 jump was left installed after the v6 refusal, not rolled back" >&2
+	fail=1
+fi
+
+# Case 11: a conditional RETURN (matches only tcp/22, not all traffic)
+# sits above the DMZ jump. Must still refuse -- this script cannot
+# prove lab traffic never matches it -- but the message must call it
+# conditional, never claim it "would never run", since most traffic
+# still reaches the jump below it.
+iptables -F DOCKER-USER
+ip6tables -F FORWARD
+iptables -A DOCKER-USER -p tcp --dport 22 -j RETURN
+iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
+ip6tables -A FORWARD -m comment --comment "CI DMZ containment" -j ACCEPT
+if out=$(LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 11: passed although a conditional RETURN sits above the DMZ jump" >&2
+	fail=1
+fi
+if ! grep -q "conditional RETURN" <<<"$out" || grep -q "unconditional RETURN" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 11: refusal message did not correctly call this RETURN conditional" >&2
+	echo "$out" >&2
 	fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: real-iptables cases PASS -- 2 cases behaved as expected"
+echo "lab-seg-firewall-test: real-iptables cases PASS -- 4 cases behaved as expected"
 '
 
 unshare -rnm bash -c "$real_inner" bash "$FIREWALL"
-echo "lab-seg-firewall-test: PASS -- all 7 cases behaved as expected"
+echo "lab-seg-firewall-test: PASS -- all 11 cases behaved as expected"
