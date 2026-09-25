@@ -32,6 +32,7 @@ runcmd:
       "valid-lifetime": 3600,
       "subnet4": [
         {
+          "id": 1,
           "subnet": "__SEG_SUBNET__",
           "pools": [ { "pool": "__POOL_START__ - __POOL_END__" } ],
           "reservations": <?include "/etc/kea/reservations.json"?>
@@ -43,7 +44,7 @@ runcmd:
   - |
     cat >/etc/kea/kea-ctrl-agent.conf <<'KEAEOF'
     {
-    "CtrlAgent": {
+    "Control-agent": {
       "http-host": "127.0.0.1",
       "http-port": 8000,
       "control-sockets": {
@@ -58,6 +59,11 @@ runcmd:
   # it only has to exist non-empty for the unit to start (measured live,
   # 2026-09-25).
   - echo lab-kea-api-unused >/etc/kea/kea-api-password
-  - systemctl enable --now kea-dhcp4-server
-  - systemctl enable --now kea-ctrl-agent
+  # restart, not enable --now: the apt-get install above already started
+  # both units against the package's own stock example config (Debian
+  # postinst); enable --now is then a no-op that leaves the stock config
+  # (subnet 192.0.2.0/24) running instead of ours (measured live,
+  # 2026-09-25).
+  - systemctl enable kea-dhcp4-server kea-ctrl-agent
+  - systemctl restart kea-dhcp4-server kea-ctrl-agent
   - touch /var/lib/cloud/lab-bootstrap-done

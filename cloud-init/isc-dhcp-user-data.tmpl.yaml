@@ -36,5 +36,10 @@ runcmd:
     INTERFACESv4="eth1"
     INTERFACESv6=""
     DHCPDEOF
-  - systemctl enable --now isc-dhcp-server
+  # restart, not enable --now: the kea cell found that apt-get's postinst
+  # can already have started the service against a stock config, making
+  # enable --now a no-op that leaves the stock config running instead of
+  # ours (issue #2, measured live 2026-09-25).
+  - systemctl enable isc-dhcp-server
+  - systemctl restart isc-dhcp-server
   - touch /var/lib/cloud/lab-bootstrap-done
