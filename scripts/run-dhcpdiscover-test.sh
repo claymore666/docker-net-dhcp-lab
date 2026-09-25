@@ -4,13 +4,11 @@
 # segment for a lease itself, during CreateEndpoint, before the container
 # process exists -- this cell has no DHCP server anywhere in it by design
 # (issue #1), so that request always times out and `docker run` fails
-# before udhcpc inside the container would ever have run. (An earlier
-# version of this comment said the point was only "it sends a
-# DHCPDISCOVER onto the segment" and carried a udhcpc payload for the
-# container to run -- both were wrong about which layer sends the
-# DISCOVER; the payload never executed, measured live 2026-09-25, and is
-# dropped below.) The pass path is that specific CreateEndpoint DHCP
-# timeout; any other failure, or an unexpected success, is a failure.
+# before udhcpc inside the container would ever have run. The pass path
+# is specifically that CreateEndpoint DHCP timeout, matched on its
+# wrapped "context deadline exceeded" cause, not just the wrapper text
+# around it (which any other underlying failure would also carry); any
+# other failure, or an unexpected success, is a failure.
 set -euo pipefail
 
 MGMT_IP=${1:?usage: run-dhcpdiscover-test.sh <mgmt-ip> <work-dir>}
@@ -26,7 +24,12 @@ known_hosts="$WORK/known_hosts"
 # "net-dhcp-under-test:latest", and `-d net-dhcp-under-test` alone fails
 # "could not resolve driver ... in registry").
 DRIVER=net-dhcp-under-test:latest
-EXPECT='failed to get initial IP address via DHCP'
+# Matches the wrapped cause, not just "failed to get initial IP address
+# via DHCP" -- that wrapper text alone would also match a config or
+# parse error routed through the same fmt.Errorf, which is not the
+# timeout this test exists to prove (pkg/dhcp/chassis.go: a context
+# timeout with no OFFER sets lastE = ctx.Err(), context.DeadlineExceeded).
+EXPECT='failed to get initial IP address via DHCP: context deadline exceeded'
 
 ssh_run() {
 	# ControlMaster=no/ControlPath=none: see up-cell.sh's wait loop for why
