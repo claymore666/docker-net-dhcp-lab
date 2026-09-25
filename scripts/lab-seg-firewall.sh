@@ -1,25 +1,14 @@
 #!/bin/bash
-# Lab-owned firewall allow rule for bridged traffic that stays fully
-# inside a lab segment bridge (issue #1). This fixes a real blocker, not
-# just an observer visibility gap: Docker's DOCKER-USER hook intercepts
-# bridged IPv4 frames between two ordinary ports of any bridge (via
-# br_netfilter) and drops them by default -- measured live, a lab
-# segment's own DHCP traffic was silently dropped the same way a real
-# source VM and a Docker host VM sharing a segment would lose it
-# (issue #2). This never touches DOCKER-USER's, FORWARD's or CI-DMZ-*'s
-# own content, RETURN, or policy: it only reads the DMZ script's jump
-# position in each protocol and inserts or removes its own single,
-# comment-tagged jump right after it.
-#
-# IPv4 hooks into iptables DOCKER-USER, right after the DMZ script's own
-# jump there. IPv6 hooks into ip6tables FORWARD directly, right after
-# the DMZ script's own jump there -- never into an ip6 DOCKER-USER chain,
-# which does not exist today (Docker's IPv6 iptables support is off) and
-# which Docker, not this script, would own once that support is on.
-#
-# Idempotent: safe to re-run at every bring-up. Both protocols refuse
-# outright if the DMZ script's own jump is not where this script expects
-# it -- never guessing a position.
+# Lab-owned firewall allow rule for bridged lab-segment traffic (issue
+# #1): DOCKER-USER drops bridged frames between two bridge ports by
+# default (br_netfilter) -- measured live, lab DHCP traffic was lost
+# the same way a real source VM would lose it (issue #2). Reads the
+# DMZ script's jump position in each protocol and inserts or removes
+# only its own single, comment-tagged jump right after it; never
+# touches DOCKER-USER's, FORWARD's or CI-DMZ-*'s own rules, RETURN, or
+# policy. IPv4 hooks DOCKER-USER; IPv6 hooks FORWARD directly (no ip6
+# DOCKER-USER chain while Docker's v6 iptables support is off).
+# Idempotent; refuses outright if the DMZ jump is not where expected.
 set -euo pipefail
 
 IPT=${LAB_SEG_IPTABLES:-iptables}
@@ -65,31 +54,42 @@ hook_after_dmz() {
 		exit 1
 	fi
 
+	# delete_own_jump runs before the first real read of dmz_line: a stray
+	# LAB-SEG jump sitting above the DMZ jump (leftover state, a hand
+	# edit) shifts every line below it once removed, so a position read
+	# before that removal is already stale by the time it is used.
+	delete_own_jump "$ipt" "$chain"
+
 	local dmz_line
 	dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	if [ -z "$dmz_line" ]; then
 		echo "lab-seg-firewall: REFUSED -- no \"$DMZ_COMMENT\" jump in $proto $chain; refusing to guess a position" >&2
 		exit 1
 	fi
-	delete_own_jump "$ipt" "$chain"
 	"$ipt" -I "$chain" "$((dmz_line + 1))" -m comment --comment "$LAB_COMMENT" -j LAB-SEG
 
-	# Re-read the chain after inserting: exiting 0 on the insert command
-	# alone proved nothing about whether the jump actually landed where it
-	# was asked to, or whether some earlier unconditional RETURN in the
-	# same chain makes it dead on arrival either way.
-	local final_line return_line
+	# Re-read the chain after inserting, both positions fresh: exiting 0
+	# on the insert alone proves nothing, and comparing the re-read jump
+	# line back against $dmz_line (the value used to place it) would only
+	# ever agree with itself. Read the DMZ jump's line again too, and
+	# compare two independent post-insert reads against each other.
+	local final_dmz_line final_line return_line
+	final_dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	final_line=$(jump_line "$ipt" "$chain" "$LAB_COMMENT")
-	if [ -z "$final_line" ] || [ "$final_line" -ne "$((dmz_line + 1))" ]; then
-		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump landed at line ${final_line:-none} in $chain, not $((dmz_line + 1)) as inserted" >&2
+	if [ -z "$final_dmz_line" ] || [ -z "$final_line" ] || [ "$final_line" -ne "$((final_dmz_line + 1))" ]; then
+		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump landed at line ${final_line:-none} in $chain, DMZ jump now at line ${final_dmz_line:-none}" >&2
 		exit 1
 	fi
-	return_line=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v l="$final_line" '$0 ~ /-j[[:space:]]+RETURN([[:space:]]|$)/ && $1 < l {print $1; exit}')
+	# The target name is its own column in real -L -n --line-numbers
+	# output ("RETURN"), never a "-j RETURN" flag pair -- that syntax
+	# only appears in -S/rule-spec output. Match column 2 by position,
+	# not a substring search across the whole line.
+	return_line=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v l="$final_line" '$1 ~ /^[0-9]+$/ && $2 == "RETURN" && $1 < l {print $1; exit}')
 	if [ -n "$return_line" ]; then
 		echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after a RETURN at line $return_line; it would never run" >&2
 		exit 1
 	fi
-	echo "lab-seg-firewall: $proto LAB-SEG jump installed in $chain after \"$DMZ_COMMENT\" (line $dmz_line)"
+	echo "lab-seg-firewall: $proto LAB-SEG jump installed in $chain after \"$DMZ_COMMENT\" (line $final_dmz_line)"
 }
 
 ### ---------- IPv4: DOCKER-USER ----------

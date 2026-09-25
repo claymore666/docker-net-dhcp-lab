@@ -264,22 +264,77 @@ if ! grep -q "does not exist" <<<"$out"; then
 	fail=1
 fi
 
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+echo "lab-seg-firewall-test: fake-ipt cases PASS -- 5 cases behaved as expected"
+
+# Cases 6-7 run against the real iptables/ip6tables binaries in a fresh
+# user+network namespace (unshare -rnm), never the fake above: real
+# `-L -n --line-numbers` prints a target NAME in its own column
+# ("RETURN"), never a "-j RETURN" flag pair, and only the real binary
+# proves the RETURN guard and the post-delete re-read against that.
+if ! unshare -rnm true 2>/dev/null; then
+	if [ "${CI:-}" = "true" ]; then
+		echo "lab-seg-firewall-test: FAIL -- unshare -rnm not available in CI; a gate never goes quietly green" >&2
+		exit 1
+	fi
+	echo "lab-seg-firewall-test: SKIP -- unshare -rnm not available here (not CI)" >&2
+	echo "lab-seg-firewall-test: PASS -- 5 fake-ipt cases behaved as expected, real-iptables cases skipped"
+	exit 0
+fi
+
+# $1 is FIREWALL, expanded only once unshare runs it -- single quotes
+# are deliberate.
+# shellcheck disable=SC2016
+real_inner='
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:$PATH
+mount -t sysfs sysfs /sys
+ip link set lo up
+
+FIREWALL="$1"
+fail=0
+
 # Case 6: the DMZ jump is present, but an earlier, unconditional RETURN
-# already sits above where the LAB-SEG jump would land. Installing the
-# jump there would leave it dead on arrival; must verify the final order
-# and refuse instead of exiting 0.
-case6=$(new_case)
-v4=$case6/v4
-v6=$case6/v6
-seed_chain "$v4" DOCKER-USER '-j RETURN'
-seed_chain "$v4" DOCKER-USER '-m comment --comment "CI DMZ containment" -j CI-DMZ-FWD'
-seed_chain "$v6" FORWARD '-m comment --comment "CI DMZ containment" -j CI-DMZ-V6'
-if run_firewall "$v4" "$v6" >/dev/null 2>&1; then
-	echo "lab-seg-firewall-test: FAIL -- case 6: passed although its own jump would land after an earlier RETURN in DOCKER-USER" >&2
+# already sits above where the LAB-SEG jump would land against real
+# iptables. Must refuse instead of exiting 0.
+iptables -N DOCKER-USER
+iptables -A DOCKER-USER -j RETURN
+iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
+ip6tables -A FORWARD -m comment --comment "CI DMZ containment" -j ACCEPT
+if LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" >/dev/null 2>&1; then
+	echo "lab-seg-firewall-test: FAIL -- case 6: passed although its own jump would land after a real RETURN in DOCKER-USER" >&2
+	fail=1
+fi
+
+# Case 7: a stray LAB-SEG-commented jump already sits ABOVE the DMZ
+# jump before this run (leftover state, a hand edit). delete_own_jump
+# removes it, which shifts the DMZ jump up by one line -- a dmz_line
+# read before that removal is stale by the time it is used to insert.
+iptables -F DOCKER-USER
+iptables -N LAB-SEG 2>/dev/null || true
+iptables -A LAB-SEG -m physdev --physdev-is-bridged -i lab-br+ -o lab-br+ -j ACCEPT 2>/dev/null || true
+iptables -A DOCKER-USER -m comment --comment "lab segments" -j LAB-SEG
+iptables -A DOCKER-USER -m comment --comment "CI DMZ containment" -j ACCEPT
+if ! LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" >/dev/null 2>&1; then
+	echo "lab-seg-firewall-test: FAIL -- case 7: refused with a stray jump above the DMZ jump, wanted a correct re-landing" >&2
+	fail=1
+fi
+listing=$(iptables -L DOCKER-USER -n --line-numbers 2>/dev/null)
+dmz_line=$(awk "\$0 ~ /CI DMZ containment/ {print \$1; exit}" <<<"$listing")
+lab_line=$(awk "\$0 ~ /lab segments/ {print \$1; exit}" <<<"$listing")
+if [ "$(grep -c "lab segments" <<<"$listing")" -ne 1 ] || [ -z "$dmz_line" ] || [ "$lab_line" != "$((dmz_line + 1))" ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 7: expected exactly one lab-segments jump directly after the DMZ jump, got:" >&2
+	echo "$listing" >&2
 	fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: PASS -- all 6 cases behaved as expected"
+echo "lab-seg-firewall-test: real-iptables cases PASS -- 2 cases behaved as expected"
+'
+
+unshare -rnm bash -c "$real_inner" bash "$FIREWALL"
+echo "lab-seg-firewall-test: PASS -- all 7 cases behaved as expected"
