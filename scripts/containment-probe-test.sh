@@ -248,7 +248,45 @@ if ! grep -q 'PASS' <<<"$out8"; then
 	fail=1
 fi
 
+# Case 9: 2 targets x 3 ports = 6 attempts, every one reported "no route
+# to host" (BLOCKED, same shape as case 8), but the /24 drop counter only
+# rises by 3 -- a leak that escaped the local drop rule on half the
+# attempts while still routing nowhere, previously indistinguishable
+# from a genuine pass under a "merely rose" check. Must refuse and name
+# the shortfall.
+mkdir -p "$tmp/case9-bin"
+cp "$tmp/sudo" "$tmp/case9-bin/"
+cat >"$tmp/case9-bin/ssh" <<'STUB'
+#!/bin/bash
+printf 'bash: connect: No route to host|RC=1'
+STUB
+chmod +x "$tmp/case9-bin/ssh"
+cat >"$tmp/case9-bin/nft" <<STUB
+#!/bin/bash
+count_file="$tmp/case9-bin/.calls"
+n=0
+[ -f "\$count_file" ] && n=\$(cat "\$count_file")
+n=\$((n + 1))
+echo "\$n" >"\$count_file"
+if [ "\$n" -eq 1 ]; then
+	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
+else
+	echo 'ip daddr 192.0.2.0/24 counter packets 3 bytes 180 drop'
+fi
+STUB
+chmod +x "$tmp/case9-bin/nft"
+if out9=$(PATH="$tmp/case9-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 192.0.2.51 2>&1); then
+	echo "containment-probe-test: FAIL -- case 9: passed although the drop counter rose by fewer than the attempt count" >&2
+	echo "$out9" >&2
+	fail=1
+fi
+if ! grep -q 'wanted at least' <<<"${out9:-}"; then
+	echo "containment-probe-test: FAIL -- case 9: did not name the attempt-count shortfall" >&2
+	echo "${out9:-}" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "containment-probe-test: PASS -- all 8 cases behaved as expected"
+echo "containment-probe-test: PASS -- all 9 cases behaved as expected"

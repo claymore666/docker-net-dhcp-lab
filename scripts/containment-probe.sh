@@ -19,6 +19,12 @@ if [ "$#" -eq 0 ]; then
 	exit 1
 fi
 TARGETS=("$@")
+PORTS=(80 443 22)
+# Every attempt below is expected to be dropped locally; the counter
+# must account for each one, not merely rise (a leak that escapes this
+# host's own drop rule can still look like a pass otherwise -- see the
+# delta check near the bottom).
+ATTEMPTS=$((${#TARGETS[@]} * ${#PORTS[@]}))
 
 known_hosts="$WORK/known_hosts"
 
@@ -47,7 +53,7 @@ fi
 
 connected=""
 for t in "${TARGETS[@]}"; do
-	for port in 80 443 22; do
+	for port in "${PORTS[@]}"; do
 		# Expected to fail every time -- the probe's job is to generate the
 		# attempt and let the host firewall drop it, not to connect. A
 		# successful connection is checked explicitly by its own marker,
@@ -96,8 +102,9 @@ if [ -z "$after" ]; then
 fi
 
 echo "containment-probe: ci_dmz /24 drop counter before=$before after=$after"
-if [ "$after" -le "$before" ]; then
-	echo "containment-probe: FAIL -- /24 drop counter did not rise" >&2
+delta=$((after - before))
+if [ "$delta" -lt "$ATTEMPTS" ]; then
+	echo "containment-probe: FAIL -- /24 drop counter rose by $delta, wanted at least $ATTEMPTS (one per attempt)" >&2
 	exit 1
 fi
-echo "containment-probe: PASS -- /24 drop counter rose ($before -> $after)"
+echo "containment-probe: PASS -- /24 drop counter rose by $delta ($before -> $after), >= $ATTEMPTS attempts"
