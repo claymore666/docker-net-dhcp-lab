@@ -405,9 +405,8 @@ fi
 
 # Case 11: a conditional RETURN (matches only tcp/22, not all traffic)
 # sits above the DMZ jump. Must still refuse -- this script cannot
-# prove lab traffic never matches it -- but the message must call it
-# conditional, never claim it "would never run", since most traffic
-# still reaches the jump below it.
+# prove lab traffic never matches it -- with the same one message any
+# RETURN above the jump gets, conditional or not.
 iptables -F DOCKER-USER
 ip6tables -F FORWARD
 iptables -A DOCKER-USER -p tcp --dport 22 -j RETURN
@@ -417,8 +416,8 @@ if out=$(LAB_SEG_IPTABLES=iptables LAB_SEG_IP6TABLES=ip6tables "$FIREWALL" 2>&1)
 	echo "lab-seg-firewall-test: FAIL -- case 11: passed although a conditional RETURN sits above the DMZ jump" >&2
 	fail=1
 fi
-if ! grep -q "conditional RETURN" <<<"$out" || grep -q "unconditional RETURN" <<<"$out"; then
-	echo "lab-seg-firewall-test: FAIL -- case 11: refusal message did not correctly call this RETURN conditional" >&2
+if ! grep -q "a RETURN rule precedes the DMZ jump; refusing" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 11: refusal message did not name the RETURN-precedes-jump reason" >&2
 	echo "$out" >&2
 	fail=1
 fi

@@ -86,7 +86,7 @@ hook_after_dmz() {
 	# line back against $dmz_line (the value used to place it) would only
 	# ever agree with itself. Read the DMZ jump's line again too, and
 	# compare two independent post-insert reads against each other.
-	local final_dmz_line final_line return_line return_cond
+	local final_dmz_line final_line return_line
 	final_dmz_line=$(jump_line "$ipt" "$chain" "$DMZ_COMMENT")
 	final_line=$(jump_line "$ipt" "$chain" "$LAB_COMMENT")
 	if [ -z "$final_dmz_line" ] || [ -z "$final_line" ] || [ "$final_line" -ne "$((final_dmz_line + 1))" ]; then
@@ -102,18 +102,9 @@ hook_after_dmz() {
 	# not a substring search across the whole line.
 	return_line=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v l="$final_line" '$1 ~ /^[0-9]+$/ && $2 == "RETURN" && $1 < l {print $1; exit}')
 	if [ -n "$return_line" ]; then
-		# An unconditional RETURN (prot "all", no trailing match text)
-		# really does swallow every packet that reaches it, so nothing
-		# below ever runs. A conditional one (a protocol, port or other
-		# match) only intercepts packets matching that condition; this
-		# still refuses, because it cannot prove lab traffic can never
-		# match, but "would never run" would be a false claim about it.
-		return_cond=$("$ipt" -L "$chain" -n --line-numbers 2>/dev/null | awk -v ln="$return_line" '$1 == ln { if ($3 == "all" && NF == 6) print "unconditional"; else print "conditional"; exit }')
-		if [ "$return_cond" = "unconditional" ]; then
-			echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after an unconditional RETURN at line $return_line; it would never run" >&2
-		else
-			echo "lab-seg-firewall: REFUSED -- $proto LAB-SEG jump at line $final_line in $chain sits after a conditional RETURN at line $return_line; it might never run for traffic that RETURN also matches" >&2
-		fi
+		# Refuses either way, conditional or not: this script cannot prove
+		# lab traffic can never match a RETURN ahead of its own jump.
+		echo "lab-seg-firewall: REFUSED -- $proto: a RETURN rule precedes the DMZ jump; refusing" >&2
 		delete_own_jump "$ipt" "$chain"
 		return 1
 	fi
