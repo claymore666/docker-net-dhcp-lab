@@ -5,8 +5,13 @@
 # point is only that it sends a DHCPDISCOVER onto the segment.
 set -euo pipefail
 
-MGMT_IP=${1:?usage: run-dhcpdiscover-test.sh <mgmt-ip>}
+MGMT_IP=${1:?usage: run-dhcpdiscover-test.sh <mgmt-ip> <work-dir>}
+WORK=${2:?usage: run-dhcpdiscover-test.sh <mgmt-ip> <work-dir>}
 NET=mv-test
+# Same per-cell file up-cell.sh's own wait loop already trusted this
+# mgmt address's host key into (issue #1); not reset here, so this call
+# reuses that trust instead of re-verifying and racing it.
+known_hosts="$WORK/known_hosts"
 # The plugin is installed with --alias net-dhcp-under-test, but the
 # engine's driver registry keys it by the full reference including the
 # tag (measured live, issue #1: `docker info` lists
@@ -15,7 +20,13 @@ NET=mv-test
 DRIVER=net-dhcp-under-test:latest
 
 ssh_run() {
-	ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_ed25519_lab lab@"$MGMT_IP" "$@"
+	# ControlMaster=no/ControlPath=none: see up-cell.sh's wait loop for why
+	# -- an operator ssh config's connection multiplexing would otherwise
+	# reuse an existing master connection and skip host-key verification
+	# on it, defeating UserKnownHostsFile's fresh check below.
+	ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=accept-new -o ControlMaster=no -o ControlPath=none \
+		-i ~/.ssh/id_ed25519_lab lab@"$MGMT_IP" "$@"
 }
 
 ssh_run "sudo docker network rm $NET" >/dev/null 2>&1 || true

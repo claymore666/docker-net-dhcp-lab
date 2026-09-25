@@ -19,7 +19,7 @@ mgmt_ip=${mgmt_addr%%/*}
 "$REPO_ROOT/scripts/observe-segment.sh" "$CELL" "$bridge" "$PCAP" 30 &
 observer_pid=$!
 sleep 3
-"$REPO_ROOT/scripts/run-dhcpdiscover-test.sh" "$mgmt_ip"
+"$REPO_ROOT/scripts/run-dhcpdiscover-test.sh" "$mgmt_ip" "$WORK"
 wait "$observer_pid"
 
 count=$(tcpdump -r "$PCAP" 'udp port 68' 2>/dev/null | grep -c 'BOOTP/DHCP, Request' || true)

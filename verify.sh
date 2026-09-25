@@ -150,6 +150,26 @@ echo "== lab segment firewall refusal/idempotency tests =="
 echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
 
+echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
+./scripts/lab-known-hosts-test.sh
+
+echo "== every lab ssh/scp call carries the per-cell known_hosts option =="
+# Every real invocation line, not a function definition (ssh_run() {) or a
+# call to one (ssh_run "..."), which the (^|[^_a-zA-Z]) alternation and the
+# required trailing space both rule out. Every one of these reaches a lab
+# VM at a static, reused mgmt address (issue #1): without
+# UserKnownHostsFile pointed at the per-cell file, a rebuilt VM's new host
+# key at the same address hits the same refusal that broke the 2026-09-25
+# live run, indistinguishable from "not ready yet".
+offenders=$(grep -nE '(^|[^_a-zA-Z])(ssh|scp)[[:space:]]' scripts/*.sh \
+	| grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' \
+	| grep -v 'UserKnownHostsFile' || true)
+if [ -n "$offenders" ]; then
+	echo "verify.sh: ssh/scp call(s) missing UserKnownHostsFile:" >&2
+	echo "$offenders" >&2
+	exit 1
+fi
+
 echo "== build-bridge.sh never touches real iptables unless explicitly enabled =="
 # Stub iptables/ip6tables that fail loudly if called at all; a default,
 # unprivileged build-bridge.sh run (LAB_SEG_APPLY_FIREWALL unset) must

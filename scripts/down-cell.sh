@@ -50,5 +50,10 @@ if [ -d "$WORK" ]; then
 	fi
 fi
 
+# Named explicitly, ahead of the rm -rf below: the per-cell known_hosts
+# file (issue #1) is the one piece of $WORK whose absence another script
+# depends on being provable on its own, not just swept up incidentally.
+rm -f "$WORK/known_hosts"
+
 rm -rf "$WORK"
 echo "down-cell: $CELL torn down, $WORK removed"

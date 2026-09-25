@@ -42,6 +42,18 @@ echo "== base image cache =="
 base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh")
 
 mkdir -p "$WORK"
+
+# A per-cell known_hosts, reset to empty on every bring-up (issue #1,
+# live run 2026-09-25): mgmt_address is static per cell, but each VM
+# instance boots with its own fresh host key, so the personal
+# ~/.ssh/known_hosts accumulates a stale entry from the previous
+# instance at the same address and the wait loop below refuses to
+# proceed -- measured live: 60 retries against a running, reachable VM,
+# every one rejected on a host-key mismatch, reported indistinguishably
+# from "not ready yet". Never read or write the personal file for this.
+known_hosts="$WORK/known_hosts"
+: >"$known_hosts"
+
 overlay="$WORK/${domain}.qcow2"
 if [ ! -f "$overlay" ]; then
 	qemu-img create -f qcow2 -F qcow2 -b "$base_path" "$overlay" "${diskgib}G"
@@ -127,7 +139,16 @@ echo "== wait for cloud-init (bounded) =="
 mgmt_ip=${mgmt_addr%%/*}
 ok=0
 for _ in $(seq 1 60); do
-	if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -i ~/.ssh/id_ed25519_lab \
+	# ControlMaster=no/ControlPath=none: found while testing the fix above
+	# -- an operator ssh config with connection multiplexing (`Host *`
+	# ControlMaster/ControlPersist, a common personal default) silently
+	# reuses an existing master connection to the same user@host:port and
+	# skips host-key verification on the reused connection entirely,
+	# which would defeat UserKnownHostsFile's fresh check above just as
+	# effectively as the original stale-entry bug did.
+	if ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
+		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
 		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null; then
 		ok=1
 		break
