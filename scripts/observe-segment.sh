@@ -71,8 +71,12 @@ sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U 'udp 
 # telling the caller it is safe to generate traffic -- apk/veth setup
 # above can take longer than any fixed guess, and a caller that starts
 # the DHCPDISCOVER before the capture is live loses the frame silently.
+# "-x tcpdump" matches the process's own name only: a "-f" pattern
+# containing "tcpdump" would also match the "sh -c \"pgrep -f ...\""
+# wrapper's own argv, since that text is right there on its command
+# line, so the wait would pass before tcpdump itself had even started.
 waited=0
-until sudo -n docker exec "$CONTAINER" sh -c "pgrep -f 'tcpdump -i eth-obs' >/dev/null" 2>/dev/null; do
+until sudo -n docker exec "$CONTAINER" sh -c "pgrep -x tcpdump >/dev/null" 2>/dev/null; do
 	waited=$((waited + 1))
 	if [ "$waited" -ge 100 ]; then
 		echo "observe-segment: FAIL -- tcpdump did not start inside the 10s bound" >&2
