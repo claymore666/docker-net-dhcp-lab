@@ -253,9 +253,7 @@ rm -rf "$gate_stub"
 trap - EXIT
 
 echo "== comment blocks in tracked shell scripts stay <=10 lines =="
-# A run of consecutive "#" lines, the shebang excluded. Catches the drift
-# this repo has already hit twice: a header or case comment creeping past
-# the limit with nothing to stop it.
+# Comment blocks in tracked shell scripts stay at 10 lines or fewer (#1).
 comment_max=10
 comment_offenders=""
 while IFS= read -r f; do
