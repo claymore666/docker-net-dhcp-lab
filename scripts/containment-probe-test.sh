@@ -242,51 +242,66 @@ if ! grep -q 'PASS' <<<"$out8"; then
 	fail=1
 fi
 
-# Case 9: 2 targets x 3 ports = 6 attempts, every one times out (rc 124,
-# BLOCKED). Every attempt's own drop counter rises except the third
-# one's, which reads the same value before and after -- a leak on that
-# one attempt, escaping the local drop rule silently while still
-# answering nothing. Total across the run still rises by 10 against a
-# 6-attempt floor, which a total-count check would have accepted; a
-# per-attempt check must not, and must name the leak.
+# Case 9: 2 targets x 3 ports = 6 attempts. Attempt 1 is genuinely
+# blocked; every attempt after it leaks silently (times out, but
+# nothing actually dropped it). The /24 drop counter is state-driven,
+# not indexed by call number: the fake connect step is the only thing
+# that ever changes it (+2 for a blocked attempt, matching the measured
+# real-iptables SYN+retry ratio, +0 for a leak), and the nft stub always
+# reports whatever the true running value currently is, however many
+# times or in whatever order the probe calls it. A call-number-indexed
+# stub cannot do this: a mutant that changes how many times, or when,
+# the probe reads the counter (e.g. reusing the initial "before" read
+# as every attempt's "pre" instead of a fresh per-attempt read) still
+# gets a plausible-looking value keyed to its position in a canned
+# sequence, and can pass by accident; a state-driven stub gives every
+# mutant the one true value there actually is to work with, so it
+# cannot be fooled by a shifted call count.
 mkdir -p "$tmp/case9-bin"
 cp "$tmp/sudo" "$tmp/case9-bin/"
-# A bare failure with no "RC=" marker: containment-probe.sh's own
-# fallback (`|| printf '|RC=124'`) turns this into the same rc 124 a
-# real timeout produces, without an actual 2s wait here.
-cat >"$tmp/case9-bin/ssh" <<'STUB'
+echo 0 >"$tmp/case9-bin/.counter"
+
+# ssh stub simulates the remote connect attempt and is the only thing
+# that ever changes the shared counter file. Its own call-count file
+# only picks which attempt this is, never fabricates the counter's
+# value. Every attempt times out either way (rc 124, via
+# containment-probe.sh's own fallback for a failed ssh call) -- nothing
+# ever answers, blocked or leaking.
+cat >"$tmp/case9-bin/ssh" <<STUB
 #!/bin/bash
+call_file="$tmp/case9-bin/.ssh-calls"
+n=0
+[ -f "\$call_file" ] && n=\$(cat "\$call_file")
+n=\$((n + 1))
+echo "\$n" >"\$call_file"
+counter_file="$tmp/case9-bin/.counter"
+cur=\$(cat "\$counter_file")
+if [ "\$n" -eq 1 ]; then
+	echo "\$((cur + 2))" >"\$counter_file"
+fi
 exit 1
 STUB
 chmod +x "$tmp/case9-bin/ssh"
 cat >"$tmp/case9-bin/nft" <<STUB
 #!/bin/bash
-# n=1 is the initial existence read; n=2.. are this run's 6 attempts,
-# each read twice (before, after). Every pair rises by 3 except the
-# third attempt's (n=6,7), which both read 4 -- the one leak.
-count_file="$tmp/case9-bin/.calls"
-n=0
-[ -f "\$count_file" ] && n=\$(cat "\$count_file")
-n=\$((n + 1))
-echo "\$n" >"\$count_file"
-case "\$n" in
-	1|2) v=0 ;;
-	3|4) v=2 ;;
-	5|6|7|8) v=4 ;;
-	9|10) v=6 ;;
-	11|12) v=8 ;;
-	*) v=10 ;;
-esac
-echo "ip daddr 192.0.2.0/24 counter packets \$v bytes 0 drop"
+counter_file="$tmp/case9-bin/.counter"
+[ -f "\$counter_file" ] || echo 0 >"\$counter_file"
+echo "ip daddr 192.0.2.0/24 counter packets \$(cat "\$counter_file") bytes 0 drop"
 STUB
 chmod +x "$tmp/case9-bin/nft"
 if out9=$(PATH="$tmp/case9-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 192.0.2.51 2>&1); then
-	echo "containment-probe-test: FAIL -- case 9: passed although one attempt's own drop counter never rose" >&2
+	echo "containment-probe-test: FAIL -- case 9: passed although 5 of 6 attempts leaked" >&2
 	echo "$out9" >&2
 	fail=1
 fi
-if ! grep -q 'FAIL -- LEAK' <<<"${out9:-}"; then
-	echo "containment-probe-test: FAIL -- case 9: did not name the leaking attempt" >&2
+leaks=$(grep -c 'FAIL -- LEAK' <<<"${out9:-}" || true)
+if [ "$leaks" -ne 5 ]; then
+	echo "containment-probe-test: FAIL -- case 9: expected 5 leaks (every attempt but the first), got $leaks" >&2
+	echo "${out9:-}" >&2
+	fail=1
+fi
+if grep -q 'FAIL -- LEAK 192.0.2.50:80;' <<<"${out9:-}"; then
+	echo "containment-probe-test: FAIL -- case 9: the first attempt (genuinely blocked) was wrongly flagged as a leak" >&2
 	echo "${out9:-}" >&2
 	fail=1
 fi

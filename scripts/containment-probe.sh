@@ -9,6 +9,9 @@
 # never stored, and the drop rule is matched by shape, the same way
 # containment-preflight.sh matches its own rule. This repo's own version
 # of the proof named in that script's header (`dmz-probe.sh`, private).
+# The /24 drop counter this script reads is host-wide, not scoped to one
+# cell: run only one cell's probe at a time, or a concurrent probe on
+# this host will move the same counter.
 set -euo pipefail
 
 MGMT_IP=${1:?usage: containment-probe.sh <mgmt-ip> <work-dir> <target-ip> [<target-ip> ...]}
