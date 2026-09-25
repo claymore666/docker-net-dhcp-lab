@@ -90,23 +90,60 @@ and_guarded() {
 	[[ "$prev" =~ \&\&[[:space:]]*\\$ ]]
 }
 
-# Combines all four evasions this file guards against into one reason
-# string, empty when $line in $file is a real, unconditional, reachable
-# statement. Callers treat any non-empty result as a wiring failure.
-unreachable_reason() {
-	local file=$1 line=$2 reason="" depth fn
+# True if the line immediately before $line in $file is a "true || \"
+# line-continuation guard -- joined onto the next line, that reads as
+# "true || <the call>", and since "true" always succeeds, the "||"
+# short-circuits and the call after it never runs at all. This is the
+# opposite of and_guarded's "sometimes runs": grep still finds the call's
+# own unchanged text and column, but it is dead, not conditional.
+true_or_guarded() {
+	local file=$1 line=$2
+	[ "$line" -le 1 ] && return 1
+	local prev
+	prev=$(sed -n "$((line - 1))p" "$file")
+	[[ "$prev" =~ ^[[:space:]]*true[[:space:]]*\|\|[[:space:]]*\\$ ]]
+}
 
-	depth=$(depth_at_line "$file" "$line")
-	if [ "$depth" -ne 0 ]; then
-		reason="sits inside a conditional block (depth $depth)"
+# Combines all evasions this file guards against into one reason string,
+# empty when $line in $file is a real, unconditional, reachable
+# statement. Callers treat any non-empty result as a wiring failure.
+# $3 is an internal recursion depth (never passed by callers): the
+# function-uncalled check below re-runs this same check on each
+# candidate caller line, to catch a caller that is itself unreachable
+# (issue #1 round 4); the cap only guards against a call cycle (a
+# function whose only caller is itself), never hit by this repo's own
+# scripts.
+unreachable_reason() {
+	local file=$1 line=$2 depth=${3:-0} reason="" d fn
+
+	if [ "$depth" -gt 10 ]; then
+		echo ""
+		return
+	fi
+
+	d=$(depth_at_line "$file" "$line")
+	if [ "$d" -ne 0 ]; then
+		reason="sits inside a conditional block (depth $d)"
 	elif [ "$(in_heredoc_body "$file" "$line")" = 1 ]; then
 		reason="sits inside a heredoc block, which is data, not code"
 	elif and_guarded "$file" "$line"; then
 		reason="is guarded by a leading \"&&\" line-continuation condition"
+	elif true_or_guarded "$file" "$line"; then
+		reason="is guarded by a leading \"true ||\" line-continuation, so it never runs"
 	else
 		fn=$(enclosing_function "$file" "$line")
-		if [ -n "$fn" ] && ! grep -qE "^[[:space:]]*${fn}([[:space:]]|\$)" "$file"; then
-			reason="sits inside function \"$fn\", which is never called"
+		if [ -n "$fn" ]; then
+			local reachable_call=0 caller_line
+			while IFS=: read -r caller_line _; do
+				[ -z "$caller_line" ] && continue
+				if [ -z "$(unreachable_reason "$file" "$caller_line" "$((depth + 1))")" ]; then
+					reachable_call=1
+					break
+				fi
+			done < <(grep -nE "^[[:space:]]*${fn}([[:space:]]|\$)" "$file")
+			if [ "$reachable_call" -eq 0 ]; then
+				reason="sits inside function \"$fn\", which is never called"
+			fi
 		fi
 	fi
 	echo "$reason"

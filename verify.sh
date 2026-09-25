@@ -34,15 +34,15 @@ fi
 echo "== schema self-check =="
 go run ./cmd/labctl validate lab.yaml
 
-# unreachable_reason and its four evasion detectors live in
-# wiring-check.sh, shared with wiring-check-test.sh's mutation cases below
+# unreachable_reason and its evasion detectors live in wiring-check.sh,
+# shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.
 . "$REPO_ROOT/scripts/wiring-check.sh"
 
 echo "== containment preflight refusal tests =="
 ./scripts/containment-preflight-test.sh
 
-echo "== wiring-check catches all four evasions (mutation-tested) =="
+echo "== wiring-check catches every evasion it guards against (mutation-tested) =="
 ./scripts/wiring-check-test.sh
 
 echo "== containment preflight is wired into up-cell.sh =="
