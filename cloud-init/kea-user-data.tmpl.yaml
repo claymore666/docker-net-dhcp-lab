@@ -14,7 +14,10 @@ users:
       - __SSH_PUBKEY__
 package_update: true
 runcmd:
-  - apt-get install -y kea-dhcp4-server kea-ctrl-agent jq
+  # DEBIAN_FRONTEND=noninteractive: kea-ctrl-agent's postinst runs a
+  # debconf select prompt (auth password choice) with no frontend this
+  # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent jq
   - mkdir -p /root/lab-stock-config
   - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
   - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
@@ -49,6 +52,12 @@ runcmd:
     }
     }
     KEAEOF
+  # kea-ctrl-agent.service has ConditionFileNotEmpty=/etc/kea/kea-api-password
+  # (Debian packaging, unconditional); our config carries no
+  # "authentication" stanza so the content is never read as a secret,
+  # it only has to exist non-empty for the unit to start (measured live,
+  # 2026-09-25).
+  - echo lab-kea-api-unused >/etc/kea/kea-api-password
   - systemctl enable --now kea-dhcp4-server
   - systemctl enable --now kea-ctrl-agent
   - touch /var/lib/cloud/lab-bootstrap-done

@@ -13,7 +13,10 @@ users:
       - __SSH_PUBKEY__
 package_update: true
 runcmd:
-  - apt-get install -y isc-dhcp-server
+  # noninteractive: the kea cell hit a debconf prompt that hung apt-get
+  # with no frontend (issue #2, measured live 2026-09-25); same guard
+  # here in case any future isc-dhcp-server package version adds one.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server
   - mkdir -p /root/lab-stock-config
   - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
   - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock

@@ -13,7 +13,9 @@ users:
       - __SSH_PUBKEY__
 package_update: true
 runcmd:
-  - apt-get install -y dnsmasq
+  # noninteractive: same debconf-hang guard as the kea and isc-dhcp
+  # templates (issue #2, measured live 2026-09-25).
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
   - systemctl stop dnsmasq
   - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
   - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock
