@@ -140,12 +140,14 @@ fi
 # Case 6: the counter rises exactly as case 5's, but one attempt actually
 # connects. Must refuse -- a rising drop counter proves nothing about the
 # other targets/ports the probe also tried, so a live connection anywhere
-# must fail the whole run on its own, independent of the counter.
+# must fail the whole run on its own, independent of the counter. The
+# stub stands in for the remote read-connect-and-report command: a bare
+# "|RC=0" is an empty connect message with a 0 exit, i.e. CONNECTED.
 mkdir -p "$tmp/case6-bin"
 cp "$tmp/sudo" "$tmp/case6-bin/"
 cat >"$tmp/case6-bin/ssh" <<'STUB'
 #!/bin/bash
-echo CONNECTED
+printf '|RC=0'
 STUB
 chmod +x "$tmp/case6-bin/ssh"
 cat >"$tmp/case6-bin/nft" <<STUB
@@ -167,13 +169,86 @@ if out6=$(PATH="$tmp/case6-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50
 	echo "$out6" >&2
 	fail=1
 fi
-if ! grep -q 'FAIL -- connected to' <<<"${out6:-}"; then
+if ! grep -q 'FAIL -- CONNECTED' <<<"${out6:-}"; then
 	echo "containment-probe-test: FAIL -- case 6: did not name the connected target" >&2
 	echo "${out6:-}" >&2
+	fail=1
+fi
+
+# Case 7: no port answers, but the remote connect attempt comes straight
+# back with "connection refused" -- a RST from the target's own kernel,
+# proving the SYN got past the firewall. Must refuse and call it REACHED,
+# never BLOCKED, even though the drop counter also rises (the counter
+# proves some other packet was dropped, not this one).
+mkdir -p "$tmp/case7-bin"
+cp "$tmp/sudo" "$tmp/case7-bin/"
+cat >"$tmp/case7-bin/ssh" <<'STUB'
+#!/bin/bash
+printf 'bash: connect: Connection refused|RC=1'
+STUB
+chmod +x "$tmp/case7-bin/ssh"
+cat >"$tmp/case7-bin/nft" <<STUB
+#!/bin/bash
+count_file="$tmp/case7-bin/.calls"
+n=0
+[ -f "\$count_file" ] && n=\$(cat "\$count_file")
+n=\$((n + 1))
+echo "\$n" >"\$count_file"
+if [ "\$n" -eq 1 ]; then
+	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
+else
+	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
+fi
+STUB
+chmod +x "$tmp/case7-bin/nft"
+if out7=$(PATH="$tmp/case7-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1); then
+	echo "containment-probe-test: FAIL -- case 7: passed although a target reset the connection" >&2
+	echo "$out7" >&2
+	fail=1
+fi
+if ! grep -q 'FAIL -- REACHED' <<<"${out7:-}"; then
+	echo "containment-probe-test: FAIL -- case 7: a connection refused was not classified REACHED" >&2
+	echo "${out7:-}" >&2
+	fail=1
+fi
+
+# Case 8: no port answers, and the remote connect attempt fails fast with
+# "no route to host" (a routing fact, not a firewall drop). Must PASS --
+# this must never be classified REACHED just because it failed fast
+# rather than timing out.
+mkdir -p "$tmp/case8-bin"
+cp "$tmp/sudo" "$tmp/case8-bin/"
+cat >"$tmp/case8-bin/ssh" <<'STUB'
+#!/bin/bash
+printf 'bash: connect: No route to host|RC=1'
+STUB
+chmod +x "$tmp/case8-bin/ssh"
+cat >"$tmp/case8-bin/nft" <<STUB
+#!/bin/bash
+count_file="$tmp/case8-bin/.calls"
+n=0
+[ -f "\$count_file" ] && n=\$(cat "\$count_file")
+n=\$((n + 1))
+echo "\$n" >"\$count_file"
+if [ "\$n" -eq 1 ]; then
+	echo 'ip daddr 192.0.2.0/24 counter packets 0 bytes 0 drop'
+else
+	echo 'ip daddr 192.0.2.0/24 counter packets 9 bytes 540 drop'
+fi
+STUB
+chmod +x "$tmp/case8-bin/nft"
+out8=$(PATH="$tmp/case8-bin:$PATH" "$SCRIPT" 10.200.255.10 "$work" 192.0.2.50 2>&1) || {
+	echo "containment-probe-test: FAIL -- case 8: refused although \"no route\" is not evidence of reaching the target" >&2
+	echo "$out8" >&2
+	fail=1
+}
+if ! grep -q 'PASS' <<<"$out8"; then
+	echo "containment-probe-test: FAIL -- case 8: did not print a PASS line" >&2
+	echo "$out8" >&2
 	fail=1
 fi
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "containment-probe-test: PASS -- all 6 cases behaved as expected"
+echo "containment-probe-test: PASS -- all 8 cases behaved as expected"

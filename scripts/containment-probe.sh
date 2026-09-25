@@ -54,9 +54,33 @@ for t in "${TARGETS[@]}"; do
 		# never inferred from ssh's exit code -- ssh itself can fail for
 		# reasons (a dropped control session, a remote timeout) that have
 		# nothing to do with whether the target actually answered.
-		result=$(ssh_run "timeout 2 bash -c 'echo >/dev/tcp/$t/$port' 2>/dev/null && echo CONNECTED || echo BLOCKED" 2>/dev/null || echo BLOCKED)
-		if [ "$result" = "CONNECTED" ]; then
-			echo "containment-probe: FAIL -- connected to $t:$port; containment did not hold" >&2
+		#
+		# CONNECTED (rc 0): the port answered outright.
+		# REACHED: bash's own connect() came straight back with
+		# "connection refused" -- a RST, sent by the target's own
+		# kernel, proves the SYN reached it past the firewall, so this
+		# counts as a failure too. LC_ALL=C pins the message to English
+		# regardless of the remote host's locale, the same reason
+		# numeric awk/sort runs under LC_ALL=C elsewhere in this repo.
+		# BLOCKED: a genuine 2s timeout (rc 124, the SYN was silently
+		# dropped) or any other fast failure such as "no route to
+		# host"/"network unreachable" -- a routing fact, not evidence
+		# the packet reached anything -- both the expected, passing
+		# outcome.
+		raw=$(ssh_run "out=\$(LC_ALL=C timeout 2 bash -c 'echo >/dev/tcp/$t/$port' 2>&1); rc=\$?; printf '%s|RC=%s' \"\$out\" \"\$rc\"" 2>/dev/null || printf '|RC=124')
+		rc=${raw##*RC=}
+		msg=${raw%|RC=*}
+		if [ "$rc" = "0" ]; then
+			result=CONNECTED
+		elif [ "$rc" = "124" ]; then
+			result=BLOCKED
+		elif grep -qi refused <<<"$msg"; then
+			result=REACHED
+		else
+			result=BLOCKED
+		fi
+		if [ "$result" = "CONNECTED" ] || [ "$result" = "REACHED" ]; then
+			echo "containment-probe: FAIL -- $result $t:$port; containment did not hold" >&2
 			connected=1
 		fi
 	done
