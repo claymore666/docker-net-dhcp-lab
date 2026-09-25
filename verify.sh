@@ -252,6 +252,28 @@ fi
 rm -rf "$gate_stub"
 trap - EXIT
 
+echo "== comment blocks in tracked shell scripts stay <=10 lines =="
+# A run of consecutive "#" lines, the shebang excluded. Catches the drift
+# this repo has already hit twice: a header or case comment creeping past
+# the limit with nothing to stop it.
+comment_max=10
+comment_offenders=""
+while IFS= read -r f; do
+	over=$(awk -v max="$comment_max" -v file="$f" '
+		NR==1 && /^#!/ { next }
+		/^[[:space:]]*#/ { if (count==0) start=NR; count++; next }
+		{ if (count>max) print file":"start": comment block of "count" lines (max "max")"; count=0 }
+		END { if (count>max) print file":"start": comment block of "count" lines (max "max")" }
+	' "$f")
+	[ -n "$over" ] && comment_offenders="$comment_offenders
+$over"
+done < <(git ls-files '*.sh')
+if [ -n "$comment_offenders" ]; then
+	echo "verify.sh: comment block(s) over $comment_max lines:" >&2
+	echo "$comment_offenders" >&2
+	exit 1
+fi
+
 echo "== hygiene fixture tests =="
 ./scripts/hygiene-check-test.sh
 

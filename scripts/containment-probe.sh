@@ -2,16 +2,13 @@
 # The load-bearing containment check (issue #1/#3 direction):
 # containment-preflight.sh only proves the ci_dmz drop rule is present in
 # the ruleset text -- it never proves traffic is actually dropped. This
-# generates real outbound TCP attempts from inside the cell's Docker host
-# VM, fails outright if any of them actually connects, and confirms the
-# host's own /24 drop counter also rose. No literal home-network address
-# is written here: targets come from the caller's command line and are
-# never stored, and the drop rule is matched by shape, the same way
-# containment-preflight.sh matches its own rule. This repo's own version
-# of the proof named in that script's header (`dmz-probe.sh`, private).
-# The /24 drop counter this script reads is host-wide, not scoped to one
-# cell: run only one cell's probe at a time, or a concurrent probe on
-# this host will move the same counter.
+# generates real outbound TCP attempts from the cell's Docker host VM,
+# fails outright if any connects, and confirms the host's own /24 drop
+# counter rose too. No literal home-network address is written here:
+# targets come from the caller's command line and are matched by shape,
+# never stored. This repo's version of the proof named in
+# containment-preflight.sh's header (`dmz-probe.sh`, private). The
+# counter is host-wide: run only one cell's probe at a time.
 set -euo pipefail
 
 MGMT_IP=${1:?usage: containment-probe.sh <mgmt-ip> <work-dir> <target-ip> [<target-ip> ...]}

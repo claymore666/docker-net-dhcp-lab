@@ -246,17 +246,12 @@ fi
 # blocked; every attempt after it leaks silently (times out, but
 # nothing actually dropped it). The /24 drop counter is state-driven,
 # not indexed by call number: the fake connect step is the only thing
-# that ever changes it (+2 for a blocked attempt, matching the measured
-# real-iptables SYN+retry ratio, +0 for a leak), and the nft stub always
-# reports whatever the true running value currently is, however many
-# times or in whatever order the probe calls it. A call-number-indexed
-# stub cannot do this: a mutant that changes how many times, or when,
-# the probe reads the counter (e.g. reusing the initial "before" read
-# as every attempt's "pre" instead of a fresh per-attempt read) still
-# gets a plausible-looking value keyed to its position in a canned
-# sequence, and can pass by accident; a state-driven stub gives every
-# mutant the one true value there actually is to work with, so it
-# cannot be fooled by a shifted call count.
+# that changes it (+2 blocked, +0 leak), and nft always reports the
+# true running value, however many times or in whatever order the
+# probe reads it. A call-number-indexed stub cannot do this: a mutant
+# that changes how many times the probe reads the counter (e.g. reusing
+# the initial "before" read as "pre") can still get a plausible canned
+# value and pass by accident; a state-driven stub cannot be fooled that way.
 mkdir -p "$tmp/case9-bin"
 cp "$tmp/sudo" "$tmp/case9-bin/"
 echo 0 >"$tmp/case9-bin/.counter"
