@@ -22,6 +22,9 @@ runcmd:
   - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
   - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
   - echo '[]' >/etc/kea/reservations.json
+  # lease_cmds hook: lease4-get-all (our adapter's read path, issue #2)
+  # is not a core command -- without this the control agent answers
+  # result=2 "unsupported" (measured live, 2026-09-25).
   - |
     cat >/etc/kea/kea-dhcp4.conf <<'KEAEOF'
     {
@@ -30,6 +33,9 @@ runcmd:
       "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
       "lease-database": { "type": "memfile", "persist": true },
       "valid-lifetime": 3600,
+      "hooks-libraries": [
+        { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
+      ],
       "subnet4": [
         {
           "id": 1,
