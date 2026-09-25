@@ -2,12 +2,25 @@
 # Give the observer container a leg on one segment and capture on it
 # (issue #1, done means: "the observer captures" a DHCPDISCOVER). The
 # container itself never touches the segment's IP space; it only listens.
+#
+# Every docker call here runs under sudo -n (issue #1/#3 direction): this
+# script runs directly on the lab host, root-equivalent for anything that
+# touches the docker socket, and the operator running it is deliberately
+# not added to the docker group for that reason -- same privilege shape
+# as up-cell.sh's own sudo -n calls.
 set -euo pipefail
 
 CELL=${1:?usage: observe-segment.sh <cell-name> <bridge> <pcap-path> <seconds>}
 BRIDGE=${2:?}
 PCAP=${3:?}
 SECONDS_TO_CAPTURE=${4:-25}
+
+# The caller's own synchronization point (issue #1/#3 direction: "the
+# observer must be capturing before the network create"). Written only
+# once tcpdump is confirmed running inside the container below, never
+# on a fixed guess at how long apk/veth setup takes.
+READY="$(dirname "$PCAP")/observer.ready"
+rm -f "$READY"
 
 # Linux interface names are capped at 15 characters (IFNAMSIZ-1); a
 # name built from the cell name directly overflows that for any cell
@@ -20,7 +33,7 @@ VETH_HOST="veth-obs-${cell_hash}h"
 VETH_PEER="veth-obs-${cell_hash}c"
 CONTAINER="lab-observer-${CELL}"
 
-docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+sudo -n docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 ip link del "$VETH_HOST" 2>/dev/null || true
 
 # Started on Docker's own default bridge (has outbound internet via the
@@ -29,10 +42,10 @@ ip link del "$VETH_HOST" 2>/dev/null || true
 # route out, so apk cannot reach a mirror from it (measured live, issue
 # #1: "temporary error" / "no such package" once network none was tried
 # first). The container never touches segment IP space either way.
-docker run -d --name "$CONTAINER" --cap-add NET_ADMIN --cap-add NET_RAW \
+sudo -n docker run -d --name "$CONTAINER" --cap-add NET_ADMIN --cap-add NET_RAW \
 	--entrypoint sleep alpine:3.20 infinity >/dev/null
-docker exec "$CONTAINER" sh -c "apk add --no-cache tcpdump >/dev/null"
-docker network disconnect bridge "$CONTAINER"
+sudo -n docker exec "$CONTAINER" sh -c "apk add --no-cache tcpdump >/dev/null"
+sudo -n docker network disconnect bridge "$CONTAINER"
 
 # A plain veth added as a bridge port, as originally designed. Making
 # this work end to end needed a separate host fix (issue #1): the
@@ -46,17 +59,32 @@ docker network disconnect bridge "$CONTAINER"
 # VM starts), not here.
 ip link add "$VETH_HOST" type veth peer name "$VETH_PEER"
 "$(dirname "${BASH_SOURCE[0]}")/build-bridge.sh" "$BRIDGE" --add-port "$VETH_HOST"
-pid=$(docker inspect -f '{{.State.Pid}}' "$CONTAINER")
+pid=$(sudo -n docker inspect -f '{{.State.Pid}}' "$CONTAINER")
 ip link set "$VETH_PEER" netns "$pid"
 nsenter -t "$pid" -n ip link set lo up
 nsenter -t "$pid" -n ip link set "$VETH_PEER" name eth-obs up
 
-docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U 'udp port 67 or udp port 68'
+sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U 'udp port 67 or udp port 68'
+
+# Bounded wait for tcpdump to actually be the running process before
+# telling the caller it is safe to generate traffic -- apk/veth setup
+# above can take longer than any fixed guess, and a caller that starts
+# the DHCPDISCOVER before the capture is live loses the frame silently.
+waited=0
+until sudo -n docker exec "$CONTAINER" sh -c "pgrep -f 'tcpdump -i eth-obs' >/dev/null" 2>/dev/null; do
+	waited=$((waited + 1))
+	if [ "$waited" -ge 100 ]; then
+		echo "observe-segment: FAIL -- tcpdump did not start inside the 10s bound" >&2
+		exit 1
+	fi
+	sleep 0.1
+done
+: >"$READY"
 
 echo "observe-segment: capturing on $BRIDGE for ${SECONDS_TO_CAPTURE}s"
 sleep "$SECONDS_TO_CAPTURE"
 
-docker exec "$CONTAINER" pkill tcpdump || true
+sudo -n docker exec "$CONTAINER" pkill tcpdump || true
 sleep 1
-docker cp "$CONTAINER:/tmp/obs.pcap" "$PCAP"
+sudo -n docker cp "$CONTAINER:/tmp/obs.pcap" "$PCAP"
 echo "observe-segment: wrote $PCAP"

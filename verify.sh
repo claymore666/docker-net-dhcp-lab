@@ -153,6 +153,27 @@ echo "== down-cell refusal and pcap-preservation tests =="
 echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
 ./scripts/lab-known-hosts-test.sh
 
+echo "== containment probe refusal and pass-path tests =="
+./scripts/containment-probe-test.sh
+
+echo "== no host-side script calls bare docker =="
+# A host-side call (one this repo's own scripts run directly on the lab
+# host, not a string handed to ssh_run for the VM to run) must go through
+# sudo -n, same reasoning as the preflight/firewall calls above: the
+# operator running these scripts is deliberately not in the docker group,
+# since docker-group membership is root-equivalent on the host (issue
+# #1/#3 direction). Matched only at true statement-start or immediately
+# after a command substitution's "$(" -- the in-VM "sudo docker ..."
+# strings passed to ssh_run start with ssh_run, not docker, so they never
+# match this and are correctly left alone.
+offenders=$(grep -nE '(^[[:space:]]*docker[[:space:]]|\$\(docker[[:space:]])' scripts/*.sh \
+	| grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' || true)
+if [ -n "$offenders" ]; then
+	echo "verify.sh: host-side docker call(s) without sudo -n:" >&2
+	echo "$offenders" >&2
+	exit 1
+fi
+
 echo "== every lab ssh/scp call carries the per-cell known_hosts option =="
 # Every real invocation line, not a function definition (ssh_run() {) or a
 # call to one (ssh_run "..."), which the (^|[^_a-zA-Z]) alternation and the

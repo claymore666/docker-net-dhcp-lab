@@ -18,7 +18,26 @@ mgmt_ip=${mgmt_addr%%/*}
 
 "$REPO_ROOT/scripts/observe-segment.sh" "$CELL" "$bridge" "$PCAP" 30 &
 observer_pid=$!
-sleep 3
+
+# Bounded wait on the observer's own ready marker (issue #1/#3 direction:
+# "the observer must be capturing before the network create"), never a
+# fixed sleep -- observe-segment.sh's apk/veth setup time is not constant.
+READY="$WORK/observer.ready"
+waited=0
+until [ -f "$READY" ]; do
+	if ! kill -0 "$observer_pid" 2>/dev/null; then
+		echo "demo-ref-cell: FAIL -- observer exited before it became ready" >&2
+		exit 1
+	fi
+	waited=$((waited + 1))
+	if [ "$waited" -ge 200 ]; then
+		echo "demo-ref-cell: FAIL -- observer did not become ready inside the 60s bound" >&2
+		kill "$observer_pid" 2>/dev/null || true
+		exit 1
+	fi
+	sleep 0.3
+done
+
 "$REPO_ROOT/scripts/run-dhcpdiscover-test.sh" "$mgmt_ip" "$WORK"
 wait "$observer_pid"
 
