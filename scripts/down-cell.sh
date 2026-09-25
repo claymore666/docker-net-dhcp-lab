@@ -1,14 +1,28 @@
 #!/bin/bash
 # Tear down one cell brought up by up-cell.sh: destroy and undefine its
-# domain (its per-VM NVRAM copy included, issue #1), then remove
-# its work directory. Never touches the segment bridge or net-mgmt
-# themselves -- other cells may still use them. Idempotent: safe to run
-# on a cell that is already down or was never fully brought up.
+# domain (its per-VM NVRAM copy included, issue #1), remove the
+# observer's own container and its host-side veth (issue #1/#3
+# direction: left behind by every prior version of this script), then
+# remove the work directory. Never touches the segment bridge or
+# net-mgmt themselves -- other cells may still use them. Idempotent:
+# safe to run on a cell that is already down or was never fully brought
+# up, or one that never had an observer at all.
 set -euo pipefail
 
 CELL=${1:?usage: down-cell.sh <cell-name> <work-dir>}
 WORK=${2:?usage: down-cell.sh <cell-name> <work-dir>}
 domain="lab-${CELL}-dockerhost"
+
+# Same naming as observe-segment.sh's own container and host-side veth
+# (its comment there has the IFNAMSIZ reasoning for the hash); recomputed
+# here rather than shared, matching every other script in this repo.
+# sudo -n for the same reason as the virsh calls below -- the operator is
+# not in the docker group and has no bare CAP_NET_ADMIN either.
+cell_hash=$(echo -n "$CELL" | md5sum | cut -c1-5)
+observer_veth="veth-obs-${cell_hash}h"
+observer_container="lab-observer-${CELL}"
+sudo -n docker rm -f "$observer_container" >/dev/null 2>&1 || true
+sudo -n ip link del "$observer_veth" 2>/dev/null || true
 
 # sudo -n, matching up-cell.sh: net-mgmt and this domain live under
 # qemu:///system, not the empty per-user qemu:///session a plain virsh

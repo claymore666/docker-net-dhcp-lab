@@ -82,7 +82,56 @@ if [ ! -d "$work2" ] || [ ! -f "$work2/capture.pcap" ]; then
 	fail=1
 fi
 
+# Case 3: proves the observer container and its host-side veth are
+# actually targeted for removal (issue #1/#3 direction: down-cell.sh used
+# to leave both behind), and that a "no such container"/"cannot find
+# device" failure from an already-absent one does not fail the script --
+# the same shape as up-cell.sh's own idempotent-rerun guarantee. docker
+# and ip are logged, not just stubbed, so a call that goes bare (skips
+# the sudo -n wrapper above them) or is missing entirely is caught either
+# way: a bare call never reaches this stub at all, since PATH here has no
+# real docker/ip ahead of the pass-through sudo's exec.
+case3=$(mktemp -d "$tmp/case3-XXXXXX")
+work3="$case3/work"
+mkdir -p "$work3"
+cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+chmod +x "$tmp/virsh"
+calls3="$case3/calls.log"
+: >"$calls3"
+cat >"$tmp/docker" <<STUB
+#!/bin/bash
+echo "docker \$*" >>"$calls3"
+exit 1
+STUB
+chmod +x "$tmp/docker"
+cat >"$tmp/ip" <<STUB
+#!/bin/bash
+echo "ip \$*" >>"$calls3"
+exit 1
+STUB
+chmod +x "$tmp/ip"
+evdir3="$case3/evidence"
+out3=$(LAB_EVIDENCE_DIR="$evdir3" PATH="$tmp:$PATH" "$SCRIPT" case3cell "$work3" 2>&1) || {
+	echo "down-cell-test: FAIL -- case 3: teardown failed although the observer container/veth were merely absent" >&2
+	echo "$out3" >&2
+	fail=1
+}
+hash3=$(echo -n case3cell | md5sum | cut -c1-5)
+if ! grep -qE "^docker rm -f lab-observer-case3cell\$" "$calls3"; then
+	echo "down-cell-test: FAIL -- case 3: observer container was never targeted for removal" >&2
+	cat "$calls3" >&2
+	fail=1
+fi
+if ! grep -qE "^ip link del veth-obs-${hash3}h\$" "$calls3"; then
+	echo "down-cell-test: FAIL -- case 3: observer veth was never targeted for removal" >&2
+	cat "$calls3" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- both cases behaved as expected"
+echo "down-cell-test: PASS -- all three cases behaved as expected"
