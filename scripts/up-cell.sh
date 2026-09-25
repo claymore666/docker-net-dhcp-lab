@@ -1,7 +1,8 @@
 #!/bin/bash
 # Bring up one cell from lab.yaml: segment bridge, per-run VM overlay, the
 # reference Docker host, and the observer's leg on the segment (issue #1).
-# Idempotent enough to re-run after a power cut (track file, "Power").
+# Idempotent enough to re-run after a power cut: the lab host is not
+# always up, so every step here must be safe to run again from scratch.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

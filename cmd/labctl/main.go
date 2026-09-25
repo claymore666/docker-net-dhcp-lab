@@ -1,7 +1,6 @@
-// labctl is the lab's Go control plane (track file, L10): it owns
-// lab.yaml and hands resolved, already-validated values to the shell
-// scripts that do the provisioning. It never touches the network or
-// libvirt itself.
+// labctl is the lab's Go control plane: it owns lab.yaml and hands
+// resolved, already-validated values to the shell scripts that do the
+// provisioning. It never touches the network or libvirt itself.
 package main
 
 import (
