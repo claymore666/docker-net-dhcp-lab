@@ -20,7 +20,7 @@ jobs:
       - name: openssh-server
         # lab-known-hosts-test.sh runs a real sshd on loopback to prove the
         # per-cell known_hosts fix; without this it would only SKIP here.
-        run: sudo apt-get update && sudo apt-get install -y openssh-server
+        run: sudo apt-get update && sudo apt-get install -y openssh-server tcpdump
       - name: allow unprivileged user namespaces
         # Ubuntu 24.04 runners restrict plain `unshare --user` via AppArmor
         # by default; build-bridge-test.sh needs it to drive real `ip link`
