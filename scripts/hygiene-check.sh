@@ -25,7 +25,6 @@ while IFS= read -r -d '' f; do
 	*/.git/*) continue ;;
 	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
 	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
-	verify.sh) continue ;;                     # carries the same kind of regex literal, for the commit-message scan
 	*_test.go) continue ;;                     # synthetic fixtures in a TempDir, never shipped or run anywhere real
 	esac
 	line_no=0
@@ -45,7 +44,15 @@ while IFS= read -r -d '' f; do
 				fi
 			done <<<"$matches"
 		fi
-		if grep -qE "$PROCESS_RE" <<<"$line"; then
+		# A line that IS the pattern definition, not prose using it (e.g. a
+		# regex literal naming these same words), carries this exact
+		# trailing marker and is exempt from this one check only -- the
+		# address check above still runs on it. Matched case-sensitively,
+		# so it cannot be smuggled in by a differently-cased comment.
+		if grep -qE '#[[:space:]]*hygiene:[[:space:]]*pattern literal, not prose[[:space:]]*$' <<<"$line"; then
+			continue
+		fi
+		if grep -qiE "$PROCESS_RE" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi

@@ -16,8 +16,14 @@ git -C "$fixture_repo" config user.name test
 cp "$REPO_ROOT/scripts/hygiene-check.sh" "$fixture_repo/scripts/hygiene-check.sh"
 
 run_case() {
-	local desc=$1 content=$2 want=$3 # want: ok | fail
-	printf '%s' "$content" >"$fixture_repo/note.txt"
+	local desc=$1 content=$2 want=$3 file=${4:-note.txt} # want: ok | fail
+	# Every fixture file this suite ever writes to starts each case clean,
+	# so a violation left behind by an earlier case (in a file other than
+	# the one this case targets) can never leak forward and contaminate
+	# a later "ok" expectation.
+	: >"$fixture_repo/note.txt"
+	: >"$fixture_repo/verify.sh"
+	printf '%s' "$content" >"$fixture_repo/$file"
 	git -C "$fixture_repo" add -A
 	if (cd "$fixture_repo" && ./scripts/hygiene-check.sh) >/dev/null 2>&1; then
 		got=ok
@@ -71,8 +77,26 @@ run_case "role word: reviewer" \
 # (word-boundary check, not a bare substring match).
 run_case "substring, not a role word" \
 	$'note: a leading indent, a leaderboard entry\n' ok || fail=1
+# A capitalised role word must be caught too -- the reviewer's own case.
+run_case "role word, capitalised" \
+	$'Lead and Reviewer agreed this in round 2.\n' fail || fail=1
+# verify.sh must no longer be blanket-exempt: the same address and role-
+# word violations that are caught in any other file must be caught here.
+run_case "verify.sh, address no longer exempt" \
+	$'note: host at 192.168.7.7\n' fail verify.sh || fail=1
+run_case "verify.sh, agent tag and role word no longer exempt" \
+	$'# as the lead asked at exchange-2, ping lab-rev-z\n' fail verify.sh || fail=1
+# A line that IS the pattern definition (the marker verify.sh itself
+# carries on its process/role-word grep) must stay clean, on a file that
+# is otherwise fully scanned.
+run_case "verify.sh, marked pattern-literal line stays clean" \
+	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
+	ok verify.sh || fail=1
+# The same line without the marker is ordinary prose and must be caught.
+run_case "verify.sh, same words with no marker" \
+	$'match lead coordinator maintainer reviewer\n' fail verify.sh || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 13 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 18 cases behaved as expected"
