@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -34,7 +35,48 @@ var (
 	iscHWRE         = regexp.MustCompile(`hardware ethernet\s+([0-9a-fA-F:]+);`)
 	iscHostRE       = regexp.MustCompile(`client-hostname\s+"([^"]*)";`)
 	iscStateRE      = regexp.MustCompile(`binding state\s+(\w+);`)
+	iscUIDRE        = regexp.MustCompile(`(?s)uid\s+"(.*?)";`)
 )
+
+// decodeISCQuotedString turns dhcpd.leases' own C-style quoting for a
+// binary field (the "uid" client-id, option 61) back into raw bytes:
+// dhcpd prints a printable ASCII byte literally and any other byte as a
+// three-digit octal escape ("\NNN"), the same convention as its own
+// print_hw_addr/lease-dump code (#3) -- so \" and \\ are the only
+// two-character escapes, and every other backslash must begin a
+// three-digit octal run.
+func decodeISCQuotedString(s string) ([]byte, error) {
+	var out []byte
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c != '\\' {
+			out = append(out, c)
+			i++
+			continue
+		}
+		if i+1 >= len(s) {
+			return nil, fmt.Errorf("isc-dhcp: uid string ends mid-escape: %q", s)
+		}
+		switch next := s[i+1]; {
+		case next == '"' || next == '\\':
+			out = append(out, next)
+			i += 2
+		case next >= '0' && next <= '7':
+			if i+4 > len(s) {
+				return nil, fmt.Errorf("isc-dhcp: truncated octal escape in uid string: %q", s)
+			}
+			v, err := strconv.ParseUint(s[i+1:i+4], 8, 8)
+			if err != nil {
+				return nil, fmt.Errorf("isc-dhcp: bad octal escape %q in uid string: %w", s[i+1:i+4], err)
+			}
+			out = append(out, byte(v))
+			i += 4
+		default:
+			return nil, fmt.Errorf("isc-dhcp: unrecognized escape in uid string: %q", s)
+		}
+	}
+	return out, nil
+}
 
 // parseISCLeases keeps the LAST block per address (dhcpd appends renewals
 // at the end of the file) and drops any address whose latest block is not
@@ -62,6 +104,13 @@ func parseISCLeases(raw string) ([]Lease, error) {
 		}
 		if m := iscHostRE.FindStringSubmatch(body); len(m) == 2 {
 			l.Hostname = m[1]
+		}
+		if m := iscUIDRE.FindStringSubmatch(body); len(m) == 2 {
+			raw, err := decodeISCQuotedString(m[1])
+			if err != nil {
+				return nil, fmt.Errorf("isc-dhcp: lease %s: %w", ip, err)
+			}
+			l.ClientID = hexColon(raw)
 		}
 		byIP[ip] = l
 	}
@@ -98,6 +147,10 @@ func (a *ISCDHCPAdapter) ReserveMAC(ctx context.Context, mac, addr string) error
 func (a *ISCDHCPAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
 func (a *ISCDHCPAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
 func (a *ISCDHCPAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
+
+func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
+	return reachable(ctx, a.Runner, addr)
+}
 
 func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" isc-dhcp-server"); err != nil {

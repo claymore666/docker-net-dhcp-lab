@@ -23,6 +23,7 @@ run_case() {
 	# a later "ok" expectation.
 	: >"$fixture_repo/note.txt"
 	: >"$fixture_repo/verify.sh"
+	: >"$fixture_repo/sample_test.go"
 	printf '%s' "$content" >"$fixture_repo/$file"
 	git -C "$fixture_repo" add -A
 	if (cd "$fixture_repo" && ./scripts/hygiene-check.sh) >/dev/null 2>&1; then
@@ -116,8 +117,37 @@ run_case "verdict word: CLEAR" \
 # stay clean.
 run_case "ordinary prose, not a verdict word" \
 	$'note: this fix will hold up, and make the intent clear\n' ok || fail=1
+# A private record a public reader cannot open (a handover) and the
+# instruction it recorded (a directive) must be caught, each on its
+# own, with no address anywhere on the line.
+run_case "handover pointer" \
+	$'note: recorded in the handover, not reproduced here\n' fail || fail=1
+run_case "directive word" \
+	$'note: per the directive, drop it\n' fail || fail=1
+# A word that merely contains "directive" as a substring must stay
+# clean (word-boundary check, not a bare substring match), the same
+# shape as the role-word substring case above.
+run_case "substring, not the directive word" \
+	$'note: reloads a handful of directives but not a new lease\n' ok || fail=1
+# A .claude path is never openable by a public reader and must be
+# caught as a fixed string, regardless of what precedes or follows it.
+run_case ".claude path" \
+	$'note: see .claude/tracks/lab.md for background\n' fail || fail=1
+# A _test.go fixture legitimately carries a made-up private address for
+# its own synthetic data and must still pass -- only the address check
+# keeps skipping test files.
+run_case "test file, private address only" \
+	$'// addr := "192.168.7.7"\n' ok sample_test.go || fail=1
+# The same shape of file carrying a role word must now be caught: the
+# process/path check no longer skips test files, only the address
+# check does -- this is the miss the wrapped "lead directive" leftovers
+# in *_test.go slipped through before.
+run_case "test file, role word" \
+	$'// as the lead noted, this fixture is synthetic\n' fail sample_test.go || fail=1
+run_case "test file, handover pointer" \
+	$'// (.claude/handover/some-file.md)\n' fail sample_test.go || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 23 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 31 cases behaved as expected"

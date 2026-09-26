@@ -48,7 +48,14 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 		if _, err := net.ParseMAC(mac); err != nil {
 			return nil, fmt.Errorf("dnsmasq: lease line %d: invalid MAC %q: %w", i+1, mac, err)
 		}
-		leases = append(leases, Lease{MAC: mac, Address: ip, Hostname: host})
+		l := Lease{MAC: mac, Address: ip, Hostname: host}
+		// Field 5, the client-id (option 61), is dnsmasq's own
+		// colon-hex encoding, or "*" when the client sent none
+		// (#3).
+		if len(fields) >= 5 && fields[4] != "*" {
+			l.ClientID = strings.ToLower(fields[4])
+		}
+		leases = append(leases, l)
 	}
 	return leases, nil
 }
@@ -77,6 +84,10 @@ func (a *DnsmasqAdapter) ReserveMAC(ctx context.Context, mac, addr string) error
 func (a *DnsmasqAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
 func (a *DnsmasqAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
 func (a *DnsmasqAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
+
+func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
+	return reachable(ctx, a.Runner, addr)
+}
 
 func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" dnsmasq"); err != nil {

@@ -1,0 +1,643 @@
+package scenario
+
+import (
+	"context"
+	"fmt"
+	"hash/fnv"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// fixedMACFor derives a deterministic, valid locally-administered
+// unicast MAC for A5b, distinct per cell x shape so parallel cells never
+// collide on the same segment (#3).
+func fixedMACFor(cell string, shape Shape) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
+	sum := h.Sum32()
+	return fmt.Sprintf("02:42:%02x:%02x:%02x:%02x", byte(sum>>24), byte(sum>>16), byte(sum>>8), byte(sum))
+}
+
+// containerName is deterministic per cell x shape x scenario: a re-run
+// finds and removes exactly the container a previous run left, the same
+// discipline NetworkUp already applies to the network itself.
+func containerName(e Env, scenario string) string {
+	return fmt.Sprintf("lab-%s-%s-%s", e.Cell, e.Shape, scenario)
+}
+
+func evidencePath(e Env, scenario, label string) string {
+	return filepath.Join(e.EvidenceDir, fmt.Sprintf("%s-%s-%s-%s.txt", e.Cell, e.Shape, scenario, label))
+}
+
+// corroborate adds a capture-based cross-check as an extra evidence
+// file, best-effort: ipvlan shares one MAC across every slave, so a
+// capture cannot be tied to one container's exchange there, and a
+// capture read failure is never fatal to a verdict the lease table
+// already backs. It never flips a PASS to FAIL by itself (issue #3: the
+// source's own lease table is the verdict; the capture corroborates
+// it), but a disagreement is recorded in the evidence file's own text so
+// it is never silently dropped.
+func corroborate(ctx context.Context, e Env, mac string, ev map[string]string, scenario, label string) {
+	if e.Shape == ShapeIpvlan || e.PCAP == "" {
+		return
+	}
+	path := evidencePath(e, scenario, label)
+	reason, err := dhcpExchangeReason(ctx, e.RepoRoot, e.PCAP, mac)
+	var text string
+	if err != nil {
+		text = fmt.Sprintf("dhcp_exchange_reason error: %v\n", err)
+	} else if reason == "" {
+		text = "clean 4-message exchange for this mac in the cell capture\n"
+	} else {
+		text = fmt.Sprintf("capture disagreement: %s\n", reason)
+	}
+	if writeErr := os.WriteFile(path, []byte(text), 0o644); writeErr == nil {
+		ev[label] = path
+	}
+}
+
+// runA1 -- first lease: a fresh container on a fresh network must get an
+// address the source's own table confirms.
+func runA1(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA1)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA1, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+
+	snap := evidencePath(e, NameA1, "leases-after")
+	lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
+	if err != nil {
+		return fail(NameA1, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{"leases-after": snap}
+	if !ok {
+		return fail(NameA1, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA1, e.Cell, e.Shape,
+			fmt.Sprintf("container mac %s has a lease for %s, but the source could not reach it within %ds: %v", mac, addr, secs, err), ev, e.GitSHA)
+	}
+	corroborate(ctx, e, mac, ev, NameA1, "capture-check")
+	return pass(NameA1, e.Cell, e.Shape,
+		fmt.Sprintf("container mac %s got address %s, confirmed in the source's own lease table (hostname %q), reachable from the source after %ds", mac, addr, lease.Hostname, secs),
+		ev, e.GitSHA)
+}
+
+// runA2 -- container restart: the same container, stopped and started
+// again by Docker itself, must keep the same address in the source's
+// table. Re-inspects the container after the restart rather than
+// reusing the pre-restart mac and endpoint id: ipvlan mints a fresh
+// endpoint id (and so a fresh client-id) on every restart
+// (docs/reference.md "DHCP identity", #219), which the "after" lookup
+// must use, not the "before" one.
+//
+// A changed address is a FAIL on bridge and macvlan, never tuned away.
+// On ipvlan it is a PASS with a note instead: the plugin writes no
+// tombstone for ipvlan and its client id does not survive a restart, so
+// a new address there is documented behaviour, not a plugin defect
+// (docs/reference.md "Restart stability (MAC and IP)", #219). Either
+// way the check still requires a lease under the new address and that
+// the source can reach the container there.
+func runA2(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA2)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA2, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA2, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker restart %s", name)); err != nil {
+		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("docker restart failed: %v", err), evBefore, e.GitSHA)
+	}
+	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
+		return fail(NameA2, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	_, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("inspect after restart: %v", err), evBefore, e.GitSHA)
+	}
+
+	afterSnap := evidencePath(e, NameA2, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterEndpointID, afterSnap)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after restart: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA2, e.Cell, e.Shape, "after restart: "+leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID), ev, e.GitSHA)
+	}
+	if afterAddr != addr {
+		if e.Shape != ShapeIpvlan {
+			return fail(NameA2, e.Cell, e.Shape,
+				fmt.Sprintf("address changed across restart: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+		}
+		secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+		if err != nil {
+			return fail(NameA2, e.Cell, e.Shape,
+				fmt.Sprintf("container restarted and has a lease for the new address %s, but the source could not reach it within %ds: %v", afterAddr, secs, err), ev, e.GitSHA)
+		}
+		return pass(NameA2, e.Cell, e.Shape,
+			fmt.Sprintf("container restarted, address changed (%s -> %s) as documented for ipvlan (#219), confirmed in the source's table both times, reachable from the source after %ds", addr, afterAddr, secs),
+			ev, e.GitSHA)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape,
+			fmt.Sprintf("container restarted and kept address %s, but the source could not reach it within %ds: %v", addr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA2, e.Cell, e.Shape,
+		fmt.Sprintf("container restarted, kept address %s, confirmed in the source's table both times, reachable from the source after %ds", addr, secs),
+		ev, e.GitSHA)
+}
+
+// runA3 -- compose down/up: removing and recreating the container (a new
+// random MAC, same as `docker compose down; up` would give it unless
+// pinned) must still produce a confirmed lease. It does not require the
+// same address -- release-on-down is a source policy choice, not a
+// plugin defect -- and reports whether the address was reused or
+// changed without failing on either.
+func runA3(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA3)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac1, addr1, endpointID1, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("container did not start (down): %v", err), nil, e.GitSHA)
+	}
+	downSnap := evidencePath(e, NameA3, "leases-down")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac1, addr1, endpointID1, downSnap)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evDown := map[string]string{"leases-down": downSnap}
+	if !ok {
+		return fail(NameA3, e.Cell, e.Shape, "before down: "+leaseFailReason(e.Shape, mac1, addr1, endpointID1), evDown, e.GitSHA)
+	}
+	removeContainer(ctx, e.Host, name)
+
+	mac2, addr2, endpointID2, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("container did not start (up): %v", err), evDown, e.GitSHA)
+	}
+	upSnap := evidencePath(e, NameA3, "leases-up")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac2, addr2, endpointID2, upSnap)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after up: %v", err), evDown, e.GitSHA)
+	}
+	ev := map[string]string{"leases-down": downSnap, "leases-up": upSnap}
+	if !ok {
+		return fail(NameA3, e.Cell, e.Shape, "after up: "+leaseFailReason(e.Shape, mac2, addr2, endpointID2), ev, e.GitSHA)
+	}
+	reuse := "reused the same address"
+	if addr2 != addr1 {
+		reuse = fmt.Sprintf("got a different address (%s -> %s)", addr1, addr2)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr2)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape,
+			fmt.Sprintf("fresh container has a lease for %s, but the source could not reach it within %ds: %v", addr2, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA3, e.Cell, e.Shape,
+		fmt.Sprintf("fresh container after down/up got address %s, confirmed in the source's table (%s), reachable from the source after %ds", addr2, reuse, secs),
+		ev, e.GitSHA)
+}
+
+// runA4 -- daemon restart: dockerd on the docker host is restarted while
+// the container is up; PASS needs all of: the container Running again,
+// the source's own table showing the same MAC with a renewed or new
+// lease, and the source able to reach the container afterwards. The
+// container runs with --restart unless-stopped: with no restart policy
+// Docker never brings a container back after dockerd restarts or the
+// host reboots, by design, so a scenario testing that case would be
+// testing a container no real user would run this way, not the plugin
+// (issue #3).
+func runA4(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA4)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac, addr, endpointID, err := runContainerPolicy(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped")
+	if err != nil {
+		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA4, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA4, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	if _, err := e.Host.Run(ctx, "sudo systemctl restart docker"); err != nil {
+		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("systemctl restart docker: %v", err), evBefore, e.GitSHA)
+	}
+	if err := waitDockerBack(ctx, e.Host, 60*time.Second); err != nil {
+		return fail(NameA4, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
+		return fail(NameA4, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	if err != nil {
+		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("inspect after daemon restart: %v", err), evBefore, e.GitSHA)
+	}
+	afterSnap := evidencePath(e, NameA4, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
+	if err != nil {
+		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after daemon restart: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA4, e.Cell, e.Shape, "after daemon restart: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
+	}
+	leaseNote := fmt.Sprintf("kept address %s", addr)
+	if afterAddr != addr {
+		leaseNote = fmt.Sprintf("got a new address (%s -> %s)", addr, afterAddr)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
+		return fail(NameA4, e.Cell, e.Shape,
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA4, e.Cell, e.Shape,
+		fmt.Sprintf("dockerd restarted, container running, %s, confirmed in the source's table both times, reachable from the source after %ds", leaseNote, secs),
+		ev, e.GitSHA)
+}
+
+// runA5 -- host reboot: the whole docker host VM reboots. Bounded waits
+// for the boot id to change and settle, then dockerd, then the
+// container, then PASS needs all of: Running again, the source's table
+// showing a confirmed lease, and the source able to reach the container.
+// Same --restart unless-stopped reasoning as A4: with no restart policy
+// the container is never supposed to survive a host reboot, by Docker's
+// own design (issue #3).
+//
+// Re-reads the container's current mac/address/endpoint id after the
+// reboot rather than reusing the pre-reboot ones (#3): a host reboot
+// is out of scope for the plugin's own restart-stability identity
+// (docs/reference.md "DHCP identity" only names `docker
+// restart`/`systemctl restart docker`,
+// never a full host reboot), so the plugin is free to hand this
+// container a new mac and/or address on this boot, and that is
+// documented behaviour, not a defect -- looking the lease up under the
+// stale pre-reboot mac after a change would silently miss the very
+// lease that exists. A mac or address change is reported in the PASS
+// reason, never turned into a FAIL by itself; A5b (below) is the
+// scenario that pins a mac_address and asserts it does NOT change.
+func runA5(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA5)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac, addr, endpointID, err := runContainerPolicy(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped")
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA5, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA5, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	beforeBootID, err := bootID(ctx, e.Host)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read boot id before reboot: %v", err), evBefore, e.GitSHA)
+	}
+
+	// systemctl reboot drops this very SSH connection; that is expected,
+	// not a failure to surface (issue #3 defeat list on waitHostRebooted).
+	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
+	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
+		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
+		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("inspect after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	afterSnap := evidencePath(e, NameA5, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
+	}
+
+	var notes []string
+	if afterMac != mac {
+		notes = append(notes, fmt.Sprintf("mac changed (%s -> %s)", mac, afterMac))
+	} else {
+		notes = append(notes, fmt.Sprintf("kept mac %s", mac))
+	}
+	if afterAddr != addr {
+		notes = append(notes, fmt.Sprintf("address changed (%s -> %s)", addr, afterAddr))
+	} else {
+		notes = append(notes, fmt.Sprintf("kept address %s", addr))
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape,
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA5, e.Cell, e.Shape,
+		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source after %ds", strings.Join(notes, ", "), secs),
+		ev, e.GitSHA)
+}
+
+// runA5b -- host reboot, fixed mac_address: what the docs promise for
+// this exact case (#3) -- a container whose mac_address is fixed must
+// keep the SAME mac and the
+// SAME address after a host reboot, unlike A5's plain container, which
+// may legitimately get new ones. N/A under ipvlan, where every
+// container shares the parent NIC's mac regardless of what
+// --mac-address asks for (docs/reference.md "Restart stability": ipvlan
+// has no stable per-container MAC at all).
+func runA5b(ctx context.Context, e Env) Verdict {
+	if e.Shape == ShapeIpvlan {
+		return na(NameA5b, e.Cell, e.Shape, "ipvlan containers share the parent NIC's MAC; a fixed mac_address is not meaningful here", e.GitSHA)
+	}
+
+	name := containerName(e, NameA5b)
+	defer removeContainer(ctx, e.Host, name)
+	fixedMAC := fixedMACFor(e.Cell, e.Shape)
+
+	mac, addr, endpointID, err := runContainerFixedMAC(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped", fixedMAC)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	if mac != fixedMAC {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container reported mac %s, want the fixed mac %s", mac, fixedMAC), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA5b, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA5b, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	beforeBootID, err := bootID(ctx, e.Host)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read boot id before reboot: %v", err), evBefore, e.GitSHA)
+	}
+
+	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
+	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("inspect after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	afterSnap := evidencePath(e, NameA5b, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA5b, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
+	}
+	if afterMac != fixedMAC {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("fixed mac did not survive the reboot: %s -> %s", fixedMAC, afterMac), ev, e.GitSHA)
+	}
+	if afterAddr != addr {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("address changed across the reboot despite a fixed mac_address: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape,
+			fmt.Sprintf("host rebooted, fixed mac %s has a lease for %s, but the source could not reach it within %ds: %v", fixedMAC, afterAddr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA5b, e.Cell, e.Shape,
+		fmt.Sprintf("host rebooted, fixed mac %s kept address %s, confirmed in the source's table both times, reachable from the source after %ds", fixedMAC, addr, secs),
+		ev, e.GitSHA)
+}
+
+// runA6 -- plugin upgrade from the previous release: install
+// e.PreviousPluginTag (named explicitly in lab.yaml, never derived by
+// decrementing e.PluginTag's patch number -- issue #3, since the real
+// previous release is not always a patch predecessor, e.g.
+// v2.3.0-rc1's previous is v2.2.3) under the same
+// alias, confirm a lease under it, then upgrade in place to e.PluginTag
+// and confirm the pre-existing container's lease survived. The install
+// only sets DHCP_LOG_LEVEL if the previous tag actually declares that
+// setting -- an older version may not have it, and installing with an
+// unknown setting fails outright. N/A when
+// e.PreviousPluginTag is empty: a documented, narrow limitation, never a
+// silent guess at an unrelated tag.
+func runA6(ctx context.Context, e Env) Verdict {
+	prev := e.PreviousPluginTag
+	if prev == "" {
+		return na(NameA6, e.Cell, e.Shape, "no previous_plugin_tag configured for this cell", e.GitSHA)
+	}
+
+	name := containerName(e, NameA6)
+	defer removeContainer(ctx, e.Host, name)
+
+	_, _ = e.Host.Run(ctx, "sudo docker plugin disable "+pluginAlias)
+	_, _ = e.Host.Run(ctx, "sudo docker plugin rm "+pluginAlias)
+	if _, err := installPluginChecked(ctx, e.Host, pluginAlias, prev, map[string]string{"DHCP_LOG_LEVEL": "debug"}); err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("install previous tag %s: %v", prev, err), nil, e.GitSHA)
+	}
+
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("container did not start under %s: %v", prev, err), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA6, "leases-before-upgrade")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table under %s: %v", prev, err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before-upgrade": beforeSnap}
+	if !ok {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("under %s: %s", prev, leaseFailReason(e.Shape, mac, addr, endpointID)), evBefore, e.GitSHA)
+	}
+
+	if _, err := e.Host.Run(ctx, "sudo docker plugin disable "+pluginAlias); err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("disable before upgrade: %v", err), evBefore, e.GitSHA)
+	}
+	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker plugin upgrade %s %s --grant-all-permissions --skip-remote-check", pluginAlias, e.PluginTag)); err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("upgrade to %s: %v", e.PluginTag, err), evBefore, e.GitSHA)
+	}
+	if _, err := e.Host.Run(ctx, "sudo docker plugin enable "+pluginAlias); err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("enable after upgrade: %v", err), evBefore, e.GitSHA)
+	}
+
+	installed, err := installedPluginTag(ctx, e.Host)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("could not read installed plugin tag after upgrade: %v", err), evBefore, e.GitSHA)
+	}
+	if installed != e.PluginTag {
+		return fail(NameA6, e.Cell, e.Shape,
+			fmt.Sprintf("installed reference after upgrade is %q, expected %q", installed, e.PluginTag), evBefore, e.GitSHA)
+	}
+
+	afterSnap := evidencePath(e, NameA6, "leases-after-upgrade")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, afterSnap)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after upgrade: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before-upgrade": beforeSnap, "leases-after-upgrade": afterSnap}
+	if !ok {
+		return fail(NameA6, e.Cell, e.Shape, "after upgrade: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape,
+			fmt.Sprintf("upgraded %s -> %s, pre-existing container has a lease for %s, but the source could not reach it within %ds: %v", prev, e.PluginTag, addr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA6, e.Cell, e.Shape,
+		fmt.Sprintf("upgraded %s -> %s, pre-existing container's lease %s confirmed after, reachable from the source after %ds", prev, e.PluginTag, addr, secs),
+		ev, e.GitSHA)
+}
+
+// runA7 -- plugin killed: the plugin's own process (visible directly via
+// the host PID namespace it requests) is sent SIGKILL. The verdict is
+// about the pre-existing container's lease surviving, not about
+// auto-restart specifically; the reason records whether recovery needed
+// a manual nudge, as an honest finding either way.
+func runA7(ctx context.Context, e Env) Verdict {
+	name := containerName(e, NameA7)
+	defer removeContainer(ctx, e.Host, name)
+
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA7, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA7, e.Cell, e.Shape, "before kill: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	pid, err := pluginPID(ctx, e.Host)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("could not find plugin process: %v", err), evBefore, e.GitSHA)
+	}
+	if _, err := e.Host.Run(ctx, "sudo kill -9 "+pid); err != nil {
+		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("kill -9 %s: %v", pid, err), evBefore, e.GitSHA)
+	}
+
+	recoveredBy, err := waitPluginBack(ctx, e.Host)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+
+	afterSnap := evidencePath(e, NameA7, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, afterSnap)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after kill: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA7, e.Cell, e.Shape, "after kill: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
+	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape,
+			fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s confirmed, but the source could not reach it within %ds: %v", recoveredBy, addr, secs, err), ev, e.GitSHA)
+	}
+	return pass(NameA7, e.Cell, e.Shape,
+		fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s still confirmed, reachable from the source after %ds", recoveredBy, addr, secs),
+		ev, e.GitSHA)
+}
+
+// runA8 -- fleet burst: N containers started sequentially (CreateEndpoint
+// is serialized by Docker itself); the source's table is read once at
+// the end and distinct confirmed leases are counted -- never the
+// plugin's own request-volume counters (issue #3 defeat list).
+func runA8(ctx context.Context, e Env) Verdict {
+	const n = 10
+	type created struct {
+		name, mac, addr, endpointID string
+	}
+	var containers []created
+	defer func() {
+		for _, c := range containers {
+			removeContainer(ctx, e.Host, c.name)
+		}
+	}()
+
+	for i := 0; i < n; i++ {
+		name := containerName(e, NameA8) + "-" + strconv.Itoa(i)
+		mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+		if err != nil {
+			return fail(NameA8, e.Cell, e.Shape,
+				fmt.Sprintf("container %d/%d (%s) did not start: %v", i+1, n, name, err), nil, e.GitSHA)
+		}
+		containers = append(containers, created{name, mac, addr, endpointID})
+	}
+
+	snap := evidencePath(e, NameA8, "leases-after")
+	confirmed := 0
+	seen := map[string]bool{}
+	for _, c := range containers {
+		lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, c.mac, c.addr, c.endpointID, snap)
+		if err != nil {
+			return fail(NameA8, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+		}
+		if ok && !seen[lease.Address] {
+			seen[lease.Address] = true
+			confirmed++
+		}
+	}
+	ev := map[string]string{"leases-after": snap}
+	if confirmed != n {
+		return fail(NameA8, e.Cell, e.Shape,
+			fmt.Sprintf("%d of %d containers started but only %d have a distinct confirmed lease", n, n, confirmed), ev, e.GitSHA)
+	}
+
+	// A full reachability sweep over all n would just re-serialize A8's
+	// own burst; the first and last container sample both ends of the
+	// run's timing without that.
+	sample := []created{containers[0], containers[len(containers)-1]}
+	var reachNotes []string
+	for _, c := range sample {
+		secs, err := reachableWithRetry(ctx, e.Source, c.addr)
+		if err != nil {
+			return fail(NameA8, e.Cell, e.Shape,
+				fmt.Sprintf("%d distinct confirmed leases, but %s (address %s) was not reachable within %ds: %v", confirmed, c.name, c.addr, secs, err), ev, e.GitSHA)
+		}
+		reachNotes = append(reachNotes, fmt.Sprintf("%s after %ds", c.addr, secs))
+	}
+	return pass(NameA8, e.Cell, e.Shape,
+		fmt.Sprintf("%d containers started, %d distinct confirmed leases in the source's own table, sampled reachable: %s", n, confirmed, strings.Join(reachNotes, ", ")),
+		ev, e.GitSHA)
+}

@@ -24,7 +24,8 @@ cells:
     docker_host:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.10/24
-      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
@@ -48,7 +49,8 @@ cells:
     docker_host:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.20/24
-      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
@@ -72,7 +74,8 @@ cells:
     docker_host:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.30/24
-      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
@@ -96,7 +99,8 @@ cells:
     docker_host:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.40/24
-      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8

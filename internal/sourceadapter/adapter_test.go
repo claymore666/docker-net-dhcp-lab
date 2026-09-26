@@ -87,6 +87,52 @@ func TestReserveMACSendsNormalizedValues(t *testing.T) {
 	}
 }
 
+// Reachable's addr round-trips through the same validateAddr guard as
+// ReserveMAC (issue #3): a bad or injection-bearing address must never
+// reach the runner at all, across
+// every adapter, not just one.
+func TestReachableRejectsInjectionBeforeAnySSH(t *testing.T) {
+	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fd42:200::1", ""}
+	adapters := map[string]Adapter{
+		"kea":      &KeaAdapter{},
+		"isc-dhcp": &ISCDHCPAdapter{},
+		"dnsmasq":  &DnsmasqAdapter{},
+	}
+	for name, a := range adapters {
+		for _, addr := range bad {
+			r := &fakeRunner{}
+			switch v := a.(type) {
+			case *KeaAdapter:
+				v.Runner = r
+			case *ISCDHCPAdapter:
+				v.Runner = r
+			case *DnsmasqAdapter:
+				v.Runner = r
+			}
+			if err := a.Reachable(context.Background(), addr); err == nil {
+				t.Errorf("%s: Reachable(%q) was accepted, want rejected", name, addr)
+			}
+			if len(r.calls) != 0 {
+				t.Errorf("%s: Reachable(%q) reached the runner before validation failed", name, addr)
+			}
+		}
+	}
+}
+
+// Preservation: a real address reaches the runner as a single ping,
+// carrying the normalized form, and the adapter reports the runner's
+// own error rather than swallowing it.
+func TestReachableSendsPingAndPropagatesRunnerError(t *testing.T) {
+	r := &fakeRunner{err: context.DeadlineExceeded}
+	a := &KeaAdapter{Runner: r}
+	if err := a.Reachable(context.Background(), "10.200.1.100"); err == nil {
+		t.Fatal("runner error was swallowed instead of propagated")
+	}
+	if len(r.calls) != 1 || !strings.Contains(r.calls[0], "ping") || !strings.Contains(r.calls[0], "10.200.1.100") {
+		t.Fatalf("want one ping call naming the address, got %v", r.calls)
+	}
+}
+
 func TestKeaParsesEmptyResultAsEmptyTable(t *testing.T) {
 	leases, err := parseKeaLeases(`[{"result":3,"text":"no leases"}]`)
 	if err != nil {
@@ -121,6 +167,21 @@ func TestKeaRejectsGarbageReply(t *testing.T) {
 func TestKeaRejectsErrorResult(t *testing.T) {
 	if _, err := parseKeaLeases(`[{"result":1,"text":"command not supported"}]`); err == nil {
 		t.Fatal("a Kea error result was accepted as a lease table")
+	}
+}
+
+// Kea reports client-id (option 61) as its own colon-hex string; the
+// adapter must carry it through and normalize it to lowercase (#3) --
+// this is the format ipvlan lookup keys on, since ipvlan slaves share
+// the parent NIC's MAC.
+func TestKeaParsesClientID(t *testing.T) {
+	body := `[{"result":0,"arguments":{"leases":[{"ip-address":"10.200.1.100","hw-address":"aa:bb:cc:dd:ee:ff","hostname":"box","client-id":"00:97:CE:0D:FD:01:6F:AE:55"}]}}]`
+	leases, err := parseKeaLeases(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].ClientID != "00:97:ce:0d:fd:01:6f:ae:55" {
+		t.Fatalf("unexpected leases: %+v", leases)
 	}
 }
 
@@ -195,6 +256,65 @@ lease 10.200.2.100 {
 	}
 }
 
+// dhcpd prints the uid (client-id, option 61) with C-style quoting: a
+// printable ASCII byte literally, everything else as a three-digit
+// octal escape. This fixture is the real byte sequence measured against
+// a live Kea/ISC pair sharing the same client (#3): type
+// byte 0x00, then 0x97 0xce 0x0d 0xfd 0x01
+// 'o' 0xae 'U' -- two of those eight bytes (0x6f, 0x55) are printable
+// and appear as literal "o" and "U", the rest as octal escapes.
+func TestISCParsesClientIDFromUID(t *testing.T) {
+	raw := `
+lease 10.200.2.100 {
+  hardware ethernet aa:bb:cc:dd:ee:ff;
+  client-hostname "box1";
+  uid "\000\227\316\015\375\001o\256U";
+  binding state active;
+}
+`
+	leases, err := parseISCLeases(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 {
+		t.Fatalf("unexpected leases: %+v", leases)
+	}
+	if want := "00:97:ce:0d:fd:01:6f:ae:55"; leases[0].ClientID != want {
+		t.Fatalf("ClientID = %q, want %q", leases[0].ClientID, want)
+	}
+}
+
+// A lease with no uid field carries no client-id -- must not error and
+// must not fabricate one.
+func TestISCLeaseWithNoUIDHasEmptyClientID(t *testing.T) {
+	raw := `
+lease 10.200.2.100 {
+  hardware ethernet aa:bb:cc:dd:ee:ff;
+  binding state active;
+}
+`
+	leases, err := parseISCLeases(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].ClientID != "" {
+		t.Fatalf("unexpected leases: %+v", leases)
+	}
+}
+
+func TestISCRejectsBadOctalEscapeInUID(t *testing.T) {
+	raw := `
+lease 10.200.2.100 {
+  hardware ethernet aa:bb:cc:dd:ee:ff;
+  uid "\99z";
+  binding state active;
+}
+`
+	if _, err := parseISCLeases(raw); err == nil {
+		t.Fatal("a malformed octal escape in uid was accepted")
+	}
+}
+
 func TestDnsmasqParsesLeases(t *testing.T) {
 	raw := "1735000000 aa:bb:cc:dd:ee:ff 10.200.3.100 box1 *\n"
 	leases, err := parseDnsmasqLeases(raw)
@@ -225,6 +345,29 @@ func TestDnsmasqRejectsShortLine(t *testing.T) {
 func TestDnsmasqRejectsBadMAC(t *testing.T) {
 	if _, err := parseDnsmasqLeases("1735000000 not-a-mac 10.200.3.100 box1 *\n"); err == nil {
 		t.Fatal("a malformed MAC field was accepted")
+	}
+}
+
+// dnsmasq's own fifth field is the client-id (option 61) in its own
+// colon-hex encoding; "*" means the client sent none (#3).
+func TestDnsmasqParsesClientID(t *testing.T) {
+	raw := "1735000000 aa:bb:cc:dd:ee:ff 10.200.3.100 box1 00:97:CE:0D:FD:01:6F:AE:55\n"
+	leases, err := parseDnsmasqLeases(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "00:97:ce:0d:fd:01:6f:ae:55"; len(leases) != 1 || leases[0].ClientID != want {
+		t.Fatalf("unexpected leases: %+v", leases)
+	}
+}
+
+func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
+	leases, err := parseDnsmasqLeases("1735000000 aa:bb:cc:dd:ee:ff 10.200.3.100 box1 *\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].ClientID != "" {
+		t.Fatalf("unexpected leases: %+v", leases)
 	}
 }
 
