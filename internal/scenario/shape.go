@@ -23,9 +23,34 @@ const (
 	ShapeBridge  Shape = "bridge"
 	ShapeMacvlan Shape = "macvlan"
 	ShapeIpvlan  Shape = "ipvlan"
+	// ShapeBridgeIPAM and ShapeMacvlanIPAM run the plugin as its own
+	// IPAM driver (--ipam-driver <same tag as -d>) instead of null-IPAM
+	// (issue #3 part 2, plugin repo README "IPAM driver mode"). There is
+	// no ipvlan-IPAM shape: the plugin repo's own issue #949 refuses
+	// ipvlan under its IPAM driver, so that combination is the plugin's
+	// documented limitation, not an omission here.
+	ShapeBridgeIPAM  Shape = "bridge-ipam"
+	ShapeMacvlanIPAM Shape = "macvlan-ipam"
 )
 
-var Shapes = []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan}
+var Shapes = []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan, ShapeBridgeIPAM, ShapeMacvlanIPAM}
+
+// usesHostBridge reports whether shape needs NetworkUp/
+// ensureBridgePresent's host-bridge machinery: both bridge shapes do,
+// driven by which shapes attach through a host bridge at all, never by
+// which IPAM driver they use (#3 part 2).
+func usesHostBridge(shape Shape) bool {
+	return shape == ShapeBridge || shape == ShapeBridgeIPAM
+}
+
+// ipamDriverFor is "null" for the three original shapes and this
+// shape's own driver alias for the two IPAM shapes (#3 part 2).
+func ipamDriverFor(shape Shape) string {
+	if shape == ShapeBridgeIPAM || shape == ShapeMacvlanIPAM {
+		return driverAlias
+	}
+	return "null"
+}
 
 // SegmentNIC is the docker host's dedicated segment interface (wired by
 // up-cell.sh's own network=bridge=<segment> attachment). It never
@@ -196,7 +221,7 @@ func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 // not there (#3). A no-op for macvlan/ipvlan, which have no host
 // bridge.
 func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) error {
-	if shape != ShapeBridge {
+	if !usesHostBridge(shape) {
 		return nil
 	}
 	br := hostBridgeName(NetworkName(cell, shape))
@@ -220,19 +245,19 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 	NetworkDown(ctx, r, cell, shape)
 	net := NetworkName(cell, shape)
 	switch shape {
-	case ShapeBridge:
+	case ShapeBridge, ShapeBridgeIPAM:
 		br := hostBridgeName(net)
 		if err := writeBridgePersistence(ctx, r, br); err != nil {
-			return "", fmt.Errorf("networkup(bridge): %w", err)
+			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
 		if _, err := r.Run(ctx, "sudo netplan apply"); err != nil {
-			return "", fmt.Errorf("networkup(bridge): sudo netplan apply: %w", err)
+			return "", fmt.Errorf("networkup(%s): sudo netplan apply: %w", shape, err)
 		}
 		if err := ensureIptablesPersistent(ctx, r); err != nil {
-			return "", fmt.Errorf("networkup(bridge): %w", err)
+			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
 		if _, err := r.Run(ctx, forwardRuleAdd(br)); err != nil {
-			return "", fmt.Errorf("networkup(bridge): %s: %w", forwardRuleAdd(br), err)
+			return "", fmt.Errorf("networkup(%s): %s: %w", shape, forwardRuleAdd(br), err)
 		}
 		// The FORWARD rule above is the only thing standing between a
 		// clean create and a bridge that silently drops every DHCP
@@ -243,22 +268,26 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		// forty seconds later as an unexplained scenario timeout.
 		if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
 			return "", fmt.Errorf(
-				"networkup(bridge): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
-				forwardRuleAdd(br), err)
+				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
+				shape, forwardRuleAdd(br), err)
 		}
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
-			return "", fmt.Errorf("networkup(bridge): sudo netfilter-persistent save: %w", err)
+			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
 		}
 		if !bridgeReady(ctx, r, br) {
-			return "", fmt.Errorf("networkup(bridge): bridge %s or its %s port did not come up after netplan apply", br, SegmentNIC)
+			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after netplan apply", shape, br, SegmentNIC)
 		}
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o bridge=%s %s", driverAlias, br, net)
+		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o bridge=%s %s", driverAlias, ipamDriverFor(shape), br, net)
 		if _, err := r.Run(ctx, create); err != nil {
-			return "", fmt.Errorf("networkup(bridge): %s: %w", create, err)
+			return "", fmt.Errorf("networkup(%s): %s: %w", shape, create, err)
 		}
-	case ShapeMacvlan, ShapeIpvlan:
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o mode=%s -o parent=%s %s",
-			driverAlias, shape, SegmentNIC, net)
+	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
+		mode := "macvlan"
+		if shape == ShapeIpvlan {
+			mode = "ipvlan"
+		}
+		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s %s",
+			driverAlias, ipamDriverFor(shape), mode, SegmentNIC, net)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
@@ -266,6 +295,43 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		return "", fmt.Errorf("networkup: unknown shape %q", shape)
 	}
 	return net, nil
+}
+
+// NetworkUpSecondary brings up a second, independent network for A13
+// (one container, two plugin networks, issue #3 part 2), alongside
+// whatever NetworkUp already brought up for shape. Only the
+// parent-attached shapes can do this: Linux macvlan/ipvlan both allow
+// many independent devices off one parent NIC, so a second logical
+// plugin network on the same physical SegmentNIC is a real, supported
+// configuration. Bridge and bridge-ipam cannot: SegmentNIC is enslaved
+// wholly to the one host bridge NetworkUp already built for the
+// caller's shape, and a NIC cannot also be enslaved to a second bridge
+// at the same time -- callers report A13 N/A for those two shapes for
+// exactly that reason, never by attempting this and swallowing the
+// failure.
+func NetworkUpSecondary(ctx context.Context, r sourceadapter.Runner, netName string, shape Shape) error {
+	mode := ""
+	switch shape {
+	case ShapeMacvlan, ShapeMacvlanIPAM:
+		mode = "macvlan"
+	case ShapeIpvlan:
+		mode = "ipvlan"
+	default:
+		return fmt.Errorf("networkupsecondary: shape %q has no independent second network available", shape)
+	}
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", netName))
+	create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s %s",
+		driverAlias, ipamDriverFor(shape), mode, SegmentNIC, netName)
+	if _, err := r.Run(ctx, create); err != nil {
+		return fmt.Errorf("networkupsecondary(%s): %w", shape, err)
+	}
+	return nil
+}
+
+// NetworkDownSecondary removes the network NetworkUpSecondary created.
+// Best-effort and idempotent, the same style NetworkDown already uses.
+func NetworkDownSecondary(ctx context.Context, r sourceadapter.Runner, netName string) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", netName))
 }
 
 // NetworkDown removes a shape's network and, for bridge mode, releases
@@ -276,7 +342,7 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) {
 	net := NetworkName(cell, shape)
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", net))
-	if shape == ShapeBridge {
+	if usesHostBridge(shape) {
 		br := hostBridgeName(net)
 		// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
 		// by interface name, not a live link, so this is safe (and still

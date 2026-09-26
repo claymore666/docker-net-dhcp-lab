@@ -145,3 +145,106 @@ func TestNetworkDownToleratesForwardRuleAlreadyAbsent(t *testing.T) {
 	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == delCmd }}
 	NetworkDown(context.Background(), r, "kea", ShapeBridge) // must not panic or block
 }
+
+// The two IPAM shapes (issue #3 part 2) must pass --ipam-driver with
+// this plugin's own alias, never null, while every original shape keeps
+// null-IPAM exactly as before -- a mixed-up flag would silently hand a
+// container docker's own default IPAM instead of a real regression.
+func TestNetworkUpPicksIPAMDriverByShape(t *testing.T) {
+	cases := []struct {
+		shape Shape
+		want  string
+	}{
+		{ShapeBridge, "--ipam-driver null"},
+		{ShapeMacvlan, "--ipam-driver null"},
+		{ShapeIpvlan, "--ipam-driver null"},
+		{ShapeBridgeIPAM, "--ipam-driver " + driverAlias},
+		{ShapeMacvlanIPAM, "--ipam-driver " + driverAlias},
+	}
+	for _, c := range cases {
+		r := &fakeShapeRunner{}
+		if _, err := NetworkUp(context.Background(), r, "dnsmasq", c.shape); err != nil {
+			t.Fatalf("%s: NetworkUp: %v", c.shape, err)
+		}
+		var sawCreate bool
+		for _, cmd := range r.calls {
+			if strings.Contains(cmd, "docker network create") {
+				sawCreate = true
+				if !strings.Contains(cmd, c.want) {
+					t.Errorf("%s: create command %q does not contain %q", c.shape, cmd, c.want)
+				}
+			}
+		}
+		if !sawCreate {
+			t.Errorf("%s: NetworkUp never ran docker network create; calls: %v", c.shape, r.calls)
+		}
+	}
+}
+
+// bridge-ipam is IPAM-mode's L2 attachment axis unchanged from bridge:
+// it still needs the same host-bridge machinery (netplan, FORWARD rule)
+// bridge itself needs, since that machinery is about the L2 attachment,
+// never about which IPAM driver is layered over it.
+func TestNetworkUpBridgeIPAMUsesHostBridgeMachinery(t *testing.T) {
+	r := &fakeShapeRunner{}
+	net := NetworkName("kea", ShapeBridgeIPAM)
+	br := hostBridgeName(net)
+
+	if _, err := NetworkUp(context.Background(), r, "kea", ShapeBridgeIPAM); err != nil {
+		t.Fatalf("NetworkUp: %v", err)
+	}
+	wantCheck := forwardRuleCheck(br)
+	var sawCheck bool
+	for _, c := range r.calls {
+		if c == wantCheck {
+			sawCheck = true
+		}
+	}
+	if !sawCheck {
+		t.Fatalf("NetworkUp(bridge-ipam) never verified the FORWARD rule %q; calls: %v", wantCheck, r.calls)
+	}
+	if !usesHostBridge(ShapeBridgeIPAM) {
+		t.Fatal("usesHostBridge(bridge-ipam) = false, want true")
+	}
+	if usesHostBridge(ShapeMacvlanIPAM) {
+		t.Fatal("usesHostBridge(macvlan-ipam) = true, want false")
+	}
+}
+
+// NetworkUpSecondary is A13's mechanism (one container, two plugin
+// networks, #3 part 2): it must work for the parent-attached shapes,
+// where Linux allows many independent macvlan/ipvlan devices off one
+// NIC, and refuse outright for the two bridge shapes, where SegmentNIC
+// is already wholly enslaved to the one bridge NetworkUp built -- a
+// second bridge network on the same NIC is not a real configuration,
+// so a caller must get an error here, never a silently broken network.
+func TestNetworkUpSecondaryByShape(t *testing.T) {
+	ok := []Shape{ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM}
+	for _, shape := range ok {
+		r := &fakeShapeRunner{}
+		if err := NetworkUpSecondary(context.Background(), r, "labrun-dnsmasq-"+string(shape)+"-a13b", shape); err != nil {
+			t.Errorf("%s: NetworkUpSecondary: %v", shape, err)
+		}
+		var sawCreate bool
+		for _, c := range r.calls {
+			if strings.Contains(c, "docker network create") {
+				sawCreate = true
+			}
+		}
+		if !sawCreate {
+			t.Errorf("%s: NetworkUpSecondary never created a network; calls: %v", shape, r.calls)
+		}
+	}
+	refused := []Shape{ShapeBridge, ShapeBridgeIPAM}
+	for _, shape := range refused {
+		r := &fakeShapeRunner{}
+		if err := NetworkUpSecondary(context.Background(), r, "labrun-dnsmasq-"+string(shape)+"-a13b", shape); err == nil {
+			t.Errorf("%s: NetworkUpSecondary succeeded, want refused (one NIC cannot join a second bridge)", shape)
+		}
+		for _, c := range r.calls {
+			if strings.Contains(c, "docker network create") {
+				t.Errorf("%s: NetworkUpSecondary ran docker network create despite being refused; calls: %v", shape, r.calls)
+			}
+		}
+	}
+}
