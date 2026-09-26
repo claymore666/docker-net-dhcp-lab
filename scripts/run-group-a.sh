@@ -1,10 +1,11 @@
 #!/bin/bash
-# The one command issue #3 part 1 asks for: bring up a cell, run every
-# group-A scenario across all three null-IPAM shapes, and leave one
-# evidence bundle behind (resolved lab.yaml, versions, a config diff
-# from stock, one capture spanning the whole run, and one verdict file
-# per scenario x shape). A FAIL is a finding about the plugin; this
-# script never retries or tunes a scenario to make one pass.
+# The one command issue #3 asks for: bring up a cell, run every group-A
+# scenario across all five shapes (the plugin's own null IPAM and its
+# own IPAM driver, each in bridge and macvlan, plus ipvlan), and leave
+# one evidence bundle behind (resolved lab.yaml, versions, a config
+# diff from stock, one capture spanning the whole run, and one verdict
+# file per scenario x shape). A FAIL is a finding about the plugin;
+# this script never retries or tunes a scenario to make one pass.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -82,7 +83,7 @@ done
 # network down (deferred inside cmdRun) before returning, so the next
 # shape's NetworkUp never races it (issue #3 defeat list).
 RUNNER_FAILED=0
-for shape in bridge macvlan ipvlan; do
+for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	echo "== scenarios: $shape =="
 	if ! go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap"; then
 		echo "run-group-a: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2

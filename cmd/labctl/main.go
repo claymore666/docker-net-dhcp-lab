@@ -40,7 +40,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: labctl validate <lab.yaml>")
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
-	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan> <work-dir> <evidence-dir> <pcap-path|-> ")
+	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> ")
 	os.Exit(2)
 }
 
@@ -155,7 +155,7 @@ func cmdRun(args []string) int {
 		}
 	}
 	if !validShape {
-		fmt.Fprintf(os.Stderr, "labctl run: unknown shape %q, want one of bridge, macvlan, ipvlan\n", shapeArg)
+		fmt.Fprintf(os.Stderr, "labctl run: unknown shape %q, want one of bridge, macvlan, ipvlan, bridge-ipam, macvlan-ipam\n", shapeArg)
 		return 2
 	}
 
