@@ -2,14 +2,13 @@ package main
 
 import "testing"
 
-// Issue #3 part 2, ruling item 1: the pre-shape pool
-// capacity check exists because the plugin's own default is
-// release_lease=never (docs/reference.md) -- nothing frees a lease
-// between shapes on its own, so a run only stays sound if the pool the
-// cell's source hands out can actually cover one shape's worst case.
-// These two functions are the pure core of that check; the rest of
-// cmdRun is the plumbing that calls them and cannot run without a real
-// source VM.
+// The pre-shape pool capacity check exists because the plugin's own
+// default is release_lease=never (docs/reference.md) -- nothing frees
+// a lease between shapes on its own, so a run only stays sound if the
+// pool the cell's source hands out can actually cover one shape's
+// worst case (#3). These two functions are the pure core of that
+// check; the rest of cmdRun is the plumbing that calls them and cannot
+// run without a real source VM.
 
 func TestPoolCapacityCountsInclusive(t *testing.T) {
 	cases := []struct {
@@ -56,8 +55,8 @@ func TestPoolCapacityRejectsBadInput(t *testing.T) {
 // scenario.MinPoolAddresses's own value (38, catalog.go) rather than a
 // number restated here: a pool exhausted by four prior shapes' worth of
 // held leases must abort the fifth, and a fresh 101-address pool must
-// clear every shape (five shapes x 38 is exactly the case A15/A16
-// exhausted before this fix -- issue #3 part 2, ruling).
+// clear every shape (five shapes x 38 is exactly the case that
+// exhausted the pool on A15/A16 before this fix, #3).
 func TestPoolHasCapacityForMatchesMinPoolAddresses(t *testing.T) {
 	const need = 38 // scenario.MinPoolAddresses
 

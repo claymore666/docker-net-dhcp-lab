@@ -84,10 +84,10 @@ done
 # shape's NetworkUp never races it (issue #3 defeat list).
 #
 # Exit code 3 is labctl's own sentinel for a lab error, not a scenario
-# FAIL (issue #3 part 2, ruling item 1): the pre-shape pool
-# check found the source's pool cannot cover even this one shape's
-# worst case. Continuing to the next shape would run it against the
-# same undersized pool, so the whole cell aborts here instead.
+# FAIL: the pre-shape pool check (#3) found the source's pool cannot
+# cover even this one shape's worst case. Continuing to the next shape
+# would run it against the same undersized pool, so the whole cell
+# aborts here instead.
 RUNNER_FAILED=0
 for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	echo "== scenarios: $shape =="

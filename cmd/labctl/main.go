@@ -24,7 +24,7 @@ import (
 // tool failure (1) or a clean BLOCKED-for-unready-plugin run (0):
 // run-group-a.sh's shape loop treats this one specially and aborts the
 // whole cell rather than trying the remaining shapes against the same
-// undersized pool (issue #3 part 2, ruling item 1).
+// undersized pool (#3).
 const labErrorExitCode = 3
 
 func main() {
@@ -245,12 +245,12 @@ func cmdRun(args []string) int {
 		return 0
 	}
 
-	// Reset before every shape (issue #3 part 2, ruling item
-	// 1): the plugin's own default is release_lease=never
-	// (docs/reference.md), so nothing else ever frees a lease between
-	// shapes, and five shapes of fresh MACs/client-ids on one pool
-	// otherwise ran it out -- a lab fault, not a plugin defect. Logged
-	// in evidence so a run's own record shows the reset happened.
+	// Reset before every shape: the plugin's own default is
+	// release_lease=never (docs/reference.md), so nothing else ever
+	// frees a lease between shapes, and five shapes of fresh
+	// MACs/client-ids on one pool otherwise ran it out -- a lab fault,
+	// not a plugin defect (#3). Logged in evidence so a run's own
+	// record shows the reset happened.
 	if err := source.ResetLeases(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: ResetLeases:", err)
 		return 1
@@ -263,11 +263,11 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
-	// Pre-shape pool-capacity check (issue #3 part 2, ruling
-	// item 1): a pool that cannot even cover one shape's worst-case
-	// address need aborts the cell as a lab error here, before any
-	// scenario runs, rather than surfacing 30+ scenarios later as
-	// pool-exhaustion FAILs that read like plugin defects.
+	// Pre-shape pool-capacity check: a pool that cannot even cover one
+	// shape's worst-case address need aborts the cell as a lab error
+	// here, before any scenario runs, rather than surfacing 30+
+	// scenarios later as pool-exhaustion FAILs that read like plugin
+	// defects (#3).
 	capacity, err := poolCapacity(cell.Source.PoolStart, cell.Source.PoolEnd)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: pool capacity:", err)
@@ -365,9 +365,9 @@ func poolCapacity(start, end string) (int, error) {
 
 // poolHasCapacityFor reports whether a pool has at least need addresses
 // free once held is subtracted from capacity, and a reason worth
-// logging either way (issue #3 part 2, ruling item 1): the
-// cell's pre-shape check calls this once, right after the lease
-// database reset and before any scenario can mint a single new lease.
+// logging either way: the cell's pre-shape check calls this once,
+// right after the lease database reset and before any scenario can
+// mint a single new lease (#3).
 func poolHasCapacityFor(capacity, held, need int) (bool, string) {
 	free := capacity - held
 	if free < need {

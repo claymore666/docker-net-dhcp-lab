@@ -411,15 +411,15 @@ func runA5b(ctx context.Context, e Env) Verdict {
 		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 
-	// Issue #3 part 2, ruling item 3: raw evidence of what
-	// Docker actually passed the plugin for this container's first
-	// address request -- the plugin log lines around the first
-	// RequestAddress call, and the docker-inspect mac/endpoint captured
-	// right after start -- carried on every verdict below, whichever
-	// way this scenario ends. No judgement here about whether it
-	// matches the fixed mac_address; a bridge-ipam run's first lease
-	// went out under a different client-id than the fixed MAC, and
-	// that reading is left to whoever reads the evidence.
+	// Raw evidence of what Docker actually passed the plugin for this
+	// container's first address request (#3) -- the plugin log lines
+	// around the first RequestAddress call, and the docker-inspect
+	// mac/endpoint captured right after start -- carried on every
+	// verdict below, whichever way this scenario ends. No judgement
+	// here about whether it matches the fixed mac_address; a
+	// bridge-ipam run's first lease went out under a different
+	// client-id than the fixed MAC, and that reading is left to
+	// whoever reads the evidence.
 	firstReqMACPath := evidencePath(e, NameA5b, "first-request-mac")
 	firstReqNote := fmt.Sprintf("container=%s docker_inspect_mac=%s docker_endpoint_id=%s fixed_mac_configured=%s captured_at=%s\n",
 		name, mac, endpointID, fixedMAC, time.Now().UTC().Format(time.RFC3339))

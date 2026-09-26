@@ -562,11 +562,11 @@ func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) 
 // capturePluginLogAroundFirstRequestAddress writes the plugin's own
 // net-dhcp journal lines from the last 10 minutes to path, sliced to a
 // fixed window of context lines around the first line mentioning
-// RequestAddress (issue #3 part 2, ruling item 3, A5b's
-// evidence): a raw, mechanical slice, never a judgement about what
-// those lines show -- a bridge-ipam run's first lease going out under a
-// different client-id than the fixed MAC is left for whoever reads the
-// evidence, not this capture to characterise.
+// RequestAddress. It is A5b's evidence capture (#3): a raw, mechanical
+// slice, never a judgement about what those lines show -- a
+// bridge-ipam run's first lease going out under a different client-id
+// than the fixed MAC is left for whoever reads the evidence, not this
+// capture to characterise.
 func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
 	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
 	if err != nil {

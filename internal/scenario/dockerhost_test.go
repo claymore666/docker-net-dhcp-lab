@@ -226,10 +226,10 @@ func TestCapturePluginLogWritesAPlaceholderWhenNothingMatches(t *testing.T) {
 	}
 }
 
-// Issue #3 part 2, ruling item 3: the A5b evidence capture
-// must actually centre on the first RequestAddress line and keep only
-// net-dhcp lines, not the whole journal -- a raw slice, nothing
-// asserted here about what the lines mean.
+// The A5b evidence capture must actually centre on the first
+// RequestAddress line and keep only net-dhcp lines, not the whole
+// journal (#3) -- a raw slice, nothing asserted here about what the
+// lines mean.
 func TestCapturePluginLogAroundFirstRequestAddressCentresOnFirstMatch(t *testing.T) {
 	journal := "Sep 27 net-dhcp: line -3\n" +
 		"Sep 27 containerd: unrelated\n" +
