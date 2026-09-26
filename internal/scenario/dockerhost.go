@@ -109,6 +109,130 @@ func waitContainerRunning(ctx context.Context, r sourceadapter.Runner, name stri
 	return fmt.Errorf("container %s did not report Running within 30s", name)
 }
 
+// pauseContainer freezes the container's own process tree via cgroups
+// freezer (docker pause) and confirms .State.Paused before returning
+// (issue #3, A11): a scenario that only checks the command exited
+// would miss a pause that never actually took.
+func pauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker pause %s", name)); err != nil {
+		return fmt.Errorf("docker pause %s: %w", name, err)
+	}
+	return waitContainerPaused(ctx, r, name)
+}
+
+// unpauseContainer reverses pauseContainer and confirms the container is
+// Running again, the same discipline pauseContainer applies to Paused.
+func unpauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker unpause %s", name)); err != nil {
+		return fmt.Errorf("docker unpause %s: %w", name, err)
+	}
+	return waitContainerRunning(ctx, r, name)
+}
+
+func waitContainerPaused(ctx context.Context, r sourceadapter.Runner, name string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Paused}}' %s", name))
+		if err == nil && strings.TrimSpace(out) == "true" {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s did not report Paused within 30s", name)
+}
+
+// disconnectNetwork and connectNetwork drive `docker network
+// disconnect`/`connect` against a running container (issue #3, A12):
+// docs/reference.md's own release_lease table names `docker network
+// disconnect` as one of the three events that make an endpoint leave
+// its sandbox, alongside `docker stop` and `docker rm` of a running
+// container.
+func disconnectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network disconnect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network disconnect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+func connectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network connect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network connect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+// networkContainsEndpoint reports whether net's own inspect output
+// still lists endpointID among its attached endpoints -- Docker's own
+// bookkeeping, not the plugin's (issue #3, A16/A15): the check "no
+// leftover endpoint or state" needs after a forced remove or a
+// scale-down.
+func networkContainsEndpoint(ctx context.Context, r sourceadapter.Runner, net, endpointID string) (bool, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker network inspect -f '{{json .Containers}}' %s", net))
+	if err != nil {
+		return false, fmt.Errorf("docker network inspect %s: %w", net, err)
+	}
+	return strings.Contains(out, endpointID), nil
+}
+
+// containerStartedAt and waitContainerRestarted let A10 confirm a
+// restart-policy recovery actually happened -- a fresh StartedAt, not
+// just Running still (or again) true, which a race right after `docker
+// kill` could otherwise read as "never went down" (issue #3).
+func containerStartedAt(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.StartedAt}}' %s", name))
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s StartedAt: %w", name, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func waitContainerRestarted(ctx context.Context, r sourceadapter.Runner, name, beforeStartedAt string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' %s", name))
+		if err == nil {
+			if fields := strings.Fields(out); len(fields) == 2 && fields[0] == "true" && fields[1] != beforeStartedAt {
+				return nil
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s was not confirmed restarted (Running, with a new StartedAt) within %s", name, timeout)
+}
+
+// inspectContainerNetwork is inspectContainer naming the network
+// explicitly (issue #3, A13): inspectField's range template
+// concatenates every attached network's field into one string, which
+// is silently wrong the moment a container joins a second network, so
+// a multi-network container's per-network mac/address/endpoint id needs
+// this indexed form instead.
+func inspectContainerNetwork(ctx context.Context, r sourceadapter.Runner, shape Shape, name, netName string) (mac, addr, endpointID string, err error) {
+	get := func(field string) (string, error) {
+		out, err := r.Run(ctx, fmt.Sprintf(
+			`sudo docker inspect -f '{{with index .NetworkSettings.Networks %q}}{{.%s}}{{end}}' %s`, netName, field, name))
+		if err != nil {
+			return "", fmt.Errorf("docker inspect %s (network %s) %s: %w", name, netName, field, err)
+		}
+		return strings.TrimSpace(out), nil
+	}
+	if mac, err = get("MacAddress"); err != nil {
+		return "", "", "", err
+	}
+	if addr, err = get("IPAddress"); err != nil {
+		return "", "", "", err
+	}
+	if endpointID, err = get("EndpointID"); err != nil {
+		return "", "", "", err
+	}
+	if addr == "" || (mac == "" && shape != ShapeIpvlan) {
+		return "", "", "", fmt.Errorf("container %s on network %s has no mac/address reported", name, netName)
+	}
+	if shape == ShapeIpvlan && endpointID == "" {
+		return "", "", "", fmt.Errorf("container %s on network %s has no endpoint id reported, needed for its ipvlan client-id", name, netName)
+	}
+	return mac, addr, endpointID, nil
+}
+
 func waitDockerBack(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
