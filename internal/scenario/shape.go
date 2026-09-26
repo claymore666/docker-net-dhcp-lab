@@ -99,8 +99,8 @@ func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content 
 // substituting its example names for this lab's real ones (my-bridge
 // -> br, eth0 -> SegmentNIC): a NetworkUp that only ever built the
 // bridge with `ip link` (as it used to) did not survive a reboot, so
-// A5's evidence was read against a bridge that was already gone (issue
-// #3, lead directive 2026-09-26, item 1).
+// A5's evidence was read against a bridge that was already gone
+// (issue #3, item 1).
 //
 // The docs' *other* recipe, systemd-networkd, was tried first and
 // dropped: the lab's docker-host VMs are themselves netplan-managed
@@ -159,8 +159,7 @@ func bridgeConfigPaths(br string) []string {
 // ensureIptablesPersistent installs the package docs/bridge-mode.md's
 // firewall-persistence table names for iptables, only if it is not
 // already present -- measured live against a real cell's docker-host
-// image, which does not carry it by default (issue #3, lead directive
-// 2026-09-26, item 1).
+// image, which does not carry it by default (issue #3, item 1).
 func ensureIptablesPersistent(ctx context.Context, r sourceadapter.Runner) error {
 	if _, err := r.Run(ctx, "dpkg -s iptables-persistent >/dev/null 2>&1"); err == nil {
 		return nil
@@ -177,9 +176,9 @@ func ensureIptablesPersistent(ctx context.Context, r sourceadapter.Runner) error
 // supposed to produce: the bridge link exists, the segment NIC is
 // enslaved to it, and the FORWARD rule is present. Every check is
 // exit-code based, the same -C convention forwardRuleCheck already
-// uses, never text-parsed stdout (issue #3, lead directive 2026-09-26,
-// item 1: "the readiness gate before each scenario also checks that the
-// shape's bridge is present").
+// uses, never text-parsed stdout (issue #3, item 1): the readiness
+// gate before each scenario also checks that the shape's bridge is
+// present.
 func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 	if _, err := r.Run(ctx, fmt.Sprintf("ip link show %s", br)); err != nil {
 		return false
@@ -199,8 +198,8 @@ func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 // bridge is rebuilt via NetworkUp; a rebuild that still does not leave
 // it ready is reported so RunOne can BLOCK rather than let every
 // scenario in the shape cascade-fail against a bridge that silently is
-// not there (issue #3, lead directive 2026-09-26, item 1). A no-op for
-// macvlan/ipvlan, which have no host bridge.
+// not there (issue #3, item 1). A no-op for macvlan/ipvlan, which have
+// no host bridge.
 func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) error {
 	if shape != ShapeBridge {
 		return nil
@@ -295,8 +294,8 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		// Symmetric with writeBridgePersistence: without removing the
 		// netplan config too, the bridge would resurrect itself on the
 		// docker host's next real reboot even after this run tore it
-		// down (issue #3, lead directive 2026-09-26, item 1). The
-		// reapply after removing it hands eth1 back to cloud-init's own
+		// down (issue #3, item 1). The reapply after removing it hands
+		// eth1 back to cloud-init's own
 		// dhcp4: false stanza for that interface.
 		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(br), " "))
 		_, _ = r.Run(ctx, "sudo netplan apply")

@@ -42,8 +42,8 @@ var (
 // binary field (the "uid" client-id, option 61) back into raw bytes:
 // dhcpd prints a printable ASCII byte literally and any other byte as a
 // three-digit octal escape ("\NNN"), the same convention as its own
-// print_hw_addr/lease-dump code (issue #3, lead directive 2026-09-26,
-// item 3) -- so \" and \\ are the only two-character escapes, and every
+// print_hw_addr/lease-dump code (issue #3, item 3) -- so \" and \\ are
+// the only two-character escapes, and every
 // other backslash must begin a three-digit octal run.
 func decodeISCQuotedString(s string) ([]byte, error) {
 	var out []byte

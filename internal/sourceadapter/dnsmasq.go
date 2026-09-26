@@ -51,7 +51,7 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 		l := Lease{MAC: mac, Address: ip, Hostname: host}
 		// Field 5, the client-id (option 61), is dnsmasq's own
 		// colon-hex encoding, or "*" when the client sent none
-		// (issue #3, lead directive 2026-09-26, item 3).
+		// (issue #3, item 3).
 		if len(fields) >= 5 && fields[4] != "*" {
 			l.ClientID = strings.ToLower(fields[4])
 		}

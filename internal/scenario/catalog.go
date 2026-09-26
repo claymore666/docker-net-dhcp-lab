@@ -25,8 +25,8 @@ type Env struct {
 	PluginTag   string // e.g. ghcr.io/claymore666/docker-net-dhcp:v2.2.2
 	// PreviousPluginTag is the release A6 upgrades FROM, carried
 	// explicitly from lab.yaml rather than derived by decrementing
-	// PluginTag's patch number (issue #3, lead directive 2026-09-26): the
-	// real previous release is not always PluginTag's patch predecessor.
+	// PluginTag's patch number (issue #3): the real previous release is
+	// not always PluginTag's patch predecessor.
 	// Empty means A6 has nothing to upgrade from and reports N/A.
 	PreviousPluginTag string
 	GitSHA            string
@@ -70,7 +70,7 @@ const (
 	NameA5 = "A5-host-reboot"
 	// NameA5b tests the documented promise A5 itself cannot (a plain
 	// container may legitimately get a new mac/address on a reboot,
-	// issue #3, lead directive 2026-09-26, item 2): a container with a
+	// issue #3, item 2): a container with a
 	// fixed mac_address must keep both across a host reboot.
 	NameA5b = "A5b-host-reboot-fixed-mac"
 	NameA6  = "A6-plugin-upgrade"
@@ -84,8 +84,8 @@ const (
 //
 // It also checks the plugin is in a known state -- installed, enabled,
 // its process alive -- before every scenario, including the one right
-// after a previous scenario's failure (issue #3, lead directive
-// 2026-09-26): this one check simultaneously satisfies "known state
+// after a previous scenario's failure (issue #3): this one check
+// simultaneously satisfies "known state
 // before each scenario," "restore after a failure," and "BLOCKED, never
 // a cascading FAIL, when it cannot be restored," with no separate
 // before/after hooks and no change to the caller's loop.
@@ -96,8 +96,8 @@ func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
 	}
 	// The shape's own bridge, for bridge shape, must actually be present
 	// before this scenario runs, not assumed from an earlier bring-up in
-	// the same run (issue #3, lead directive 2026-09-26, item 1): a
-	// missing or broken bridge is rebuilt here, or this scenario is
+	// the same run (issue #3, item 1): a missing or broken bridge is
+	// rebuilt here, or this scenario is
 	// BLOCKED rather than left to cascade into a FAIL that reads like a
 	// plugin defect. A no-op for macvlan/ipvlan.
 	if err := ensureBridgePresent(ctx, e.Host, e.Cell, e.Shape); err != nil {

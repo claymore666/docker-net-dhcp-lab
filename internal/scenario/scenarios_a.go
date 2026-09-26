@@ -13,8 +13,7 @@ import (
 
 // fixedMACFor derives a deterministic, valid locally-administered
 // unicast MAC for A5b, distinct per cell x shape so parallel cells never
-// collide on the same segment (issue #3, lead directive 2026-09-26,
-// item 2).
+// collide on the same segment (issue #3, item 2).
 func fixedMACFor(cell string, shape Shape) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
@@ -228,7 +227,7 @@ func runA3(ctx context.Context, e Env) Verdict {
 // Docker never brings a container back after dockerd restarts or the
 // host reboots, by design, so a scenario testing that case would be
 // testing a container no real user would run this way, not the plugin
-// (issue #3, lead directive 2026-09-26).
+// (issue #3).
 func runA4(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA4)
 	defer removeContainer(ctx, e.Host, name)
@@ -289,11 +288,11 @@ func runA4(ctx context.Context, e Env) Verdict {
 // showing a confirmed lease, and the source able to reach the container.
 // Same --restart unless-stopped reasoning as A4: with no restart policy
 // the container is never supposed to survive a host reboot, by Docker's
-// own design (issue #3, lead directive 2026-09-26).
+// own design (issue #3).
 //
 // Re-reads the container's current mac/address/endpoint id after the
-// reboot rather than reusing the pre-reboot ones (issue #3, lead
-// directive 2026-09-26, item 2): a host reboot is out of scope for the
+// reboot rather than reusing the pre-reboot ones (issue #3, item 2):
+// a host reboot is out of scope for the
 // plugin's own restart-stability identity (docs/reference.md "DHCP
 // identity" only names `docker restart`/`systemctl restart docker`,
 // never a full host reboot), so the plugin is free to hand this
@@ -371,7 +370,7 @@ func runA5(ctx context.Context, e Env) Verdict {
 }
 
 // runA5b -- host reboot, fixed mac_address: what the docs promise for
-// this exact case (issue #3, lead directive 2026-09-26, item 2) -- a
+// this exact case (issue #3, item 2) -- a
 // container whose mac_address is fixed must keep the SAME mac and the
 // SAME address after a host reboot, unlike A5's plain container, which
 // may legitimately get new ones. N/A under ipvlan, where every
@@ -448,9 +447,9 @@ func runA5b(ctx context.Context, e Env) Verdict {
 
 // runA6 -- plugin upgrade from the previous release: install
 // e.PreviousPluginTag (named explicitly in lab.yaml, never derived by
-// decrementing e.PluginTag's patch number -- issue #3, lead directive
-// 2026-09-26, since the real previous release is not always a patch
-// predecessor, e.g. v2.3.0-rc1's previous is v2.2.3) under the same
+// decrementing e.PluginTag's patch number -- issue #3, since the real
+// previous release is not always a patch predecessor, e.g.
+// v2.3.0-rc1's previous is v2.2.3) under the same
 // alias, confirm a lease under it, then upgrade in place to e.PluginTag
 // and confirm the pre-existing container's lease survived. The install
 // only sets DHCP_LOG_LEVEL if the previous tag actually declares that
@@ -627,7 +626,7 @@ func runA8(ctx context.Context, e Env) Verdict {
 
 	// A full reachability sweep over all n would just re-serialize A8's
 	// own burst; the first and last container sample both ends of the
-	// run's timing without that (lab lead, 2026-09-26).
+	// run's timing without that.
 	sample := []created{containers[0], containers[len(containers)-1]}
 	var reachNotes []string
 	for _, c := range sample {

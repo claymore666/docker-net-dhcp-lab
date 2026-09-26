@@ -212,9 +212,8 @@ func cmdRun(args []string) int {
 	// The readiness gate every scenario relies on (RunOne's
 	// ensurePluginKnownState) only runs starting with the first
 	// scenario; NetworkUp runs before that, so it needs its own gate
-	// here (issue #3, lead directive 2026-09-26). A fresh bring-up's
-	// plugin can report done, and even have a live process, before its
-	// socket actually answers.
+	// here (issue #3). A fresh bring-up's plugin can report done, and
+	// even have a live process, before its socket actually answers.
 	if err := scenario.WaitPluginReady(ctx, hostRunner); err != nil {
 		logPath := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-plugin-not-ready.log", cellName, shape))
 		if logErr := scenario.CapturePluginLog(ctx, hostRunner, logPath); logErr != nil {

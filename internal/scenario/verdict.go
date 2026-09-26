@@ -11,8 +11,8 @@ import (
 // Result is one of the readings issue #3 asks a verdict to carry: a
 // scenario this source cannot run is N/A with a reason, never PASS or
 // FAIL. BLOCKED is the same discipline for a scenario that never reached
-// a known plugin state to begin with (issue #3, lead directive
-// 2026-09-26): one failure must never cascade into FAILs for the
+// a known plugin state to begin with: one failure must never cascade
+// into FAILs for the
 // scenarios after it, so a scenario whose precondition could not be
 // established, or restored after a previous failure, is recorded as
 // BLOCKED with the reason, not run at all.

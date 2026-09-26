@@ -67,10 +67,10 @@ func TestNetworkUpAppliesTheDocumentedForwardRuleVerbatim(t *testing.T) {
 	}
 }
 
-// Regression (lead directive, 2026-09-26): with the FORWARD rule
-// missing, the bridge shape must fail right there with a clear message
-// naming the rule -- a bare context-deadline timeout must not be the
-// only symptom. This is exactly the failure mode issue #3's original
+// Regression: with the FORWARD rule missing, the bridge shape must
+// fail right there with a clear message naming the rule -- a bare
+// context-deadline timeout must not be the only symptom. This is
+// exactly the failure mode issue #3's original
 // root cause produced: a host with no ACCEPT rule for the bridge passed
 // every step up to docker network create and only then went quiet.
 func TestNetworkUpNamesTheRuleWhenForwardRuleIsMissing(t *testing.T) {
@@ -100,8 +100,8 @@ func TestNetworkUpNamesTheRuleWhenForwardRuleIsMissing(t *testing.T) {
 
 // A failure elsewhere in the bridge setup must still fail by naming the
 // exact command that failed, not just "networkup(bridge) failed". Since
-// the netplan-recipe rewrite (issue #3, lead directive 2026-09-26), the
-// bridge is brought up by writing docs/bridge-mode.md's netplan stanza
+// the netplan-recipe rewrite (issue #3), the bridge is brought up by
+// writing docs/bridge-mode.md's netplan stanza
 // and applying it; "netplan apply" is the equivalent early, singular
 // command to inject a failure at.
 func TestNetworkUpNamesTheCommandOnAnyBridgeSetupFailure(t *testing.T) {
@@ -119,7 +119,7 @@ func TestNetworkUpNamesTheCommandOnAnyBridgeSetupFailure(t *testing.T) {
 
 // NetworkDown must remove the same rule NetworkUp adds, or every run's
 // ACCEPT rule for its (by-then-deleted) bridge name piles up in FORWARD
-// forever (lead directive, 2026-09-26).
+// forever.
 func TestNetworkDownRemovesTheForwardRule(t *testing.T) {
 	r := &fakeShapeRunner{}
 	NetworkDown(context.Background(), r, "dnsmasq", ShapeBridge)

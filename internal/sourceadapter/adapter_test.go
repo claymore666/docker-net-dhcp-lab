@@ -88,8 +88,8 @@ func TestReserveMACSendsNormalizedValues(t *testing.T) {
 }
 
 // Reachable's addr round-trips through the same validateAddr guard as
-// ReserveMAC (issue #3, lead directive 2026-09-26): a bad or
-// injection-bearing address must never reach the runner at all, across
+// ReserveMAC (issue #3): a bad or injection-bearing address must never
+// reach the runner at all, across
 // every adapter, not just one.
 func TestReachableRejectsInjectionBeforeAnySSH(t *testing.T) {
 	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fd42:200::1", ""}
@@ -172,8 +172,8 @@ func TestKeaRejectsErrorResult(t *testing.T) {
 
 // Kea reports client-id (option 61) as its own colon-hex string; the
 // adapter must carry it through and normalize it to lowercase (issue
-// #3, lead directive 2026-09-26, item 3) -- this is the format ipvlan
-// lookup keys on, since ipvlan slaves share the parent NIC's MAC.
+// #3, item 3) -- this is the format ipvlan lookup keys on, since ipvlan
+// slaves share the parent NIC's MAC.
 func TestKeaParsesClientID(t *testing.T) {
 	body := `[{"result":0,"arguments":{"leases":[{"ip-address":"10.200.1.100","hw-address":"aa:bb:cc:dd:ee:ff","hostname":"box","client-id":"00:97:CE:0D:FD:01:6F:AE:55"}]}}]`
 	leases, err := parseKeaLeases(body)
@@ -259,8 +259,8 @@ lease 10.200.2.100 {
 // dhcpd prints the uid (client-id, option 61) with C-style quoting: a
 // printable ASCII byte literally, everything else as a three-digit
 // octal escape. This fixture is the real byte sequence measured against
-// a live Kea/ISC pair sharing the same client (issue #3, lead directive
-// 2026-09-26, item 3): type byte 0x00, then 0x97 0xce 0x0d 0xfd 0x01
+// a live Kea/ISC pair sharing the same client (issue #3, item 3): type
+// byte 0x00, then 0x97 0xce 0x0d 0xfd 0x01
 // 'o' 0xae 'U' -- two of those eight bytes (0x6f, 0x55) are printable
 // and appear as literal "o" and "U", the rest as octal escapes.
 func TestISCParsesClientIDFromUID(t *testing.T) {

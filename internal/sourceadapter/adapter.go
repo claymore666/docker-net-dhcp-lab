@@ -31,7 +31,7 @@ const (
 // field) -- empty when the row carries none. ipvlan slaves share the
 // parent NIC's MAC (docs/reference.md "DHCP identity"), so ClientID is
 // the only field that identifies one slave's lease from another's
-// (issue #3, lead directive 2026-09-26, item 3).
+// (issue #3, item 3).
 type Lease struct {
 	MAC      string
 	Address  string
@@ -105,9 +105,9 @@ func validateAddr(addr string) (string, error) {
 
 // reachable pings addr from the source VM, which already sits on the
 // cell's own segment beside every shape's containers -- the practical
-// stand-in for "the observer can reach the container" (issue #3, lead
-// directive 2026-09-26): the repo's packet-capture observer is
-// passive-only and cannot probe anything itself. addr round-trips
+// stand-in for "the observer can reach the container" (issue #3): the
+// repo's packet-capture observer is passive-only and cannot probe
+// anything itself. addr round-trips
 // through validateAddr first, so it is stdlib's own normalized form
 // before it ever reaches the command line.
 func reachable(ctx context.Context, r Runner, addr string) error {

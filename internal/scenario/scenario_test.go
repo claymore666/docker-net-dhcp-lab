@@ -58,8 +58,8 @@ func TestNetworkNameAndBridgeNameAreDeterministic(t *testing.T) {
 }
 
 // fakeRunOneHostRunner is a minimal sourceadapter.Runner for RunOne's
-// own precondition check (issue #3, lead directive 2026-09-26): scripted
-// independently of fakeAdapter, since Env.Host and Env.Source are two
+// own precondition check (issue #3): scripted independently of
+// fakeAdapter, since Env.Host and Env.Source are two
 // different interfaces.
 type fakeRunOneHostRunner struct {
 	installed bool
@@ -108,8 +108,8 @@ func TestRunOneReturnsBlockedWhenPluginPreconditionFails(t *testing.T) {
 
 // Preservation: a healthy precondition still reaches Scenario.Run.
 // Shape is macvlan, not bridge: ensureBridgePresent no-ops for
-// macvlan/ipvlan (issue #3, lead directive 2026-09-26, item 1), so this
-// test stays about the plugin precondition alone; the bridge-specific
+// macvlan/ipvlan (issue #3, item 1), so this test stays about the
+// plugin precondition alone; the bridge-specific
 // readiness gate has its own tests below.
 func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 	ran := false
@@ -128,8 +128,8 @@ func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 }
 
 // fakeBridgeReadyRunner answers both RunOne's plugin-precondition check
-// and its bridge-readiness gate (issue #3, lead directive 2026-09-26,
-// item 1): bridgeUp controls whether the three bridgeReady checks (`ip
+// and its bridge-readiness gate (issue #3, item 1): bridgeUp controls
+// whether the three bridgeReady checks (`ip
 // link show`, the segment NIC's master symlink, the FORWARD -C check)
 // succeed. When bridgeUp is false, NetworkUp's own forwardRuleCheck step
 // fails too -- the same command, the same behaviour NetworkUp already
@@ -186,7 +186,7 @@ func TestRunOneRunsBridgeScenarioWhenBridgeAlreadyReady(t *testing.T) {
 // FORWARD-rule-missing failure NetworkUp already reports by name):
 // RunOne must BLOCK, carry a reason, and never reach Scenario.Run --
 // never a cascading FAIL that reads like a plugin defect (issue #3,
-// lead directive 2026-09-26, item 1).
+// item 1).
 func TestRunOneBlocksWhenBridgeMissingAndUnrebuildable(t *testing.T) {
 	ran := false
 	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
@@ -224,8 +224,7 @@ func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
 // addrChangeRunner answers docker inspect with a fixed mac/endpoint id
 // but a different IPAddress before and after a "docker restart" it
 // observes, so runA2's ipvlan documented-address-change path (issue #3,
-// lead directive 2026-09-26, item 1) is exercised without a real docker
-// host.
+// item 1) is exercised without a real docker host.
 type addrChangeRunner struct {
 	mac, beforeAddr, afterAddr, endpointID string
 	restarted                              bool
@@ -253,8 +252,8 @@ func (f *addrChangeRunner) Run(_ context.Context, cmd string) (string, error) {
 }
 
 // A2's address-changed-across-restart symptom is documented behaviour
-// on ipvlan (docs/reference.md "Restart stability (MAC and IP)", #219,
-// lead directive 2026-09-26): a PASS with a note, not a FAIL, as long
+// on ipvlan (docs/reference.md "Restart stability (MAC and IP)", #219):
+// a PASS with a note, not a FAIL, as long
 // as a lease still exists under the new client-id and the source can
 // reach the container there.
 func TestRunA2PassesWithNoteWhenIpvlanAddressChangesAcrossRestart(t *testing.T) {
@@ -456,7 +455,7 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 // both held the same address at different times within one snapshot's
 // staleness window. The lookup now matches by DHCP client-id (option 61)
 // instead: type byte 0x00 plus the first 8 bytes of the endpoint id
-// (issue #3, lead directive 2026-09-26, item 3). This endpoint id and
+// (issue #3, item 3). This endpoint id and
 // client-id pairing is the one the live Kea measurement in
 // ipvlanClientID's own doc comment recorded.
 func TestLookupLeaseUsesClientIDMatchForIpvlan(t *testing.T) {

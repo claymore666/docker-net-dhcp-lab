@@ -13,8 +13,8 @@ const bootIDCmd = "cat /proc/sys/kernel/random/boot_id"
 
 // fakeContainerRunner answers docker inspect with canned mac/addr and
 // records every command, so runContainerPolicy's command construction
-// (issue #3, lead directive 2026-09-26: A4/A5 need --restart
-// unless-stopped) is checked without a real docker host.
+// (issue #3: A4/A5 need --restart unless-stopped) is checked without a
+// real docker host.
 type fakeContainerRunner struct {
 	mac, addr, endpointID string
 	calls                 []string
@@ -36,8 +36,8 @@ func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error)
 
 // fakeKnownStateRunner scripts docker plugin inspect (PluginReference)
 // and pgrep, independently failable, so ensurePluginKnownState's three
-// readings (issue #3, lead directive 2026-09-26) are checked without a
-// real docker host: not installed, installed but process missing (with
+// readings (issue #3) are checked without a real docker host: not
+// installed, installed but process missing (with
 // or without a successful manual re-enable), and the healthy case.
 type fakeKnownStateRunner struct {
 	notInstalled bool
@@ -121,9 +121,9 @@ func TestEnsurePluginKnownStateFailsWhenUnrestorable(t *testing.T) {
 
 // fakeReadyRunner scripts docker plugin inspect (Enabled) and the socket
 // glob independently, and counts how many polls each needed before
-// answering true/ok, so waitPluginReadyTuned's two-stage gate (issue #3,
-// lead directive 2026-09-26: enabled, then the socket, bounded and
-// logged) is checked without a real docker host.
+// answering true/ok, so waitPluginReadyTuned's two-stage gate (issue #3:
+// enabled, then the socket, bounded and logged) is checked without a
+// real docker host.
 type fakeReadyRunner struct {
 	enabledAfter int // polls before "docker plugin inspect -f Enabled" answers true
 	socketAfter  int // polls before the socket glob answers ok, counted from enabledAfter
@@ -176,8 +176,8 @@ func TestWaitPluginReadyFailsAfterTimeoutWhenSocketNeverAnswers(t *testing.T) {
 }
 
 // fakeLogRunner scripts journalctl for CapturePluginLog: mixed lines, so
-// the net-dhcp-only filter (issue #3, lead directive 2026-09-26) is
-// checked without a real docker host.
+// the net-dhcp-only filter (issue #3) is checked without a real docker
+// host.
 type fakeLogRunner struct {
 	journal string
 	failErr error
@@ -352,8 +352,8 @@ func TestInspectContainerRejectsEmptyMACUnderBridge(t *testing.T) {
 	}
 }
 
-// The ipvlan client-id lookup (issue #3, lead directive 2026-09-26, item
-// 3) is built from the endpoint id, so a container with none reported
+// The ipvlan client-id lookup (issue #3, item 3) is built from the
+// endpoint id, so a container with none reported
 // cannot be looked up at all -- inspectContainer must fail here rather
 // than hand an unusable empty string on to the lease lookup.
 func TestInspectContainerRejectsEmptyEndpointIDUnderIpvlan(t *testing.T) {

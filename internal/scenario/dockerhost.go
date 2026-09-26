@@ -26,8 +26,7 @@ func runContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, net,
 // "unless-stopped": a container started with no restart policy is never
 // supposed to come back on its own after either event -- that is Docker's
 // own documented default, not a plugin defect, and a scenario that leaves
-// it unset is testing something no real user configured (issue #3, lead
-// directive 2026-09-26).
+// it unset is testing something no real user configured (issue #3).
 func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, restart string) (mac, addr, endpointID string, err error) {
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
 	restartFlag := ""
@@ -45,7 +44,7 @@ func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, shape Shape
 // ipvlan slaves legitimately report an empty MAC -- they share the
 // parent NIC's (docs/parent-attached-modes.md) -- so only shape says
 // whether an empty MAC is fatal; an empty address is fatal under every
-// shape (issue #3, lead directive 2026-09-26, item 3).
+// shape (issue #3, item 3).
 func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, name string) (mac, addr, endpointID string, err error) {
 	if mac, err = inspectField(ctx, r, name, "MacAddress"); err != nil {
 		return "", "", "", err
@@ -67,8 +66,8 @@ func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, 
 
 // runContainerFixedMAC is runContainer with an explicit --mac-address,
 // for A5b: a container whose mac_address is fixed must report the same
-// MAC and address after a host reboot (issue #3, lead directive
-// 2026-09-26, item 2). Not meaningful under ipvlan, where
+// MAC and address after a host reboot (issue #3, item 2). Not
+// meaningful under ipvlan, where
 // `--mac-address` fails outright with `invalid MAC address`
 // (docs/parent-attached-modes.md) -- callers guard that with an NA
 // before ever reaching here.
@@ -254,7 +253,7 @@ func waitPluginBackTuned(ctx context.Context, r sourceadapter.Runner, selfTimeou
 }
 
 // ensurePluginKnownState is the single precondition every scenario runs
-// through RunOne before it starts (issue #3, lead directive 2026-09-26):
+// through RunOne before it starts (issue #3):
 // every scenario must start from a known plugin state -- installed,
 // enabled, its process alive. Run once before each scenario, it also is
 // the restore step after a failure and the BLOCKED-not-FAIL guard,
@@ -307,7 +306,7 @@ const pluginSocketGlob = "/run/docker/plugins/*/net-dhcp.sock"
 
 // WaitPluginReady waits for the plugin to report Enabled, then for its
 // own socket to actually answer, bounded at 60s total and logging how
-// long it took (issue #3, lead directive 2026-09-26): on a fresh kea
+// long it took (issue #3): on a fresh kea
 // bring-up, the very first NetworkUp call failed with the socket
 // missing even though cloud-init had already reported done --
 // ensurePluginKnownState's own process check (pgrep, not the socket)
@@ -346,7 +345,7 @@ func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, 
 // this plugin's lines, to path -- the same evidence run-group-a.sh
 // already collects at the end of a cell's run, but callable directly so
 // a WaitPluginReady timeout can attach it to the BLOCKED cell before any
-// scenario runs (issue #3, lead directive 2026-09-26).
+// scenario runs (issue #3).
 func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) error {
 	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
 	if err != nil {
@@ -366,8 +365,8 @@ func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) 
 }
 
 // pluginSettingNames reads the settings a given, already-installed
-// plugin ref actually declares, from the plugin's own Config.Env (issue
-// #3, lead directive 2026-09-26): an older or different tag does not
+// plugin ref actually declares, from the plugin's own Config.Env
+// (issue #3): an older or different tag does not
 // necessarily have every setting a newer one added, and installing with
 // an unknown setting fails outright rather than ignoring it.
 func pluginSettingNames(ctx context.Context, r sourceadapter.Runner, alias string) (map[string]bool, error) {

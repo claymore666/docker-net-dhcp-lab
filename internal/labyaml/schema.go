@@ -27,15 +27,15 @@ type Segment struct {
 }
 
 type DockerHost struct {
-	BaseImage string `yaml:"base_image" json:"base_image"`
+	BaseImage   string `yaml:"base_image" json:"base_image"`
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
-	PluginTag string `yaml:"plugin_tag" json:"plugin_tag"`
+	PluginTag   string `yaml:"plugin_tag" json:"plugin_tag"`
 	// PreviousPluginTag is the release A6 upgrades FROM, named explicitly
 	// rather than derived by decrementing PluginTag's patch number: the
 	// real previous release is not always PluginTag's patch predecessor
 	// (e.g. under test v2.3.0-rc1, previous v2.2.3 -- a minor rollback, not
 	// a patch one), and deriving it anyway silently tests the wrong pair
-	// (issue #3, lead directive 2026-09-26). Optional: a cell that leaves
+	// (issue #3). Optional: a cell that leaves
 	// it empty gets A6 as N/A, never a guess.
 	PreviousPluginTag string `yaml:"previous_plugin_tag" json:"previous_plugin_tag"`
 	VCPUs             int    `yaml:"vcpus" json:"vcpus"`
