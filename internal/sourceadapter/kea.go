@@ -4,8 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// keaValidLifetimeRE matches the config's own "valid-lifetime": N, field
+// (ShortenLeaseTime, #3, A14).
+var keaValidLifetimeRE = regexp.MustCompile(`"valid-lifetime":\s*[0-9]+,`)
 
 // KeaAdapter reads leases through the Kea control agent's own HTTP API,
 // bound to 127.0.0.1 only (never the segment or mgmt network) and
@@ -19,7 +24,7 @@ type KeaAdapter struct {
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 }
 
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
@@ -111,4 +116,27 @@ func (a *KeaAdapter) systemctl(ctx context.Context, action string) error {
 		return fmt.Errorf("kea: systemctl %s: %w", action, err)
 	}
 	return nil
+}
+
+// ShortenLeaseTime rewrites the RUNNING config's valid-lifetime
+// (seconds, kea-dhcp4 config reference) and restarts -- a schema value
+// like this one needs the full restart, not the plain HUP ReserveMAC's
+// own reload uses (issue #3, A14). It captures /etc/kea/kea-dhcp4.conf
+// as it stands right now, never /root/lab-stock-config/
+// kea-dhcp4.conf.stock: that file is the package's own pre-install
+// default, captured before this cell's own subnet/pool/reservations
+// include ever got written over it, so restoring from it would drop
+// this cell's whole working config, including the reservations.json
+// include ReserveMAC depends on. Kea has no renew-timer/rebind-timer of
+// its own in this config, so T1/T2 fall back to every RFC 2131 client's
+// own default (roughly half of valid-lifetime), the same fallback
+// dnsmasq and isc-dhcp both rely on here too.
+func (a *KeaAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(context.Context) error, error) {
+	if seconds <= 0 {
+		return nil, fmt.Errorf("kea: lease time must be positive, got %d", seconds)
+	}
+	repl := fmt.Sprintf(`"valid-lifetime": %d,`, seconds)
+	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf",
+		keaValidLifetimeRE, repl,
+		func(ctx context.Context) error { return a.Restart(ctx) }, "kea")
 }

@@ -4,8 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 )
+
+// dnsmasqRangeRE matches the dhcp-range config line's own three fields
+// (start, end, lease-time), capturing everything up to the lease-time
+// field so ShortenLeaseTime can replace only that field (#3, A14).
+var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=[^,]+,[^,]+,)[^,]+$`)
 
 // DnsmasqAdapter reads dnsmasq's own lease file directly. ReserveMAC's
 // command construction is unit-tested against a fake runner
@@ -16,7 +22,7 @@ type DnsmasqAdapter struct {
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 }
 
 func (a *DnsmasqAdapter) Leases(ctx context.Context) ([]Lease, error) {
@@ -94,4 +100,21 @@ func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {
 		return fmt.Errorf("dnsmasq: systemctl %s: %w", action, err)
 	}
 	return nil
+}
+
+// ShortenLeaseTime rewrites the RUNNING config's dhcp-range lease-time
+// field (its third, unitless field is already seconds -- dnsmasq(8)) and
+// restarts (issue #3, A14). It captures /etc/dnsmasq.conf as it stands
+// right now, never /root/lab-stock-config/dnsmasq.conf.stock: that file
+// is the package's own pre-install default, captured before this cell's
+// own dhcp-range/pool ever got written over it (cloud-init runcmd
+// order), so restoring from it would replace this cell's whole working
+// config, not just undo the lease-time edit.
+func (a *DnsmasqAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(context.Context) error, error) {
+	if seconds <= 0 {
+		return nil, fmt.Errorf("dnsmasq: lease time must be positive, got %d", seconds)
+	}
+	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/dnsmasq.conf",
+		dnsmasqRangeRE, fmt.Sprintf("${1}%d", seconds),
+		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
 }

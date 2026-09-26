@@ -27,6 +27,9 @@ func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error 
 func (a *countingReachAdapter) Restart(_ context.Context) error                 { return nil }
 func (a *countingReachAdapter) Stop(_ context.Context) error                    { return nil }
 func (a *countingReachAdapter) Start(_ context.Context) error                   { return nil }
+func (a *countingReachAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
 func (a *countingReachAdapter) Reachable(_ context.Context, _ string) error {
 	a.calls++
 	if a.reachDelay > 0 {
