@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"strings"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
@@ -80,6 +81,128 @@ func forwardRuleDel(br string) string {
 	return fmt.Sprintf("sudo iptables -D FORWARD -i %s -j ACCEPT", br)
 }
 
+// writeRemoteFile idempotently overwrites path on r with content via a
+// heredoc in a single remote command -- SSHRunner passes remoteCmd
+// through to the remote shell unchanged (ssh.go), so an embedded
+// heredoc executes there as one command, with no local temp file and no
+// interactive editor.
+func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content string) error {
+	cmd := fmt.Sprintf("sudo tee %s >/dev/null <<'LABEOF'\n%sLABEOF\n", path, content)
+	if _, err := r.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeBridgePersistence writes docs/bridge-mode.md's own
+// systemd-networkd recipe ("Make the bridge persistent"), verbatim
+// apart from substituting its example names for this lab's real ones
+// (my-bridge -> br, eth0 -> SegmentNIC): a NetworkUp that only ever
+// built the bridge with `ip link` (as it used to) did not survive a
+// reboot, so A5's evidence was read against a bridge that was already
+// gone (issue #3, lead directive 2026-09-26, item 1).
+//
+// Docs finding, recorded rather than worked around (the directive: "if
+// the docs are not enough on their own, that is a docs finding: record
+// it, and do not add anything the docs do not say"): the docs' own
+// 30-my-bridge.network stanza sets DHCP=ipv4 because the documented use
+// case replaces the host's own LAN uplink with the bridge. This lab's
+// segment bridge carries only container traffic -- SegmentNIC's own
+// comment above says it "never carries the docker host's own address"
+// -- so applying the recipe verbatim gives the docker host one extra,
+// harmless DHCP lease on the segment for as long as the bridge exists.
+// It shows up as one extra row in every lease snapshot but never
+// affects a verdict, since every lookup in this package matches by an
+// exact mac/address/client-id, never by counting rows.
+func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br string) error {
+	netdev := fmt.Sprintf("[NetDev]\nName=%s\nKind=bridge\n\n[Bridge]\nSTP=false\nForwardDelaySec=0\n", br)
+	ethNetwork := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nBridge=%s\n", SegmentNIC, br)
+	brNetwork := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nDHCP=ipv4\nConfigureWithoutCarrier=yes\n", br)
+
+	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br), netdev); err != nil {
+		return err
+	}
+	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/20-%s-%s.network", SegmentNIC, br), ethNetwork); err != nil {
+		return err
+	}
+	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/30-%s.network", br), brNetwork); err != nil {
+		return err
+	}
+	return nil
+}
+
+// bridgeUnitPaths lists the three files writeBridgePersistence writes
+// for br, the single source of truth for both writing and removing them.
+func bridgeUnitPaths(br string) []string {
+	return []string{
+		fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br),
+		fmt.Sprintf("/etc/systemd/network/20-%s-%s.network", SegmentNIC, br),
+		fmt.Sprintf("/etc/systemd/network/30-%s.network", br),
+	}
+}
+
+// ensureIptablesPersistent installs the package docs/bridge-mode.md's
+// firewall-persistence table names for iptables, only if it is not
+// already present -- measured live against a real cell's docker-host
+// image, which does not carry it by default (issue #3, lead directive
+// 2026-09-26, item 1).
+func ensureIptablesPersistent(ctx context.Context, r sourceadapter.Runner) error {
+	if _, err := r.Run(ctx, "dpkg -s iptables-persistent >/dev/null 2>&1"); err == nil {
+		return nil
+	}
+	cmd := "sudo DEBIAN_FRONTEND=noninteractive apt-get update && " +
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent"
+	if _, err := r.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("install iptables-persistent: %w", err)
+	}
+	return nil
+}
+
+// bridgeReady checks the three things docs/bridge-mode.md's recipe is
+// supposed to produce: the bridge link exists, the segment NIC is
+// enslaved to it, and the FORWARD rule is present. Every check is
+// exit-code based, the same -C convention forwardRuleCheck already
+// uses, never text-parsed stdout (issue #3, lead directive 2026-09-26,
+// item 1: "the readiness gate before each scenario also checks that the
+// shape's bridge is present").
+func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
+	if _, err := r.Run(ctx, fmt.Sprintf("ip link show %s", br)); err != nil {
+		return false
+	}
+	if _, err := r.Run(ctx, fmt.Sprintf("readlink -f /sys/class/net/%s/master | grep -q '/%s$'", SegmentNIC, br)); err != nil {
+		return false
+	}
+	if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
+		return false
+	}
+	return true
+}
+
+// ensureBridgePresent is the readiness gate item 1 asks for: before any
+// bridge-shape scenario, the shape's bridge must actually be there, not
+// assumed from an earlier bring-up in the same run. A missing or broken
+// bridge is rebuilt via NetworkUp; a rebuild that still does not leave
+// it ready is reported so RunOne can BLOCK rather than let every
+// scenario in the shape cascade-fail against a bridge that silently is
+// not there (issue #3, lead directive 2026-09-26, item 1). A no-op for
+// macvlan/ipvlan, which have no host bridge.
+func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) error {
+	if shape != ShapeBridge {
+		return nil
+	}
+	br := hostBridgeName(NetworkName(cell, shape))
+	if bridgeReady(ctx, r, br) {
+		return nil
+	}
+	if _, err := NetworkUp(ctx, r, cell, shape); err != nil {
+		return fmt.Errorf("bridge %s not present and could not be rebuilt: %w", br, err)
+	}
+	if !bridgeReady(ctx, r, br) {
+		return fmt.Errorf("bridge %s rebuilt but still not ready", br)
+	}
+	return nil
+}
+
 // NetworkUp brings up one shape's null-IPAM network on the docker host.
 // It clears any previous run's network (and, for bridge, its host
 // bridge) first: a stale leftover must never let a fresh create look
@@ -90,18 +213,20 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 	switch shape {
 	case ShapeBridge:
 		br := hostBridgeName(net)
-		cmds := []string{
-			fmt.Sprintf("sudo ip link add %s type bridge", br),
-			fmt.Sprintf("sudo ip link set %s up", br),
-			fmt.Sprintf("sudo ip link set %s down", SegmentNIC),
-			fmt.Sprintf("sudo ip link set %s master %s", SegmentNIC, br),
-			fmt.Sprintf("sudo ip link set %s up", SegmentNIC),
-			forwardRuleAdd(br),
+		if err := writeBridgePersistence(ctx, r, br); err != nil {
+			return "", fmt.Errorf("networkup(bridge): %w", err)
 		}
-		for _, c := range cmds {
-			if _, err := r.Run(ctx, c); err != nil {
-				return "", fmt.Errorf("networkup(bridge): %s: %w", c, err)
-			}
+		if _, err := r.Run(ctx, "sudo systemctl enable --now systemd-networkd"); err != nil {
+			return "", fmt.Errorf("networkup(bridge): sudo systemctl enable --now systemd-networkd: %w", err)
+		}
+		if _, err := r.Run(ctx, "sudo networkctl reload"); err != nil {
+			return "", fmt.Errorf("networkup(bridge): sudo networkctl reload: %w", err)
+		}
+		if err := ensureIptablesPersistent(ctx, r); err != nil {
+			return "", fmt.Errorf("networkup(bridge): %w", err)
+		}
+		if _, err := r.Run(ctx, forwardRuleAdd(br)); err != nil {
+			return "", fmt.Errorf("networkup(bridge): %s: %w", forwardRuleAdd(br), err)
 		}
 		// The FORWARD rule above is the only thing standing between a
 		// clean create and a bridge that silently drops every DHCP
@@ -114,6 +239,12 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 			return "", fmt.Errorf(
 				"networkup(bridge): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
 				forwardRuleAdd(br), err)
+		}
+		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
+			return "", fmt.Errorf("networkup(bridge): sudo netfilter-persistent save: %w", err)
+		}
+		if !bridgeReady(ctx, r, br) {
+			return "", fmt.Errorf("networkup(bridge): bridge %s or its %s port did not come up after the systemd-networkd reload", br, SegmentNIC)
 		}
 		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o bridge=%s %s", driverAlias, br, net)
 		if _, err := r.Run(ctx, create); err != nil {
@@ -149,5 +280,12 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		_, _ = r.Run(ctx, forwardRuleDel(br))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
+		// Symmetric with writeBridgePersistence: without removing the
+		// unit files too, the bridge would resurrect itself on the
+		// docker host's next real reboot even after this run tore it
+		// down (issue #3, lead directive 2026-09-26, item 1).
+		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeUnitPaths(br), " "))
+		_, _ = r.Run(ctx, "sudo networkctl reload")
+		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
 }

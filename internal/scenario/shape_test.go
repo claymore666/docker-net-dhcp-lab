@@ -99,18 +99,20 @@ func TestNetworkUpNamesTheRuleWhenForwardRuleIsMissing(t *testing.T) {
 }
 
 // A failure elsewhere in the bridge setup must still fail by naming the
-// exact command that failed, not just "networkup(bridge) failed".
+// exact command that failed, not just "networkup(bridge) failed". Since
+// the persistent-bridge rewrite (issue #3, lead directive 2026-09-26,
+// item 1), the bridge is no longer built with a bare `ip link add`; the
+// systemd-networkd reload that actually brings the bridge link up is
+// the equivalent early, singular command to inject a failure at.
 func TestNetworkUpNamesTheCommandOnAnyBridgeSetupFailure(t *testing.T) {
-	net := NetworkName("isc-dhcp", ShapeBridge)
-	br := hostBridgeName(net)
-	addCmd := "sudo ip link add " + br + " type bridge"
+	reloadCmd := "sudo systemctl enable --now systemd-networkd"
 
-	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == addCmd }}
+	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == reloadCmd }}
 	_, err := NetworkUp(context.Background(), r, "isc-dhcp", ShapeBridge)
 	if err == nil {
-		t.Fatal("NetworkUp succeeded although its first command failed")
+		t.Fatal("NetworkUp succeeded although its systemd-networkd reload failed")
 	}
-	if !strings.Contains(err.Error(), addCmd) {
+	if !strings.Contains(err.Error(), reloadCmd) {
 		t.Fatalf("error does not name the failing command: %v", err)
 	}
 }

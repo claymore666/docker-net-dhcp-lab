@@ -106,19 +106,103 @@ func TestRunOneReturnsBlockedWhenPluginPreconditionFails(t *testing.T) {
 }
 
 // Preservation: a healthy precondition still reaches Scenario.Run.
+// Shape is macvlan, not bridge: ensureBridgePresent no-ops for
+// macvlan/ipvlan (issue #3, lead directive 2026-09-26, item 1), so this
+// test stays about the plugin precondition alone; the bridge-specific
+// readiness gate has its own tests below.
 func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 	ran := false
 	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
 		ran = true
-		return pass("probe", "dnsmasq", ShapeBridge, "ran", map[string]string{"x": "y"}, "sha")
+		return pass("probe", "dnsmasq", ShapeMacvlan, "ran", map[string]string{"x": "y"}, "sha")
 	}}
-	e := Env{Host: &fakeRunOneHostRunner{installed: true, pgrepOK: true}, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeBridge}
+	e := Env{Host: &fakeRunOneHostRunner{installed: true, pgrepOK: true}, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeMacvlan}
 	v := RunOne(context.Background(), s, e)
 	if !ran {
 		t.Fatalf("Scenario.Run was never called; verdict: %+v", v)
 	}
 	if v.Result != PASS {
 		t.Fatalf("want PASS, got %s", v.Result)
+	}
+}
+
+// fakeBridgeReadyRunner answers both RunOne's plugin-precondition check
+// and its bridge-readiness gate (issue #3, lead directive 2026-09-26,
+// item 1): bridgeUp controls whether the three bridgeReady checks (`ip
+// link show`, the segment NIC's master symlink, the FORWARD -C check)
+// succeed. When bridgeUp is false, NetworkUp's own forwardRuleCheck step
+// fails too -- the same command, the same behaviour NetworkUp already
+// has -- so a rebuild attempt fails cleanly rather than needing a second
+// canned failure point.
+type fakeBridgeReadyRunner struct {
+	bridgeUp bool
+	calls    []string
+}
+
+func (f *fakeBridgeReadyRunner) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	switch {
+	case strings.Contains(cmd, "PluginReference"):
+		return "ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1", nil
+	case strings.Contains(cmd, "pgrep"):
+		return "1234", nil
+	case strings.HasPrefix(cmd, "ip link show"), strings.HasPrefix(cmd, "readlink -f"), strings.Contains(cmd, "iptables -C FORWARD"):
+		if f.bridgeUp {
+			return "", nil
+		}
+		return "", context.DeadlineExceeded
+	default:
+		return "", nil
+	}
+}
+
+// The bridge is already present and passes every bridgeReady check:
+// RunOne must not rebuild it (no docker network create among the
+// calls) and must still reach Scenario.Run.
+func TestRunOneRunsBridgeScenarioWhenBridgeAlreadyReady(t *testing.T) {
+	ran := false
+	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
+		ran = true
+		return pass("probe", "dnsmasq", ShapeBridge, "ran", map[string]string{"x": "y"}, "sha")
+	}}
+	r := &fakeBridgeReadyRunner{bridgeUp: true}
+	e := Env{Host: r, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeBridge}
+	v := RunOne(context.Background(), s, e)
+	if !ran {
+		t.Fatalf("Scenario.Run was never called; verdict: %+v", v)
+	}
+	if v.Result != PASS {
+		t.Fatalf("want PASS, got %s", v.Result)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "docker network create") {
+			t.Fatalf("RunOne rebuilt an already-ready bridge: %q", c)
+		}
+	}
+}
+
+// The bridge is missing and NetworkUp cannot bring it back (the same
+// FORWARD-rule-missing failure NetworkUp already reports by name):
+// RunOne must BLOCK, carry a reason, and never reach Scenario.Run --
+// never a cascading FAIL that reads like a plugin defect (issue #3,
+// lead directive 2026-09-26, item 1).
+func TestRunOneBlocksWhenBridgeMissingAndUnrebuildable(t *testing.T) {
+	ran := false
+	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
+		ran = true
+		return pass("probe", "dnsmasq", ShapeBridge, "should never run", map[string]string{"x": "y"}, "sha")
+	}}
+	r := &fakeBridgeReadyRunner{bridgeUp: false}
+	e := Env{Host: r, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeBridge}
+	v := RunOne(context.Background(), s, e)
+	if v.Result != BLOCKED {
+		t.Fatalf("want BLOCKED, got %s (reason %q)", v.Result, v.Reason)
+	}
+	if v.Reason == "" {
+		t.Fatal("a BLOCKED verdict must carry a reason")
+	}
+	if ran {
+		t.Fatal("Scenario.Run was called despite an unrebuildable bridge")
 	}
 }
 

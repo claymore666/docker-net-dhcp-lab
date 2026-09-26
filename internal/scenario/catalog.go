@@ -89,6 +89,16 @@ func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
 		return blocked(s.Name, e.Cell, e.Shape,
 			fmt.Sprintf("plugin not in a known state before this scenario: %v", err), e.GitSHA)
 	}
+	// The shape's own bridge, for bridge shape, must actually be present
+	// before this scenario runs, not assumed from an earlier bring-up in
+	// the same run (issue #3, lead directive 2026-09-26, item 1): a
+	// missing or broken bridge is rebuilt here, or this scenario is
+	// BLOCKED rather than left to cascade into a FAIL that reads like a
+	// plugin defect. A no-op for macvlan/ipvlan.
+	if err := ensureBridgePresent(ctx, e.Host, e.Cell, e.Shape); err != nil {
+		return blocked(s.Name, e.Cell, e.Shape,
+			fmt.Sprintf("shape's bridge not in a known state before this scenario: %v", err), e.GitSHA)
+	}
 	if ok, reason := Applicable(s, e.Source); !ok {
 		return na(s.Name, e.Cell, e.Shape, reason, e.GitSHA)
 	}
