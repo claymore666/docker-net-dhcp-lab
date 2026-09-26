@@ -18,12 +18,13 @@ ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\
 
 # Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
 # markers (e.g. exchange-1), role words that name how this project is
-# worked on (lead, coordinator, maintainer, reviewer), a private record
-# a public reader cannot open (handover) or the instruction it recorded
-# (directive), and a review finding's own number never belong in a
-# public tracked file; caught by shape, so no real tag or role word
-# appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|finding [0-9]+|handover|directive)\b'
+# worked on (lead, coordinator, maintainer, reviewer), a citation to an
+# internal decision a public reader cannot resolve (ruling), a private
+# record a public reader cannot open (handover) or the instruction it
+# recorded (directive), and a review finding's own number never belong
+# in a public tracked file; caught by shape, so no real tag or role
+# word appears here.
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|ruling|finding [0-9]+|handover|directive)\b'
 # A review verdict word is all-caps only in real use; the ordinary
 # English verb a comment might use ("this will hold", "make it clear")
 # is lowercase and must stay clean, so this one is matched

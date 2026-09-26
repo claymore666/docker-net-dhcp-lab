@@ -74,10 +74,17 @@ run_case "role word: maintainer" \
 	$'note: the maintainer approved it\n' fail || fail=1
 run_case "role word: reviewer" \
 	$'note: the reviewer held it\n' fail || fail=1
+# A citation to an internal decision a public reader cannot resolve
+# ("ruling item N") is the same dead-reference shape a role word is,
+# and must be caught the same way.
+run_case "internal citation: ruling" \
+	$'note: fixed per ruling item 3\n' fail || fail=1
 # A word that merely contains a role word as a substring must stay clean
 # (word-boundary check, not a bare substring match).
 run_case "substring, not a role word" \
 	$'note: a leading indent, a leaderboard entry\n' ok || fail=1
+run_case "substring, not the ruling word" \
+	$'note: overruling a previous decision\n' ok || fail=1
 # A capitalised role word must be caught too -- the reviewer's own case.
 run_case "role word, capitalised" \
 	$'Lead and Reviewer agreed this in round 2.\n' fail || fail=1
@@ -163,4 +170,4 @@ run_case "commit-message-check-test.sh, role word, exempt" \
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 33 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 35 cases behaved as expected"
