@@ -80,9 +80,14 @@ func runA1(ctx context.Context, e Env) Verdict {
 	if !ok {
 		return fail(NameA1, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA1, e.Cell, e.Shape,
+			fmt.Sprintf("container mac %s has a lease for %s, but the source could not reach it within %ds: %v", mac, addr, secs, err), ev, e.GitSHA)
+	}
 	corroborate(ctx, e, mac, ev, NameA1, "capture-check")
 	return pass(NameA1, e.Cell, e.Shape,
-		fmt.Sprintf("container mac %s got address %s, confirmed in the source's own lease table (hostname %q)", mac, addr, lease.Hostname),
+		fmt.Sprintf("container mac %s got address %s, confirmed in the source's own lease table (hostname %q), reachable from the source after %ds", mac, addr, lease.Hostname, secs),
 		ev, e.GitSHA)
 }
 
@@ -144,16 +149,22 @@ func runA2(ctx context.Context, e Env) Verdict {
 			return fail(NameA2, e.Cell, e.Shape,
 				fmt.Sprintf("address changed across restart: %s -> %s", addr, afterAddr), ev, e.GitSHA)
 		}
-		if err := e.Source.Reachable(ctx, afterAddr); err != nil {
+		secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+		if err != nil {
 			return fail(NameA2, e.Cell, e.Shape,
-				fmt.Sprintf("container restarted and has a lease for the new address %s, but the source could not reach it: %v", afterAddr, err), ev, e.GitSHA)
+				fmt.Sprintf("container restarted and has a lease for the new address %s, but the source could not reach it within %ds: %v", afterAddr, secs, err), ev, e.GitSHA)
 		}
 		return pass(NameA2, e.Cell, e.Shape,
-			fmt.Sprintf("container restarted, address changed (%s -> %s) as documented for ipvlan (#219), confirmed in the source's table both times, reachable from the source", addr, afterAddr),
+			fmt.Sprintf("container restarted, address changed (%s -> %s) as documented for ipvlan (#219), confirmed in the source's table both times, reachable from the source after %ds", addr, afterAddr, secs),
 			ev, e.GitSHA)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA2, e.Cell, e.Shape,
+			fmt.Sprintf("container restarted and kept address %s, but the source could not reach it within %ds: %v", addr, secs, err), ev, e.GitSHA)
+	}
 	return pass(NameA2, e.Cell, e.Shape,
-		fmt.Sprintf("container restarted, kept address %s, confirmed in the source's table both times", addr),
+		fmt.Sprintf("container restarted, kept address %s, confirmed in the source's table both times, reachable from the source after %ds", addr, secs),
 		ev, e.GitSHA)
 }
 
@@ -199,8 +210,13 @@ func runA3(ctx context.Context, e Env) Verdict {
 	if addr2 != addr1 {
 		reuse = fmt.Sprintf("got a different address (%s -> %s)", addr1, addr2)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr2)
+	if err != nil {
+		return fail(NameA3, e.Cell, e.Shape,
+			fmt.Sprintf("fresh container has a lease for %s, but the source could not reach it within %ds: %v", addr2, secs, err), ev, e.GitSHA)
+	}
 	return pass(NameA3, e.Cell, e.Shape,
-		fmt.Sprintf("fresh container after down/up got address %s, confirmed in the source's table (%s)", addr2, reuse),
+		fmt.Sprintf("fresh container after down/up got address %s, confirmed in the source's table (%s), reachable from the source after %ds", addr2, reuse, secs),
 		ev, e.GitSHA)
 }
 
@@ -257,12 +273,13 @@ func runA4(ctx context.Context, e Env) Verdict {
 	if afterAddr != addr {
 		leaseNote = fmt.Sprintf("got a new address (%s -> %s)", addr, afterAddr)
 	}
-	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape,
-			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", afterMac, afterAddr, err), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
 	}
 	return pass(NameA4, e.Cell, e.Shape,
-		fmt.Sprintf("dockerd restarted, container running, %s, confirmed in the source's table both times, reachable from the source", leaseNote),
+		fmt.Sprintf("dockerd restarted, container running, %s, confirmed in the source's table both times, reachable from the source after %ds", leaseNote, secs),
 		ev, e.GitSHA)
 }
 
@@ -343,12 +360,13 @@ func runA5(ctx context.Context, e Env) Verdict {
 	} else {
 		notes = append(notes, fmt.Sprintf("kept address %s", addr))
 	}
-	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape,
-			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", afterMac, afterAddr, err), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
 	}
 	return pass(NameA5, e.Cell, e.Shape,
-		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source", strings.Join(notes, ", ")),
+		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source after %ds", strings.Join(notes, ", "), secs),
 		ev, e.GitSHA)
 }
 
@@ -418,8 +436,13 @@ func runA5b(ctx context.Context, e Env) Verdict {
 	if afterAddr != addr {
 		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("address changed across the reboot despite a fixed mac_address: %s -> %s", addr, afterAddr), ev, e.GitSHA)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape,
+			fmt.Sprintf("host rebooted, fixed mac %s has a lease for %s, but the source could not reach it within %ds: %v", fixedMAC, afterAddr, secs, err), ev, e.GitSHA)
+	}
 	return pass(NameA5b, e.Cell, e.Shape,
-		fmt.Sprintf("host rebooted, fixed mac %s kept address %s, confirmed in the source's table both times", fixedMAC, addr),
+		fmt.Sprintf("host rebooted, fixed mac %s kept address %s, confirmed in the source's table both times, reachable from the source after %ds", fixedMAC, addr, secs),
 		ev, e.GitSHA)
 }
 
@@ -492,8 +515,13 @@ func runA6(ctx context.Context, e Env) Verdict {
 	if !ok {
 		return fail(NameA6, e.Cell, e.Shape, "after upgrade: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA6, e.Cell, e.Shape,
+			fmt.Sprintf("upgraded %s -> %s, pre-existing container has a lease for %s, but the source could not reach it within %ds: %v", prev, e.PluginTag, addr, secs, err), ev, e.GitSHA)
+	}
 	return pass(NameA6, e.Cell, e.Shape,
-		fmt.Sprintf("upgraded %s -> %s, pre-existing container's lease %s confirmed after", prev, e.PluginTag, addr),
+		fmt.Sprintf("upgraded %s -> %s, pre-existing container's lease %s confirmed after, reachable from the source after %ds", prev, e.PluginTag, addr, secs),
 		ev, e.GitSHA)
 }
 
@@ -542,8 +570,13 @@ func runA7(ctx context.Context, e Env) Verdict {
 	if !ok {
 		return fail(NameA7, e.Cell, e.Shape, "after kill: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
+		return fail(NameA7, e.Cell, e.Shape,
+			fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s confirmed, but the source could not reach it within %ds: %v", recoveredBy, addr, secs, err), ev, e.GitSHA)
+	}
 	return pass(NameA7, e.Cell, e.Shape,
-		fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s still confirmed", recoveredBy, addr),
+		fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s still confirmed, reachable from the source after %ds", recoveredBy, addr, secs),
 		ev, e.GitSHA)
 }
 
@@ -591,7 +624,21 @@ func runA8(ctx context.Context, e Env) Verdict {
 		return fail(NameA8, e.Cell, e.Shape,
 			fmt.Sprintf("%d of %d containers started but only %d have a distinct confirmed lease", n, n, confirmed), ev, e.GitSHA)
 	}
+
+	// A full reachability sweep over all n would just re-serialize A8's
+	// own burst; the first and last container sample both ends of the
+	// run's timing without that (lab lead, 2026-09-26).
+	sample := []created{containers[0], containers[len(containers)-1]}
+	var reachNotes []string
+	for _, c := range sample {
+		secs, err := reachableWithRetry(ctx, e.Source, c.addr)
+		if err != nil {
+			return fail(NameA8, e.Cell, e.Shape,
+				fmt.Sprintf("%d distinct confirmed leases, but %s (address %s) was not reachable within %ds: %v", confirmed, c.name, c.addr, secs, err), ev, e.GitSHA)
+		}
+		reachNotes = append(reachNotes, fmt.Sprintf("%s after %ds", c.addr, secs))
+	}
 	return pass(NameA8, e.Cell, e.Shape,
-		fmt.Sprintf("%d containers started, %d distinct confirmed leases in the source's own table", n, confirmed),
+		fmt.Sprintf("%d containers started, %d distinct confirmed leases in the source's own table, sampled reachable: %s", n, confirmed, strings.Join(reachNotes, ", ")),
 		ev, e.GitSHA)
 }

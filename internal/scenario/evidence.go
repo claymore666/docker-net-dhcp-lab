@@ -130,6 +130,38 @@ func lookupLease(ctx context.Context, a sourceadapter.Adapter, shape Shape, mac,
 	return l, leases, ok, nil
 }
 
+// reachabilityWindow bounds reachableWithRetry: a single ping taken
+// right after a lease is confirmed can race the container's network
+// attach (project note: Join returns before the attach lands). The lead
+// set this window as a definition, not a value tuned to any one result
+// (lab lead, 2026-09-26); a dig at 98b3478 measured 0.7s to first reply
+// on a clean isc-dhcp/bridge host reboot, well inside it.
+const reachabilityWindow = 10 * time.Second
+
+// reachableWithRetry pings addr through the source once per second,
+// starting as soon as the caller has a confirmed lease, until the first
+// reply or reachabilityWindow elapses. It always returns the whole
+// seconds elapsed, on success or on timeout, so every verdict this
+// backs records how long the check took either way (lab lead,
+// 2026-09-26).
+func reachableWithRetry(ctx context.Context, a sourceadapter.Adapter, addr string) (int, error) {
+	start := time.Now()
+	var lastErr error
+	for {
+		if lastErr = a.Reachable(ctx, addr); lastErr == nil {
+			return int(time.Since(start).Round(time.Second) / time.Second), nil
+		}
+		if time.Since(start) >= reachabilityWindow {
+			return int(reachabilityWindow / time.Second), lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return int(time.Since(start).Round(time.Second) / time.Second), ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func leaseFailReason(shape Shape, mac, addr, endpointID string) string {
 	if shape == ShapeIpvlan {
 		clientID, err := ipvlanClientID(endpointID)
