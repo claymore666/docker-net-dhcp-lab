@@ -114,6 +114,19 @@ func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content 
 // It shows up as one extra row in every lease snapshot but never
 // affects a verdict, since every lookup in this package matches by an
 // exact mac/address/client-id, never by counting rows.
+// portUnitPrefix is lower than cloud-init's own "10-netplan-seg0.network"
+// (cloud-init/network-config.tmpl.yaml, __SEG_MAC__ match): systemd-networkd
+// applies only the first *.network file that matches an interface, in
+// filename order across /etc and /run together, and ignores the rest.
+// The docs' own example number for this file ("20-eth0.network") loses
+// that race against cloud-init's unit, measured live on a fresh cell
+// (kea/bridge): eth1 stayed unenslaved and NetworkUp's own readiness
+// check caught it, correctly, as "did not come up" -- not a docs
+// problem, since a real host's port NIC has no such rival unit; this
+// lab's own cloud-init does. The stanza's content is still the docs'
+// text verbatim; only this file's number changes, to win the match.
+const portUnitPrefix = "05"
+
 func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br string) error {
 	netdev := fmt.Sprintf("[NetDev]\nName=%s\nKind=bridge\n\n[Bridge]\nSTP=false\nForwardDelaySec=0\n", br)
 	ethNetwork := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nBridge=%s\n", SegmentNIC, br)
@@ -122,7 +135,7 @@ func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br stri
 	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br), netdev); err != nil {
 		return err
 	}
-	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/20-%s-%s.network", SegmentNIC, br), ethNetwork); err != nil {
+	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/%s-%s-%s.network", portUnitPrefix, SegmentNIC, br), ethNetwork); err != nil {
 		return err
 	}
 	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/30-%s.network", br), brNetwork); err != nil {
@@ -136,7 +149,7 @@ func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br stri
 func bridgeUnitPaths(br string) []string {
 	return []string{
 		fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br),
-		fmt.Sprintf("/etc/systemd/network/20-%s-%s.network", SegmentNIC, br),
+		fmt.Sprintf("/etc/systemd/network/%s-%s-%s.network", portUnitPrefix, SegmentNIC, br),
 		fmt.Sprintf("/etc/systemd/network/30-%s.network", br),
 	}
 }
