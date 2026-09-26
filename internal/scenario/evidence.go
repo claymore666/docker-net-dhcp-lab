@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -109,30 +108,4 @@ func na(scenario, cell string, shape Shape, reason, gitSHA string) Verdict {
 		Result: NA, Reason: reason, Evidence: nil,
 		GitSHA: gitSHA, Timestamp: time.Now(),
 	}
-}
-
-// previousTag derives the patch-decremented predecessor of a
-// registry/name:vMAJOR.MINOR.PATCH tag (e.g. v2.2.2 -> v2.2.1). It never
-// guesses across a minor boundary: a patch of 0 has no predecessor this
-// function will derive, and that is reported as N/A with a reason
-// (issue #3: a narrow, documented limitation, never a silent guess).
-func previousTag(tag string) (string, error) {
-	i := strings.LastIndex(tag, ":")
-	if i < 0 {
-		return "", fmt.Errorf("tag %q has no :version", tag)
-	}
-	repo, ver := tag[:i], tag[i+1:]
-	v := strings.TrimPrefix(ver, "v")
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("tag %q version %q is not vMAJOR.MINOR.PATCH", tag, ver)
-	}
-	patch, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return "", fmt.Errorf("tag %q patch %q is not numeric: %w", tag, parts[2], err)
-	}
-	if patch == 0 {
-		return "", fmt.Errorf("tag %q has patch 0, no patch predecessor to derive", tag)
-	}
-	return fmt.Sprintf("%s:v%s.%s.%d", repo, parts[0], parts[1], patch-1), nil
 }

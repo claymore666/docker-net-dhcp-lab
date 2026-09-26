@@ -226,6 +226,53 @@ func installedPluginTag(ctx context.Context, r sourceadapter.Runner) (string, er
 	return strings.TrimSpace(out), nil
 }
 
+// pluginSettingNames reads the settings a given, already-installed
+// plugin ref actually declares, from the plugin's own Config.Env (issue
+// #3, lead directive 2026-09-26): an older or different tag does not
+// necessarily have every setting a newer one added, and installing with
+// an unknown setting fails outright rather than ignoring it.
+func pluginSettingNames(ctx context.Context, r sourceadapter.Runner, alias string) (map[string]bool, error) {
+	out, err := r.Run(ctx, `sudo docker plugin inspect -f '{{range .Config.Env}}{{.Name}}{{"\n"}}{{end}}' `+alias)
+	if err != nil {
+		return nil, fmt.Errorf("read plugin settings for %s: %w", alias, err)
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names[line] = true
+		}
+	}
+	return names, nil
+}
+
+// installPluginChecked installs ref under alias without enabling it,
+// reads which settings that ref actually declares, sets only the wanted
+// settings that are present, then enables. It never fails on a wanted
+// setting the ref does not have -- that is expected across versions, not
+// an error -- but the caller learns which ones were skipped.
+func installPluginChecked(ctx context.Context, r sourceadapter.Runner, alias, ref string, wanted map[string]string) (skipped []string, err error) {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker plugin install --grant-all-permissions --alias %s %s --disable", alias, ref)); err != nil {
+		return nil, fmt.Errorf("install %s (disabled): %w", ref, err)
+	}
+	names, err := pluginSettingNames(ctx, r, alias)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range wanted {
+		if !names[k] {
+			skipped = append(skipped, k)
+			continue
+		}
+		if _, err := r.Run(ctx, fmt.Sprintf("sudo docker plugin set %s %s=%s", alias, k, v)); err != nil {
+			return skipped, fmt.Errorf("set %s=%s on %s: %w", k, v, ref, err)
+		}
+	}
+	if _, err := r.Run(ctx, "sudo docker plugin enable "+alias); err != nil {
+		return skipped, fmt.Errorf("enable %s: %w", ref, err)
+	}
+	return skipped, nil
+}
+
 // dhcpExchangeReason reuses the repo's own checker (issue #2's
 // dhcp-exchange-check.sh) so there is exactly one place that defines a
 // complete DHCP exchange, tied to one MAC via option 53 -- never a

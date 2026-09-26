@@ -26,6 +26,7 @@ source_type=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
 source_mgmt_addr=$(jq -r '.cell.source.mgmt_address // empty' <<<"$RESOLVED")
 source_mgmt_ip=${source_mgmt_addr%%/*}
 plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
+previous_plugin_tag=$(jq -r '.cell.docker_host.previous_plugin_tag // empty' <<<"$RESOLVED")
 
 if [ -z "$source_type" ]; then
 	echo "run-group-a: cell $CELL has no source; nothing group A can run against" >&2
@@ -48,6 +49,7 @@ echo "== versions =="
 {
 	echo "# versions for cell $CELL, commit $GIT_SHA, captured $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "plugin_tag: $plugin_tag"
+	echo "previous_plugin_tag: ${previous_plugin_tag:-none configured}"
 	echo "docker_host engine: $(ssh_run "$mgmt_ip" "sudo docker version --format '{{.Server.Version}}'")"
 	echo "docker_host kernel: $(ssh_run "$mgmt_ip" "uname -r")"
 	echo "source type: $source_type"

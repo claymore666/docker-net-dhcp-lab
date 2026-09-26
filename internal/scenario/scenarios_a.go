@@ -300,16 +300,22 @@ func runA5(ctx context.Context, e Env) Verdict {
 		ev, e.GitSHA)
 }
 
-// runA6 -- plugin upgrade from the previous release: install the
-// patch-decremented predecessor of e.PluginTag under the same alias,
-// confirm a lease under it, then upgrade in place to e.PluginTag and
-// confirm the pre-existing container's lease survived. N/A when no
-// patch predecessor can be derived (e.g. patch 0) -- a documented, narrow
-// limitation, never a silent guess at an unrelated tag.
+// runA6 -- plugin upgrade from the previous release: install
+// e.PreviousPluginTag (named explicitly in lab.yaml, never derived by
+// decrementing e.PluginTag's patch number -- issue #3, lead directive
+// 2026-09-26, since the real previous release is not always a patch
+// predecessor, e.g. v2.3.0-rc1's previous is v2.2.3) under the same
+// alias, confirm a lease under it, then upgrade in place to e.PluginTag
+// and confirm the pre-existing container's lease survived. The install
+// only sets DHCP_LOG_LEVEL if the previous tag actually declares that
+// setting -- an older version may not have it, and installing with an
+// unknown setting fails outright (same directive). N/A when
+// e.PreviousPluginTag is empty: a documented, narrow limitation, never a
+// silent guess at an unrelated tag.
 func runA6(ctx context.Context, e Env) Verdict {
-	prev, err := previousTag(e.PluginTag)
-	if err != nil {
-		return na(NameA6, e.Cell, e.Shape, fmt.Sprintf("no previous tag to upgrade from: %v", err), e.GitSHA)
+	prev := e.PreviousPluginTag
+	if prev == "" {
+		return na(NameA6, e.Cell, e.Shape, "no previous_plugin_tag configured for this cell", e.GitSHA)
 	}
 
 	name := containerName(e, NameA6)
@@ -317,7 +323,7 @@ func runA6(ctx context.Context, e Env) Verdict {
 
 	_, _ = e.Host.Run(ctx, "sudo docker plugin disable "+pluginAlias)
 	_, _ = e.Host.Run(ctx, "sudo docker plugin rm "+pluginAlias)
-	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker plugin install --grant-all-permissions --alias %s %s DHCP_LOG_LEVEL=debug", pluginAlias, prev)); err != nil {
+	if _, err := installPluginChecked(ctx, e.Host, pluginAlias, prev, map[string]string{"DHCP_LOG_LEVEL": "debug"}); err != nil {
 		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("install previous tag %s: %v", prev, err), nil, e.GitSHA)
 	}
 

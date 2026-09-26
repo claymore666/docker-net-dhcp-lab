@@ -55,6 +55,20 @@ func TestNetworkNameAndBridgeNameAreDeterministic(t *testing.T) {
 	}
 }
 
+// runA6 must never guess a previous tag on its own (issue #3, lead
+// directive 2026-09-26): an empty Env.PreviousPluginTag is N/A with a
+// reason, and Run is never reached far enough to touch the host at all.
+func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
+	e := Env{Cell: "dnsmasq", Shape: ShapeBridge, PreviousPluginTag: ""}
+	v := runA6(context.Background(), e)
+	if v.Result != NA {
+		t.Fatalf("want NA, got %s (reason %q)", v.Result, v.Reason)
+	}
+	if v.Reason == "" {
+		t.Fatal("an N/A verdict must carry a reason")
+	}
+}
+
 func TestApplicableRequiresEveryCapability(t *testing.T) {
 	s := Scenario{Name: "needs-v4-and-restart",
 		Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}}
@@ -186,30 +200,6 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("want 1 verdict file after two writes, got %d", count)
-	}
-}
-
-func TestPreviousTagDecrementsPatch(t *testing.T) {
-	got, err := previousTag("ghcr.io/claymore666/docker-net-dhcp:v2.2.2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "ghcr.io/claymore666/docker-net-dhcp:v2.2.1" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestPreviousTagRejectsPatchZeroAndMalformed(t *testing.T) {
-	bad := []string{
-		"ghcr.io/claymore666/docker-net-dhcp:v2.2.0",
-		"ghcr.io/claymore666/docker-net-dhcp:v2.2",
-		"ghcr.io/claymore666/docker-net-dhcp:notaversion",
-		"no-colon-at-all",
-	}
-	for _, tag := range bad {
-		if _, err := previousTag(tag); err == nil {
-			t.Errorf("previousTag(%q) was accepted, want rejected", tag)
-		}
 	}
 }
 

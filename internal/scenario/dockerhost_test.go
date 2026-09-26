@@ -30,6 +30,68 @@ func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error)
 	}
 }
 
+// fakeInstallRunner answers the Config.Env settings-name query with a
+// scripted list and records every command, so installPluginChecked's
+// "only set what the ref actually declares" rule (issue #3, lead
+// directive 2026-09-26) is checked without a real docker host.
+type fakeInstallRunner struct {
+	envNames []string
+	calls    []string
+}
+
+func (f *fakeInstallRunner) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	if strings.Contains(cmd, "Config.Env") {
+		return strings.Join(f.envNames, "\n"), nil
+	}
+	return "", nil
+}
+
+func TestInstallPluginCheckedSkipsSettingTheRefDoesNotDeclare(t *testing.T) {
+	r := &fakeInstallRunner{envNames: []string{"DEBUG"}}
+	skipped, err := installPluginChecked(context.Background(), r, "alias1", "ref:v1", map[string]string{"DHCP_LOG_LEVEL": "debug"})
+	if err != nil {
+		t.Fatalf("installPluginChecked failed: %v", err)
+	}
+	if len(skipped) != 1 || skipped[0] != "DHCP_LOG_LEVEL" {
+		t.Fatalf("want DHCP_LOG_LEVEL reported skipped, got %v", skipped)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "plugin set") {
+			t.Fatalf("a setting the ref does not declare reached the runner: %q", c)
+		}
+	}
+	var sawEnable bool
+	for _, c := range r.calls {
+		if strings.Contains(c, "plugin enable alias1") {
+			sawEnable = true
+		}
+	}
+	if !sawEnable {
+		t.Fatalf("installPluginChecked never enabled the plugin: %v", r.calls)
+	}
+}
+
+func TestInstallPluginCheckedSetsSettingTheRefDeclares(t *testing.T) {
+	r := &fakeInstallRunner{envNames: []string{"DHCP_LOG_LEVEL", "DEBUG"}}
+	skipped, err := installPluginChecked(context.Background(), r, "alias1", "ref:v1", map[string]string{"DHCP_LOG_LEVEL": "debug"})
+	if err != nil {
+		t.Fatalf("installPluginChecked failed: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("want nothing skipped, got %v", skipped)
+	}
+	var sawSet bool
+	for _, c := range r.calls {
+		if strings.Contains(c, "plugin set alias1 DHCP_LOG_LEVEL=debug") {
+			sawSet = true
+		}
+	}
+	if !sawSet {
+		t.Fatalf("installPluginChecked never set a setting the ref declares: %v", r.calls)
+	}
+}
+
 func TestRunContainerPolicyAddsRestartFlagWhenGiven(t *testing.T) {
 	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100"}
 	mac, addr, err := runContainerPolicy(context.Background(), r, "net1", "box1", "unless-stopped")

@@ -224,8 +224,9 @@ func cmdRun(args []string) int {
 		RepoRoot:    repoRoot,
 		WorkDir:     workDir,
 		EvidenceDir: evidenceDir,
-		PluginTag:   cell.DockerHost.PluginTag,
-		GitSHA:      gitSHA,
+		PluginTag:         cell.DockerHost.PluginTag,
+		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
+		GitSHA:            gitSHA,
 	}
 
 	failed := 0

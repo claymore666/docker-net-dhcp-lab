@@ -23,7 +23,13 @@ type Env struct {
 	WorkDir     string
 	EvidenceDir string
 	PluginTag   string // e.g. ghcr.io/claymore666/docker-net-dhcp:v2.2.2
-	GitSHA      string
+	// PreviousPluginTag is the release A6 upgrades FROM, carried
+	// explicitly from lab.yaml rather than derived by decrementing
+	// PluginTag's patch number (issue #3, lead directive 2026-09-26): the
+	// real previous release is not always PluginTag's patch predecessor.
+	// Empty means A6 has nothing to upgrade from and reports N/A.
+	PreviousPluginTag string
+	GitSHA            string
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
