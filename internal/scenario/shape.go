@@ -63,6 +63,23 @@ func NetworkName(cell string, shape Shape) string {
 	return fmt.Sprintf("labrun-%s-%s", cell, shape)
 }
 
+// forwardRuleAdd, forwardRuleCheck and forwardRuleDel are the exact
+// recipe docs/bridge-mode.md's "Prepare a host bridge" walkthrough gives
+// (line 53): appended (-A, not CI harness's -I), -i only (no -o mirror),
+// IPv4 only. `grep -rn ip6tables docs/` in the plugin repo has zero
+// hits -- the page's only IPv6 content is the unrelated ipv6_mode
+// network option -- so this stays IPv4-only, matching what a user who
+// follows the page verbatim would actually run.
+func forwardRuleAdd(br string) string {
+	return fmt.Sprintf("sudo iptables -A FORWARD -i %s -j ACCEPT", br)
+}
+func forwardRuleCheck(br string) string {
+	return fmt.Sprintf("sudo iptables -C FORWARD -i %s -j ACCEPT", br)
+}
+func forwardRuleDel(br string) string {
+	return fmt.Sprintf("sudo iptables -D FORWARD -i %s -j ACCEPT", br)
+}
+
 // NetworkUp brings up one shape's null-IPAM network on the docker host.
 // It clears any previous run's network (and, for bridge, its host
 // bridge) first: a stale leftover must never let a fresh create look
@@ -79,12 +96,28 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 			fmt.Sprintf("sudo ip link set %s down", SegmentNIC),
 			fmt.Sprintf("sudo ip link set %s master %s", SegmentNIC, br),
 			fmt.Sprintf("sudo ip link set %s up", SegmentNIC),
-			fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o bridge=%s %s", driverAlias, br, net),
+			forwardRuleAdd(br),
 		}
 		for _, c := range cmds {
 			if _, err := r.Run(ctx, c); err != nil {
 				return "", fmt.Errorf("networkup(bridge): %s: %w", c, err)
 			}
+		}
+		// The FORWARD rule above is the only thing standing between a
+		// clean create and a bridge that silently drops every DHCP
+		// packet: br_netfilter routes bridged traffic through FORWARD,
+		// whose default policy is DROP (issue #3 lab-vs-plugin split).
+		// Verify the rule is actually there before trusting it, so a
+		// missing rule fails right here, by name, instead of surfacing
+		// forty seconds later as an unexplained scenario timeout.
+		if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
+			return "", fmt.Errorf(
+				"networkup(bridge): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
+				forwardRuleAdd(br), err)
+		}
+		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o bridge=%s %s", driverAlias, br, net)
+		if _, err := r.Run(ctx, create); err != nil {
+			return "", fmt.Errorf("networkup(bridge): %s: %w", create, err)
 		}
 	case ShapeMacvlan, ShapeIpvlan:
 		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o mode=%s -o parent=%s %s",
@@ -108,6 +141,12 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", net))
 	if shape == ShapeBridge {
 		br := hostBridgeName(net)
+		// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
+		// by interface name, not a live link, so this is safe (and still
+		// a no-op if already gone) whatever order the bridge itself gets
+		// torn down in below; without it, every run's ACCEPT rule for
+		// its now-deleted bridge name pile up in FORWARD forever.
+		_, _ = r.Run(ctx, forwardRuleDel(br))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
 	}
