@@ -65,10 +65,9 @@ func findLeaseByAddr(leases []sourceadapter.Lease, addr string) (sourceadapter.L
 }
 
 // findLeaseByClientID matches by DHCP client-id (option 61) alone: the
-// only field that survives ipvlan's shared parent MAC (issue #3,
-// item 3). Comparison is case-insensitive; both
-// sides are already lowercase colon-hex by construction, but a raw
-// source field is not guaranteed to be.
+// only field that survives ipvlan's shared parent MAC (#3). Comparison
+// is case-insensitive; both sides are already lowercase colon-hex by
+// construction, but a raw source field is not guaranteed to be.
 func findLeaseByClientID(leases []sourceadapter.Lease, clientID string) (sourceadapter.Lease, bool) {
 	want := strings.ToLower(clientID)
 	for _, l := range leases {
@@ -81,9 +80,9 @@ func findLeaseByClientID(leases []sourceadapter.Lease, clientID string) (sourcea
 
 // ipvlanClientID derives the DHCP client-id (option 61) the plugin
 // documents for ipvlan mode: type byte 0x00 followed by the first 8
-// bytes of the Docker endpoint id, lowercase colon-hex (issue #3,
-// item 3; docs/parent-attached-modes.md). Measured
-// live against a Kea lease: endpoint id
+// bytes of the Docker endpoint id, lowercase colon-hex (#3,
+// docs/parent-attached-modes.md). Measured live against a Kea lease:
+// endpoint id
 // 97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a
 // produced client-id 00:97:ce:0d:fd:01:6f:ae:55.
 func ipvlanClientID(endpointID string) (string, error) {
@@ -108,11 +107,10 @@ func hexColonID(b []byte) string {
 
 // lookupLease snapshots the source's table to path, then resolves the
 // container's lease by the matching rule for shape: MAC+address for
-// bridge/macvlan, client-id for ipvlan (issue #3, item 3) -- an
-// address-only match let one ipvlan
-// container's verdict silently read another's lease when both held the
-// same address at different times within one snapshot's staleness
-// window; client-id does not have that collision.
+// bridge/macvlan, client-id for ipvlan (#3) -- an address-only match
+// let one ipvlan container's verdict silently read another's lease
+// when both held the same address at different times within one
+// snapshot's staleness window; client-id does not have that collision.
 func lookupLease(ctx context.Context, a sourceadapter.Adapter, shape Shape, mac, addr, endpointID, snapshotPath string) (sourceadapter.Lease, []sourceadapter.Lease, bool, error) {
 	leases, err := writeLeaseSnapshot(ctx, a, snapshotPath)
 	if err != nil {
@@ -134,8 +132,8 @@ func lookupLease(ctx context.Context, a sourceadapter.Adapter, shape Shape, mac,
 // right after a lease is confirmed can race the container's network
 // attach, since the network join call can return before the attach
 // actually lands. The window is a fixed definition, not a value tuned
-// to one result: a dig at commit 98b3478 measured 0.7s to first reply
-// on a clean isc-dhcp/bridge host reboot, well inside it.
+// to one result: a dig measured 0.7s to first reply on a clean
+// isc-dhcp/bridge host reboot, well inside it.
 const reachabilityWindow = 10 * time.Second
 
 // reachableWithRetry pings addr through the source once per second,

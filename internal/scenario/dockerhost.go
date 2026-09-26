@@ -44,7 +44,7 @@ func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, shape Shape
 // ipvlan slaves legitimately report an empty MAC -- they share the
 // parent NIC's (docs/parent-attached-modes.md) -- so only shape says
 // whether an empty MAC is fatal; an empty address is fatal under every
-// shape (issue #3, item 3).
+// shape (#3).
 func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, name string) (mac, addr, endpointID string, err error) {
 	if mac, err = inspectField(ctx, r, name, "MacAddress"); err != nil {
 		return "", "", "", err
@@ -66,7 +66,7 @@ func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, 
 
 // runContainerFixedMAC is runContainer with an explicit --mac-address,
 // for A5b: a container whose mac_address is fixed must report the same
-// MAC and address after a host reboot (issue #3, item 2). Not
+// MAC and address after a host reboot (#3). Not
 // meaningful under ipvlan, where
 // `--mac-address` fails outright with `invalid MAC address`
 // (docs/parent-attached-modes.md) -- callers guard that with an NA

@@ -70,8 +70,8 @@ const (
 	NameA5 = "A5-host-reboot"
 	// NameA5b tests the documented promise A5 itself cannot (a plain
 	// container may legitimately get a new mac/address on a reboot,
-	// issue #3, item 2): a container with a
-	// fixed mac_address must keep both across a host reboot.
+	// #3): a container with a fixed mac_address must keep both across a
+	// host reboot.
 	NameA5b = "A5b-host-reboot-fixed-mac"
 	NameA6  = "A6-plugin-upgrade"
 	NameA7  = "A7-plugin-killed"
@@ -96,10 +96,9 @@ func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
 	}
 	// The shape's own bridge, for bridge shape, must actually be present
 	// before this scenario runs, not assumed from an earlier bring-up in
-	// the same run (issue #3, item 1): a missing or broken bridge is
-	// rebuilt here, or this scenario is
-	// BLOCKED rather than left to cascade into a FAIL that reads like a
-	// plugin defect. A no-op for macvlan/ipvlan.
+	// the same run (#3): a missing or broken bridge is rebuilt here, or
+	// this scenario is BLOCKED rather than left to cascade into a FAIL
+	// that reads like a plugin defect. A no-op for macvlan/ipvlan.
 	if err := ensureBridgePresent(ctx, e.Host, e.Cell, e.Shape); err != nil {
 		return blocked(s.Name, e.Cell, e.Shape,
 			fmt.Sprintf("shape's bridge not in a known state before this scenario: %v", err), e.GitSHA)

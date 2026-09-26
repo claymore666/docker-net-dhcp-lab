@@ -13,7 +13,7 @@ import (
 
 // fixedMACFor derives a deterministic, valid locally-administered
 // unicast MAC for A5b, distinct per cell x shape so parallel cells never
-// collide on the same segment (issue #3, item 2).
+// collide on the same segment (#3).
 func fixedMACFor(cell string, shape Shape) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
@@ -291,10 +291,10 @@ func runA4(ctx context.Context, e Env) Verdict {
 // own design (issue #3).
 //
 // Re-reads the container's current mac/address/endpoint id after the
-// reboot rather than reusing the pre-reboot ones (issue #3, item 2):
-// a host reboot is out of scope for the
-// plugin's own restart-stability identity (docs/reference.md "DHCP
-// identity" only names `docker restart`/`systemctl restart docker`,
+// reboot rather than reusing the pre-reboot ones (#3): a host reboot
+// is out of scope for the plugin's own restart-stability identity
+// (docs/reference.md "DHCP identity" only names `docker
+// restart`/`systemctl restart docker`,
 // never a full host reboot), so the plugin is free to hand this
 // container a new mac and/or address on this boot, and that is
 // documented behaviour, not a defect -- looking the lease up under the
@@ -370,8 +370,8 @@ func runA5(ctx context.Context, e Env) Verdict {
 }
 
 // runA5b -- host reboot, fixed mac_address: what the docs promise for
-// this exact case (issue #3, item 2) -- a
-// container whose mac_address is fixed must keep the SAME mac and the
+// this exact case (#3) -- a container whose mac_address is fixed must
+// keep the SAME mac and the
 // SAME address after a host reboot, unlike A5's plain container, which
 // may legitimately get new ones. N/A under ipvlan, where every
 // container shares the parent NIC's mac regardless of what

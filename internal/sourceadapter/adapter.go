@@ -31,7 +31,7 @@ const (
 // field) -- empty when the row carries none. ipvlan slaves share the
 // parent NIC's MAC (docs/reference.md "DHCP identity"), so ClientID is
 // the only field that identifies one slave's lease from another's
-// (issue #3, item 3).
+// (#3).
 type Lease struct {
 	MAC      string
 	Address  string

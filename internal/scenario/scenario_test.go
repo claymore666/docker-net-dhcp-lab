@@ -108,9 +108,8 @@ func TestRunOneReturnsBlockedWhenPluginPreconditionFails(t *testing.T) {
 
 // Preservation: a healthy precondition still reaches Scenario.Run.
 // Shape is macvlan, not bridge: ensureBridgePresent no-ops for
-// macvlan/ipvlan (issue #3, item 1), so this test stays about the
-// plugin precondition alone; the bridge-specific
-// readiness gate has its own tests below.
+// macvlan/ipvlan (#3), so this test stays about the plugin precondition
+// alone; the bridge-specific readiness gate has its own tests below.
 func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 	ran := false
 	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
@@ -128,11 +127,11 @@ func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 }
 
 // fakeBridgeReadyRunner answers both RunOne's plugin-precondition check
-// and its bridge-readiness gate (issue #3, item 1): bridgeUp controls
-// whether the three bridgeReady checks (`ip
-// link show`, the segment NIC's master symlink, the FORWARD -C check)
-// succeed. When bridgeUp is false, NetworkUp's own forwardRuleCheck step
-// fails too -- the same command, the same behaviour NetworkUp already
+// and its bridge-readiness gate (#3): bridgeUp controls whether the
+// three bridgeReady checks (`ip link show`, the segment NIC's master
+// symlink, the FORWARD -C check) succeed. When bridgeUp is false,
+// NetworkUp's own forwardRuleCheck step fails too -- the same command,
+// the same behaviour NetworkUp already
 // has -- so a rebuild attempt fails cleanly rather than needing a second
 // canned failure point.
 type fakeBridgeReadyRunner struct {
@@ -185,8 +184,7 @@ func TestRunOneRunsBridgeScenarioWhenBridgeAlreadyReady(t *testing.T) {
 // The bridge is missing and NetworkUp cannot bring it back (the same
 // FORWARD-rule-missing failure NetworkUp already reports by name):
 // RunOne must BLOCK, carry a reason, and never reach Scenario.Run --
-// never a cascading FAIL that reads like a plugin defect (issue #3,
-// item 1).
+// never a cascading FAIL that reads like a plugin defect (#3).
 func TestRunOneBlocksWhenBridgeMissingAndUnrebuildable(t *testing.T) {
 	ran := false
 	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
@@ -207,9 +205,9 @@ func TestRunOneBlocksWhenBridgeMissingAndUnrebuildable(t *testing.T) {
 	}
 }
 
-// runA6 must never guess a previous tag on its own (issue #3, lead
-// directive 2026-09-26): an empty Env.PreviousPluginTag is N/A with a
-// reason, and Run is never reached far enough to touch the host at all.
+// runA6 must never guess a previous tag on its own (#3): an empty
+// Env.PreviousPluginTag is N/A with a reason, and Run is never reached
+// far enough to touch the host at all.
 func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
 	e := Env{Cell: "dnsmasq", Shape: ShapeBridge, PreviousPluginTag: ""}
 	v := runA6(context.Background(), e)
@@ -223,8 +221,8 @@ func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
 
 // addrChangeRunner answers docker inspect with a fixed mac/endpoint id
 // but a different IPAddress before and after a "docker restart" it
-// observes, so runA2's ipvlan documented-address-change path (issue #3,
-// item 1) is exercised without a real docker host.
+// observes, so runA2's ipvlan documented-address-change path (#3) is
+// exercised without a real docker host.
 type addrChangeRunner struct {
 	mac, beforeAddr, afterAddr, endpointID string
 	restarted                              bool
@@ -293,8 +291,8 @@ func TestRunA2FailsWhenBridgeAddressChangesAcrossRestart(t *testing.T) {
 }
 
 // A2's new ipvlan PASS path still requires the source to reach the
-// container under its new address, exactly as A5 already does -- the
-// lead's "keep the check honest" instruction (2026-09-26).
+// container under its new address, exactly as A5 already does: a
+// changed address is not itself a defect, but an unreachable one is.
 func TestRunA2FailsWhenIpvlanNewAddressIsUnreachable(t *testing.T) {
 	endpointID := "97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a"
 	wantClientID, err := ipvlanClientID(endpointID)
@@ -455,9 +453,8 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 // both held the same address at different times within one snapshot's
 // staleness window. The lookup now matches by DHCP client-id (option 61)
 // instead: type byte 0x00 plus the first 8 bytes of the endpoint id
-// (issue #3, item 3). This endpoint id and
-// client-id pairing is the one the live Kea measurement in
-// ipvlanClientID's own doc comment recorded.
+// (#3). This endpoint id and client-id pairing is the one the live Kea
+// measurement in ipvlanClientID's own doc comment recorded.
 func TestLookupLeaseUsesClientIDMatchForIpvlan(t *testing.T) {
 	dir := t.TempDir()
 	sharedMAC := "aa:bb:cc:dd:ee:ff"

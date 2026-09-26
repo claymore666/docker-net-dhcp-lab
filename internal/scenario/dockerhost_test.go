@@ -228,8 +228,8 @@ func TestCapturePluginLogWritesAPlaceholderWhenNothingMatches(t *testing.T) {
 
 // fakeInstallRunner answers the Config.Env settings-name query with a
 // scripted list and records every command, so installPluginChecked's
-// "only set what the ref actually declares" rule (issue #3, lead
-// directive 2026-09-26) is checked without a real docker host.
+// "only set what the ref actually declares" rule (#3) is checked
+// without a real docker host.
 type fakeInstallRunner struct {
 	envNames []string
 	calls    []string
@@ -329,8 +329,7 @@ func TestRunContainerHasNoRestartFlag(t *testing.T) {
 
 // ipvlan slaves share the parent NIC's MAC (docs/parent-attached-modes.md),
 // so docker legitimately reports an empty MacAddress for them; that must
-// not fail inspectContainer under this one shape (issue #3, lead
-// directive 2026-09-26, item 3).
+// not fail inspectContainer under this one shape (#3).
 func TestInspectContainerAllowsEmptyMACUnderIpvlan(t *testing.T) {
 	r := &fakeContainerRunner{mac: "", addr: "10.200.1.100", endpointID: "abc123"}
 	mac, addr, endpointID, err := inspectContainer(context.Background(), r, ShapeIpvlan, "box1")
@@ -352,8 +351,8 @@ func TestInspectContainerRejectsEmptyMACUnderBridge(t *testing.T) {
 	}
 }
 
-// The ipvlan client-id lookup (issue #3, item 3) is built from the
-// endpoint id, so a container with none reported
+// The ipvlan client-id lookup (#3) is built from the endpoint id, so a
+// container with none reported
 // cannot be looked up at all -- inspectContainer must fail here rather
 // than hand an unusable empty string on to the lease lookup.
 func TestInspectContainerRejectsEmptyEndpointIDUnderIpvlan(t *testing.T) {
