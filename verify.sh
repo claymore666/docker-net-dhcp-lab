@@ -137,6 +137,9 @@ echo "== lab segment firewall refusal/idempotency tests =="
 echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
 
+echo "== capture-start/capture-stop orchestration and sudo -n tests =="
+./scripts/capture-lifecycle-test.sh
+
 echo "== DHCP four-message check, against real pcap fixtures =="
 if command -v tcpdump >/dev/null; then
 	./scripts/dhcp-exchange-check-test.sh

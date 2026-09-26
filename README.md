@@ -42,3 +42,46 @@ scripts/down-cell.sh kea <work-dir>
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.
+
+## Run the group-A scenarios
+
+`scripts/run-group-a.sh <cell-name> [work-dir] [evidence-dir]` brings a
+cell up, runs the group-A scenarios (first lease, container restart,
+compose down/up, daemon restart, host reboot, plugin upgrade, plugin
+killed, fleet burst) across all three null-IPAM network shapes, and
+tears the cell back down. One evidence bundle is left behind: the
+resolved `lab.yaml`, plugin/engine/kernel versions, a config diff from
+the source's stock install, one packet capture spanning the whole run,
+lease-table snapshots, the plugin's own log, and one verdict file per
+scenario x shape.
+
+A scenario a source cannot run (for example, a capability it does not
+declare) is recorded N/A with a reason, never skipped silently. A FAIL
+is a finding about the plugin, not the runner; the runner never retries
+or tunes a scenario to make it pass.
+
+Under the hood, `labctl run <lab.yaml> <repo-root> <cell-name>
+<bridge|macvlan|ipvlan> <work-dir> <evidence-dir> <pcap-path|->` runs
+one shape's scenarios directly, for a single-shape re-run.
+
+### Verdict file format
+
+One file per scenario x cell x shape, named
+`<cell>-<shape>-<scenario>.verdict`; a re-run overwrites its own prior
+file rather than adding another one. Plain `key: value` lines:
+
+```
+scenario: A1-first-lease
+cell: kea
+shape: bridge
+result: PASS
+reason: lease confirmed in the source's own table
+git_sha: <commit the run used>
+timestamp: 2026-01-01T00:00:00Z
+evidence.lease_after: <path>
+```
+
+`result` is `PASS`, `FAIL` or `N/A`. A `PASS` always carries at least
+one `evidence.<label>: <path>` line pointing at a real, non-empty file
+in the bundle; an `N/A` carries none, only a `reason`. This is the
+interface issue #4's results matrix reads.
