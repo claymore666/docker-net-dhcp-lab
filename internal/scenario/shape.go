@@ -94,64 +94,66 @@ func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content 
 	return nil
 }
 
-// writeBridgePersistence writes docs/bridge-mode.md's own
-// systemd-networkd recipe ("Make the bridge persistent"), verbatim
-// apart from substituting its example names for this lab's real ones
-// (my-bridge -> br, eth0 -> SegmentNIC): a NetworkUp that only ever
-// built the bridge with `ip link` (as it used to) did not survive a
-// reboot, so A5's evidence was read against a bridge that was already
-// gone (issue #3, lead directive 2026-09-26, item 1).
+// writeBridgePersistence writes docs/bridge-mode.md's own "Ubuntu /
+// netplan" recipe ("Make the bridge persistent"), verbatim apart from
+// substituting its example names for this lab's real ones (my-bridge
+// -> br, eth0 -> SegmentNIC): a NetworkUp that only ever built the
+// bridge with `ip link` (as it used to) did not survive a reboot, so
+// A5's evidence was read against a bridge that was already gone (issue
+// #3, lead directive 2026-09-26, item 1).
 //
-// Docs finding, recorded rather than worked around (the directive: "if
+// The docs' *other* recipe, systemd-networkd, was tried first and
+// dropped: the lab's docker-host VMs are themselves netplan-managed
+// (cloud-init renders eth1's own config through it), and
+// systemd-networkd applies only the first *.network file that matches
+// an interface, by filename order across /etc and /run together --
+// cloud-init's own file for eth1 always wins that race against the
+// docs' example unit, silently, and eth1 never gets enslaved. A
+// lab-only fix (renumbering the port unit to win the race) was
+// rejected: that only made the lab win a race a real user on the same
+// stack would lose, so it stopped testing what a user actually does.
+// This is a docs finding, recorded in the plugin repo's handover
+// (`.claude/handover/lab-bridge-netplan-docs-finding.md`), not
+// reproduced here. netplan itself has no such race: it merges each
+// interface's config across every matching file instead of taking the
+// first, so this recipe applies cleanly over cloud-init's own file for
+// eth1 with no renumbering trick needed.
+//
+// Docs finding recorded rather than worked around (the directive: "if
 // the docs are not enough on their own, that is a docs finding: record
 // it, and do not add anything the docs do not say"): the docs' own
-// 30-my-bridge.network stanza sets DHCP=ipv4 because the documented use
-// case replaces the host's own LAN uplink with the bridge. This lab's
-// segment bridge carries only container traffic -- SegmentNIC's own
-// comment above says it "never carries the docker host's own address"
-// -- so applying the recipe verbatim gives the docker host one extra,
-// harmless DHCP lease on the segment for as long as the bridge exists.
-// It shows up as one extra row in every lease snapshot but never
-// affects a verdict, since every lookup in this package matches by an
-// exact mac/address/client-id, never by counting rows.
-// portUnitPrefix is lower than cloud-init's own "10-netplan-seg0.network"
-// (cloud-init/network-config.tmpl.yaml, __SEG_MAC__ match): systemd-networkd
-// applies only the first *.network file that matches an interface, in
-// filename order across /etc and /run together, and ignores the rest.
-// The docs' own example number for this file ("20-eth0.network") loses
-// that race against cloud-init's unit, measured live on a fresh cell
-// (kea/bridge): eth1 stayed unenslaved and NetworkUp's own readiness
-// check caught it, correctly, as "did not come up" -- not a docs
-// problem, since a real host's port NIC has no such rival unit; this
-// lab's own cloud-init does. The stanza's content is still the docs'
-// text verbatim; only this file's number changes, to win the match.
-const portUnitPrefix = "05"
+// netplan recipe sets dhcp4: true on the bridge because the documented
+// use case replaces the host's own LAN uplink with the bridge. This
+// lab's segment bridge carries only container traffic -- SegmentNIC's
+// own comment above says it "never carries the docker host's own
+// address" -- so applying the recipe verbatim gives the docker host
+// one extra, harmless DHCP lease on the segment for as long as the
+// bridge exists. It shows up as one extra row in every lease snapshot
+// but never affects a verdict, since every lookup in this package
+// matches by an exact mac/address/client-id, never by counting rows.
+const bridgeNetplanPath = "/etc/netplan/60-dhcp-bridge.yaml"
 
 func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br string) error {
-	netdev := fmt.Sprintf("[NetDev]\nName=%s\nKind=bridge\n\n[Bridge]\nSTP=false\nForwardDelaySec=0\n", br)
-	ethNetwork := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nBridge=%s\n", SegmentNIC, br)
-	brNetwork := fmt.Sprintf("[Match]\nName=%s\n\n[Network]\nDHCP=ipv4\nConfigureWithoutCarrier=yes\n", br)
+	netplan := fmt.Sprintf(
+		"network:\n  version: 2\n  renderer: networkd\n  ethernets:\n    %s:\n      dhcp4: false\n      dhcp6: false\n  bridges:\n    %s:\n      interfaces: [%s]\n      dhcp4: true\n      parameters:\n        stp: false\n        forward-delay: 0\n",
+		SegmentNIC, br, SegmentNIC)
 
-	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br), netdev); err != nil {
+	if err := writeRemoteFile(ctx, r, bridgeNetplanPath, netplan); err != nil {
 		return err
 	}
-	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/%s-%s-%s.network", portUnitPrefix, SegmentNIC, br), ethNetwork); err != nil {
-		return err
-	}
-	if err := writeRemoteFile(ctx, r, fmt.Sprintf("/etc/systemd/network/30-%s.network", br), brNetwork); err != nil {
-		return err
+	// docs/bridge-mode.md's own next command, verbatim: netplan refuses
+	// to apply a world-readable config with an embedded secret-shaped
+	// field, and 600 is what the doc's command block sets regardless.
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo chmod 600 %s", bridgeNetplanPath)); err != nil {
+		return fmt.Errorf("chmod %s: %w", bridgeNetplanPath, err)
 	}
 	return nil
 }
 
-// bridgeUnitPaths lists the three files writeBridgePersistence writes
-// for br, the single source of truth for both writing and removing them.
-func bridgeUnitPaths(br string) []string {
-	return []string{
-		fmt.Sprintf("/etc/systemd/network/10-%s.netdev", br),
-		fmt.Sprintf("/etc/systemd/network/%s-%s-%s.network", portUnitPrefix, SegmentNIC, br),
-		fmt.Sprintf("/etc/systemd/network/30-%s.network", br),
-	}
+// bridgeConfigPaths lists the file writeBridgePersistence writes for
+// br, the single source of truth for both writing and removing it.
+func bridgeConfigPaths(br string) []string {
+	return []string{bridgeNetplanPath}
 }
 
 // ensureIptablesPersistent installs the package docs/bridge-mode.md's
@@ -229,11 +231,8 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		if err := writeBridgePersistence(ctx, r, br); err != nil {
 			return "", fmt.Errorf("networkup(bridge): %w", err)
 		}
-		if _, err := r.Run(ctx, "sudo systemctl enable --now systemd-networkd"); err != nil {
-			return "", fmt.Errorf("networkup(bridge): sudo systemctl enable --now systemd-networkd: %w", err)
-		}
-		if _, err := r.Run(ctx, "sudo networkctl reload"); err != nil {
-			return "", fmt.Errorf("networkup(bridge): sudo networkctl reload: %w", err)
+		if _, err := r.Run(ctx, "sudo netplan apply"); err != nil {
+			return "", fmt.Errorf("networkup(bridge): sudo netplan apply: %w", err)
 		}
 		if err := ensureIptablesPersistent(ctx, r); err != nil {
 			return "", fmt.Errorf("networkup(bridge): %w", err)
@@ -257,7 +256,7 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 			return "", fmt.Errorf("networkup(bridge): sudo netfilter-persistent save: %w", err)
 		}
 		if !bridgeReady(ctx, r, br) {
-			return "", fmt.Errorf("networkup(bridge): bridge %s or its %s port did not come up after the systemd-networkd reload", br, SegmentNIC)
+			return "", fmt.Errorf("networkup(bridge): bridge %s or its %s port did not come up after netplan apply", br, SegmentNIC)
 		}
 		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver null -o bridge=%s %s", driverAlias, br, net)
 		if _, err := r.Run(ctx, create); err != nil {
@@ -294,11 +293,13 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
 		// Symmetric with writeBridgePersistence: without removing the
-		// unit files too, the bridge would resurrect itself on the
+		// netplan config too, the bridge would resurrect itself on the
 		// docker host's next real reboot even after this run tore it
-		// down (issue #3, lead directive 2026-09-26, item 1).
-		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeUnitPaths(br), " "))
-		_, _ = r.Run(ctx, "sudo networkctl reload")
+		// down (issue #3, lead directive 2026-09-26, item 1). The
+		// reapply after removing it hands eth1 back to cloud-init's own
+		// dhcp4: false stanza for that interface.
+		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(br), " "))
+		_, _ = r.Run(ctx, "sudo netplan apply")
 		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
 }
