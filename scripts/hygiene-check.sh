@@ -83,7 +83,7 @@ while IFS= read -r -d '' f; do
 				continue
 			fi
 		fi
-		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qF "$CLAUDE_PATH" <<<"$line"; then
+		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qiF "$CLAUDE_PATH" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi

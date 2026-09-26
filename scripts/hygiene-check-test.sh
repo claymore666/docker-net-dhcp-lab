@@ -133,6 +133,11 @@ run_case "substring, not the directive word" \
 # caught as a fixed string, regardless of what precedes or follows it.
 run_case ".claude path" \
 	$'note: see .claude/tracks/lab.md for background\n' fail || fail=1
+# The same path, differently cased, is the same private path and must be
+# caught too -- a plain case-sensitive fixed-string match let a
+# capitalised or all-caps rendering of the path through uncaught.
+run_case ".claude path, different case" \
+	$'note: see .CLAUDE/tracks/lab.md for background\n' fail || fail=1
 # A _test.go fixture legitimately carries a made-up private address for
 # its own synthetic data and must still pass -- only the address check
 # keeps skipping test files.
@@ -150,4 +155,4 @@ run_case "test file, handover pointer" \
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 31 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 32 cases behaved as expected"
