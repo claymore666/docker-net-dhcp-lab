@@ -88,18 +88,24 @@ func runA9Tuned(ctx context.Context, e Env, stopWait time.Duration) Verdict {
 		ev, e.GitSHA)
 }
 
-// runA10 -- kill + restart policy: `docker kill` (SIGKILL) simulating a
-// crash, recovered by Docker's own --restart unless-stopped, never a
-// manual start (issue #3 part 2). Two things this scenario asserts that
-// A2/A9 do not: the recovery is confirmed by a genuinely new
-// State.StartedAt (not a race that reads the still-dying old process as
-// already back), and the source's table must show exactly one lease for
-// the recovered address -- a duplicate row there would mean the kill
-// path minted a second lease instead of reusing the endpoint's own.
-// Address kept is required on bridge/macvlan, the same ipvlan carve-out
-// A2 already documents applies here too: this is the same
-// endpoint-teardown-and-rebuild event, just triggered by a kill instead
-// of an explicit restart command.
+// runA10 -- crash + restart policy: SIGKILL sent straight to the
+// container's own main process from the host, recovered by Docker's own
+// --restart unless-stopped, never a manual start (issue #3 part 2). Not
+// `docker kill`: measured against a real cell, `docker kill` registers
+// with dockerd as a manual stop and the restart-manager skips the
+// container entirely (the daemon's own journal logs "stopping
+// restart-manager" and never attempts one) -- so it cannot exercise
+// restart-policy recovery at all, and crashContainer exists to reach the
+// process directly instead. Two things this scenario asserts that A2/A9
+// do not: the recovery is confirmed by a genuinely new State.StartedAt
+// (not a race that reads the still-dying old process as already back),
+// and the source's table must show exactly one lease for the recovered
+// address -- a duplicate row there would mean the crash path minted a
+// second lease instead of reusing the endpoint's own. Address kept is
+// required on bridge/macvlan, the same ipvlan carve-out A2 already
+// documents applies here too: this is the same endpoint-teardown-and-
+// rebuild event, just triggered by a crash instead of an explicit
+// restart command.
 func runA10(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA10)
 	defer removeContainer(ctx, e.Host, name)
@@ -122,8 +128,8 @@ func runA10(ctx context.Context, e Env) Verdict {
 	if err != nil {
 		return fail(NameA10, e.Cell, e.Shape, fmt.Sprintf("could not read StartedAt before kill: %v", err), evBefore, e.GitSHA)
 	}
-	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker kill %s", name)); err != nil {
-		return fail(NameA10, e.Cell, e.Shape, fmt.Sprintf("docker kill: %v", err), evBefore, e.GitSHA)
+	if err := crashContainer(ctx, e.Host, name); err != nil {
+		return fail(NameA10, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
 	if err := waitContainerRestarted(ctx, e.Host, name, beforeStartedAt, 30*time.Second); err != nil {
 		return fail(NameA10, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
@@ -151,24 +157,24 @@ func runA10(ctx context.Context, e Env) Verdict {
 	}
 	if dupes > 1 {
 		return fail(NameA10, e.Cell, e.Shape,
-			fmt.Sprintf("address %s appears %d times in the source's table after the kill: a duplicate lease, not one", afterAddr, dupes), ev, e.GitSHA)
+			fmt.Sprintf("address %s appears %d times in the source's table after the crash: a duplicate lease, not one", afterAddr, dupes), ev, e.GitSHA)
 	}
 
 	if afterAddr != addr && e.Shape != ShapeIpvlan {
 		return fail(NameA10, e.Cell, e.Shape,
-			fmt.Sprintf("address changed across a kill+restart-policy recovery: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+			fmt.Sprintf("address changed across a crash+restart-policy recovery: %s -> %s", addr, afterAddr), ev, e.GitSHA)
 	}
 	secs, err := reachableWithRetry(ctx, e.Source, afterAddr)
 	if err != nil {
 		return fail(NameA10, e.Cell, e.Shape,
-			fmt.Sprintf("killed, restart policy brought it back, mac %s has one confirmed lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
+			fmt.Sprintf("crashed, restart policy brought it back, mac %s has one confirmed lease for %s, but the source could not reach it within %ds: %v", afterMac, afterAddr, secs, err), ev, e.GitSHA)
 	}
 	note := fmt.Sprintf("kept address %s", addr)
 	if afterAddr != addr {
 		note = fmt.Sprintf("address changed (%s -> %s) as documented for ipvlan (#219)", addr, afterAddr)
 	}
 	return pass(NameA10, e.Cell, e.Shape,
-		fmt.Sprintf("container killed, restart policy recovered it, %s, exactly one lease for it in the source's table (hostname %q), reachable from the source after %ds", note, lease.Hostname, secs),
+		fmt.Sprintf("container crashed, restart policy recovered it, %s, exactly one lease for it in the source's table (hostname %q), reachable from the source after %ds", note, lease.Hostname, secs),
 		ev, e.GitSHA)
 }
 

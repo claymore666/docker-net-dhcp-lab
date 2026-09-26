@@ -200,6 +200,32 @@ func waitContainerRestarted(ctx context.Context, r sourceadapter.Runner, name, b
 	return fmt.Errorf("container %s was not confirmed restarted (Running, with a new StartedAt) within %s", name, timeout)
 }
 
+// crashContainer simulates a real crash by sending SIGKILL to the
+// container's own main process directly from the host, bypassing `docker
+// kill` (issue #3, A10, measured against a real cell 2026-09-26/27):
+// `docker kill` is itself a manual-stop request as far as dockerd's own
+// restart-manager is concerned, so a container with an `unless-stopped`
+// restart policy is never restarted after one -- confirmed against a real
+// docker host, whose journal logged "stopping restart-manager" and no
+// restart attempt at all right after the call, which is why A10 read as a
+// FAIL that never was one. A signal sent straight to the process leaves
+// the daemon with no such manual-stop intent to record, so the
+// restart-manager runs exactly as it would for a real unexpected exit.
+func crashContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Pid}}' %s", name))
+	if err != nil {
+		return fmt.Errorf("docker inspect %s Pid: %w", name, err)
+	}
+	pid := strings.TrimSpace(out)
+	if pid == "" || pid == "0" {
+		return fmt.Errorf("container %s has no live main process to crash (Pid=%q)", name, pid)
+	}
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo kill -9 %s", pid)); err != nil {
+		return fmt.Errorf("kill -9 %s (container %s): %w", pid, name, err)
+	}
+	return nil
+}
+
 // inspectContainerNetwork is inspectContainer naming the network
 // explicitly (issue #3, A13): inspectField's range template
 // concatenates every attached network's field into one string, which

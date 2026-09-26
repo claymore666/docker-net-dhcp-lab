@@ -130,10 +130,14 @@ func TestRunA14FailsWhenShortenLeaseTimeErrors(t *testing.T) {
 	}
 }
 
-// a10Runner backs A10's tests: `docker kill` is answered by an instant
-// restart-policy recovery -- Running true again, with a StartedAt that
-// has actually changed -- the one thing waitContainerRestarted requires
-// before A10 ever reads the lease table again.
+// a10Runner backs A10's tests: crashContainer's own kill -9 (reached via
+// a fake Pid read, never `docker kill` -- issue #3, measured 2026-09-26/
+// 27, dockerd's restart-manager skips a container `docker kill` stops,
+// so it cannot exercise restart-policy recovery at all) is answered by
+// an instant restart-policy recovery -- Running true again, with a
+// StartedAt that has actually changed -- the one thing
+// waitContainerRestarted requires before A10 ever reads the lease table
+// again.
 type a10Runner struct {
 	mac, addr, endpointID string
 	running               bool
@@ -151,13 +155,15 @@ func (f *a10Runner) Run(_ context.Context, cmd string) (string, error) {
 		return "true " + startedAt, nil
 	case strings.Contains(cmd, "State.StartedAt"):
 		return f.startedAt, nil
+	case strings.Contains(cmd, "State.Pid"):
+		return "4242", nil
 	case strings.Contains(cmd, "MacAddress"):
 		return f.mac, nil
 	case strings.Contains(cmd, "IPAddress"):
 		return f.addr, nil
 	case strings.Contains(cmd, "EndpointID"):
 		return f.endpointID, nil
-	case strings.Contains(cmd, "docker kill"):
+	case strings.Contains(cmd, "kill -9"):
 		f.killed = true
 		return "", nil
 	default:

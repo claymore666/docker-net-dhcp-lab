@@ -499,3 +499,84 @@ func TestBootIDRejectsAnEmptyRead(t *testing.T) {
 		t.Fatal("expected an error for an empty boot id read")
 	}
 }
+
+// fakeCrashRunner scripts docker inspect .State.Pid and the direct kill
+// -9 independently, so crashContainer's own Pid-read failure path, its
+// no-live-process guard and the kill command's own failure path are
+// checked without a real docker host (issue #3, A10).
+type fakeCrashRunner struct {
+	pid, pidErr string
+	killErr     error
+	calls       []string
+}
+
+func (f *fakeCrashRunner) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	switch {
+	case strings.Contains(cmd, "State.Pid"):
+		if f.pidErr != "" {
+			return "", fmt.Errorf("%s", f.pidErr)
+		}
+		return f.pid, nil
+	case strings.Contains(cmd, "kill -9"):
+		return "", f.killErr
+	default:
+		return "", nil
+	}
+}
+
+func TestCrashContainerFailsWhenPidReadFails(t *testing.T) {
+	r := &fakeCrashRunner{pidErr: "no such container"}
+	if err := crashContainer(context.Background(), r, "box1"); err == nil {
+		t.Fatal("want an error when docker inspect Pid fails")
+	}
+}
+
+func TestCrashContainerFailsWhenPidIsZero(t *testing.T) {
+	r := &fakeCrashRunner{pid: "0"}
+	err := crashContainer(context.Background(), r, "box1")
+	if err == nil {
+		t.Fatal("want an error when the reported Pid is 0 (no live main process)")
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "kill -9") {
+			t.Fatalf("must not attempt kill -9 when there is no live pid, but got: %v", r.calls)
+		}
+	}
+}
+
+func TestCrashContainerFailsWhenPidIsEmpty(t *testing.T) {
+	r := &fakeCrashRunner{pid: ""}
+	if err := crashContainer(context.Background(), r, "box1"); err == nil {
+		t.Fatal("want an error when the reported Pid is empty")
+	}
+}
+
+func TestCrashContainerFailsWhenKillCommandFails(t *testing.T) {
+	r := &fakeCrashRunner{pid: "4242", killErr: fmt.Errorf("no such process")}
+	if err := crashContainer(context.Background(), r, "box1"); err == nil {
+		t.Fatal("want an error when kill -9 itself fails")
+	}
+}
+
+// The kill must target the process id directly, never the container
+// name -- crashContainer's whole point is reaching the process rather
+// than going back through dockerd's own kill/stop path.
+func TestCrashContainerSucceeds(t *testing.T) {
+	r := &fakeCrashRunner{pid: "4242"}
+	if err := crashContainer(context.Background(), r, "box1"); err != nil {
+		t.Fatalf("crashContainer failed: %v", err)
+	}
+	found := false
+	for _, c := range r.calls {
+		if strings.Contains(c, "kill -9 4242") {
+			found = true
+		}
+		if strings.Contains(c, "kill -9") && strings.Contains(c, "box1") {
+			t.Fatalf("kill command named the container, not the pid: %q", c)
+		}
+	}
+	if !found {
+		t.Fatalf("no kill -9 4242 command among: %v", r.calls)
+	}
+}
