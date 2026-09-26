@@ -170,4 +170,13 @@ done
 	exit 1
 }
 
+# If this cell has an IP source in lab.yaml (issue #2), bring it up too,
+# on the segment bridge just built above. A cell with no source (issue
+# #1's ref-only) leaves this a no-op.
+has_source=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
+if [ -n "$has_source" ]; then
+	echo "== source ($has_source) =="
+	"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK"
+fi
+
 echo "up-cell: $CELL ready, docker host at $mgmt_ip, segment bridge $bridge"

@@ -1,0 +1,27 @@
+# Source VM networking (issue #2): dual-homed the same way the docker
+# host is -- eth0 for apt only, eth1 for the DHCP service, matched by MAC
+# for the same reason as network-config.tmpl.yaml (systemd predictable
+# naming, no net.ifnames=0 in the base image). Unlike the docker host's
+# eth1, this one carries a real address: the source binds and answers on
+# it. No gateway or RA on eth1 -- the source's own replies never need to
+# leave the segment, and accepting an RA there would let the segment's
+# own router (none exists) reconfigure this NIC.
+network:
+  version: 2
+  ethernets:
+    mgmt0:
+      match:
+        macaddress: __MGMT_MAC__
+      set-name: eth0
+      addresses: [__MGMT_ADDR__]
+      gateway4: __MGMT_GW__
+      nameservers:
+        addresses: [__MGMT_GW__]
+    seg0:
+      match:
+        macaddress: __SEG_MAC__
+      set-name: eth1
+      addresses: [__SEG_ADDR__]
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false

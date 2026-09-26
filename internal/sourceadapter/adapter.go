@@ -1,0 +1,78 @@
+// Package sourceadapter is the one interface issue #2 asks for: read
+// leases, reserve by MAC, restart, stop, start, capabilities, one
+// implementation per IP source, each reading lease evidence through that
+// source's own interface (control agent API, leases file, lease file)
+// rather than anything the plugin reports.
+package sourceadapter
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/netip"
+)
+
+// Capability is a source's declared ability. A declared capability is a
+// claim until a real run against that source exercises it; see each
+// adapter's own comment for what has actually been measured so far.
+type Capability string
+
+const (
+	CapV4         Capability = "v4"
+	CapReserveMAC Capability = "reserve-mac"
+	CapRestart    Capability = "restart"
+)
+
+// Lease is one entry from a source's own table, normalized across the
+// three source shapes (JSON, dhcpd.leases, dnsmasq.leases).
+type Lease struct {
+	MAC      string
+	Address  string
+	Hostname string
+}
+
+// Adapter is the interface issue #2 asks for. Every method reads or
+// changes the source through its own management interface, over the
+// runner it was built with; none of them ever touch the plugin.
+type Adapter interface {
+	Capabilities() []Capability
+	Leases(ctx context.Context) ([]Lease, error)
+	ReserveMAC(ctx context.Context, mac, addr string) error
+	Restart(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Start(ctx context.Context) error
+}
+
+// Runner executes one command on the source VM's own management
+// connection and returns its stdout. SSHRunner is the real
+// implementation; tests supply a fake so the adapters are unit-testable
+// with no network at all.
+type Runner interface {
+	Run(ctx context.Context, remoteCmd string) (string, error)
+}
+
+// validateMAC and validateAddr are the injection guard issue #2 asks for:
+// ReserveMAC's arguments reach a remote shell/JSON command only after
+// they round-trip through Go's own MAC/IP parsers, which accept nothing
+// but a MAC or an IPv4 literal -- no quote, brace or shell metacharacter
+// can survive that round trip, so the value that reaches the command
+// line was never attacker-controlled text, it is stdlib's own
+// normalized form of a real MAC or address (issue #2).
+func validateMAC(mac string) (string, error) {
+	hw, err := net.ParseMAC(mac)
+	if err != nil {
+		return "", fmt.Errorf("invalid MAC %q: %w", mac, err)
+	}
+	return hw.String(), nil
+}
+
+func validateAddr(addr string) (string, error) {
+	a, err := netip.ParseAddr(addr)
+	if err != nil {
+		return "", fmt.Errorf("invalid address %q: %w", addr, err)
+	}
+	if !a.Is4() {
+		return "", fmt.Errorf("address %q is not IPv4", addr)
+	}
+	return a.String(), nil
+}

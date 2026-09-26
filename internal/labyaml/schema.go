@@ -35,12 +35,30 @@ type DockerHost struct {
 	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
 }
 
+// Source is one IP source VM: a DHCP server on its cell's own segment,
+// never on the management network (issue #2). ReservePoolStart/End are
+// the pool this source hands to ordinary clients; the adapter's
+// ReserveMAC keeps a separate per-MAC reservation outside that range.
+type Source struct {
+	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq
+	BaseImage   string `yaml:"base_image" json:"base_image"`
+	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
+	SegAddress  string `yaml:"seg_address" json:"seg_address"`
+	PoolStart   string `yaml:"pool_start" json:"pool_start"`
+	PoolEnd     string `yaml:"pool_end" json:"pool_end"`
+	VCPUs       int    `yaml:"vcpus" json:"vcpus"`
+	MemoryMiB   int    `yaml:"memory_mib" json:"memory_mib"`
+	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
+}
+
+var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true}
+
 type Cell struct {
-	Name        string      `yaml:"name" json:"name"`
-	Description string      `yaml:"description" json:"description"`
-	Segment     Segment     `yaml:"segment" json:"segment"`
-	Source      interface{} `yaml:"source" json:"source"` // null in P1; a source type/version once #2 lands
-	DockerHost  DockerHost  `yaml:"docker_host" json:"docker_host"`
+	Name        string     `yaml:"name" json:"name"`
+	Description string     `yaml:"description" json:"description"`
+	Segment     Segment    `yaml:"segment" json:"segment"`
+	Source      *Source    `yaml:"source" json:"source"` // null when the cell has no IP source (issue #1)
+	DockerHost  DockerHost `yaml:"docker_host" json:"docker_host"`
 }
 
 type Config struct {
@@ -86,6 +104,7 @@ func (c *Config) Validate() error {
 	}
 	seenBridge := map[string]bool{}
 	seenSubnet := map[string]bool{}
+	seenMgmt := map[string]bool{}
 	for i, cell := range c.Cells {
 		if cell.Name == "" {
 			return fmt.Errorf("cells[%d]: name is required", i)
@@ -124,6 +143,66 @@ func (c *Config) Validate() error {
 		if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
 			return fmt.Errorf("cell %s: docker_host.mgmt_address is not inside management.subnet", cell.Name)
 		}
+		if seenMgmt[mgmtAddr.Addr().String()] {
+			return fmt.Errorf("cell %s: docker_host.mgmt_address %s reused by another host in lab.yaml", cell.Name, mgmtAddr.Addr())
+		}
+		seenMgmt[mgmtAddr.Addr().String()] = true
+
+		if cell.Source != nil {
+			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, seenMgmt); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateSource checks one cell's IP source: it must sit inside the
+// cell's own segment (never management.subnet, issue #2), and its pool
+// must be a real range inside that same segment.
+func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
+	if !sourceTypes[s.Type] {
+		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq", cellName, s.Type)
+	}
+	if s.BaseImage == "" {
+		return fmt.Errorf("cell %s: source.base_image is required", cellName)
+	}
+	mgmtAddr, err := netip.ParsePrefix(s.MgmtAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.mgmt_address: %w", cellName, err)
+	}
+	if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.mgmt_address is not inside management.subnet", cellName)
+	}
+	if seenMgmt[mgmtAddr.Addr().String()] {
+		return fmt.Errorf("cell %s: source.mgmt_address %s reused by another host in lab.yaml", cellName, mgmtAddr.Addr())
+	}
+	seenMgmt[mgmtAddr.Addr().String()] = true
+
+	segAddr, err := netip.ParsePrefix(s.SegAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.seg_address: %w", cellName, err)
+	}
+	if !segPrefix.Contains(segAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.seg_address is not inside segment.subnet", cellName)
+	}
+
+	start, err := netip.ParseAddr(s.PoolStart)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool_start: %w", cellName, err)
+	}
+	end, err := netip.ParseAddr(s.PoolEnd)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool_end: %w", cellName, err)
+	}
+	if !segPrefix.Contains(start) || !segPrefix.Contains(end) {
+		return fmt.Errorf("cell %s: source pool is not inside segment.subnet", cellName)
+	}
+	if start.Compare(end) >= 0 {
+		return fmt.Errorf("cell %s: source.pool_start must be lower than source.pool_end", cellName)
+	}
+	if start == segAddr.Addr() || end == segAddr.Addr() {
+		return fmt.Errorf("cell %s: source pool overlaps the source's own seg_address", cellName)
 	}
 	return nil
 }

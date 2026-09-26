@@ -1,0 +1,75 @@
+#cloud-config
+# Kea source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it -- no cloud-init
+# module-ordering assumption between write_files and package install.
+hostname: lab-kea-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  # DEBIAN_FRONTEND=noninteractive: kea-ctrl-agent's postinst runs a
+  # debconf select prompt (auth password choice) with no frontend this
+  # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent jq
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
+  - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
+  - echo '[]' >/etc/kea/reservations.json
+  # lease_cmds hook: lease4-get-all (our adapter's read path, issue #2)
+  # is not a core command -- without this the control agent answers
+  # result=2 "unsupported" (measured live, 2026-09-25).
+  - |
+    cat >/etc/kea/kea-dhcp4.conf <<'KEAEOF'
+    {
+    "Dhcp4": {
+      "interfaces-config": { "interfaces": [ "eth1" ] },
+      "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
+      "lease-database": { "type": "memfile", "persist": true },
+      "valid-lifetime": 3600,
+      "hooks-libraries": [
+        { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
+      ],
+      "subnet4": [
+        {
+          "id": 1,
+          "subnet": "__SEG_SUBNET__",
+          "pools": [ { "pool": "__POOL_START__ - __POOL_END__" } ],
+          "reservations": <?include "/etc/kea/reservations.json"?>
+        }
+      ]
+    }
+    }
+    KEAEOF
+  - |
+    cat >/etc/kea/kea-ctrl-agent.conf <<'KEAEOF'
+    {
+    "Control-agent": {
+      "http-host": "127.0.0.1",
+      "http-port": 8000,
+      "control-sockets": {
+        "dhcp4": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" }
+      }
+    }
+    }
+    KEAEOF
+  # kea-ctrl-agent.service has ConditionFileNotEmpty=/etc/kea/kea-api-password
+  # (Debian packaging, unconditional); our config carries no
+  # "authentication" stanza so the content is never read as a secret,
+  # it only has to exist non-empty for the unit to start (measured live,
+  # 2026-09-25).
+  - echo lab-kea-api-unused >/etc/kea/kea-api-password
+  # restart, not enable --now: the apt-get install above already started
+  # both units against the package's own stock example config (Debian
+  # postinst); enable --now is then a no-op that leaves the stock config
+  # (subnet 192.0.2.0/24) running instead of ours (measured live,
+  # 2026-09-25).
+  - systemctl enable kea-dhcp4-server kea-ctrl-agent
+  - systemctl restart kea-dhcp4-server kea-ctrl-agent
+  - touch /var/lib/cloud/lab-bootstrap-done
