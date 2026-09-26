@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,6 +218,102 @@ func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
 	}
 	if v.Reason == "" {
 		t.Fatal("an N/A verdict must carry a reason")
+	}
+}
+
+// addrChangeRunner answers docker inspect with a fixed mac/endpoint id
+// but a different IPAddress before and after a "docker restart" it
+// observes, so runA2's ipvlan documented-address-change path (issue #3,
+// lead directive 2026-09-26, item 1) is exercised without a real docker
+// host.
+type addrChangeRunner struct {
+	mac, beforeAddr, afterAddr, endpointID string
+	restarted                              bool
+}
+
+func (f *addrChangeRunner) Run(_ context.Context, cmd string) (string, error) {
+	switch {
+	case strings.Contains(cmd, "docker restart"):
+		f.restarted = true
+		return "", nil
+	case strings.Contains(cmd, "State.Running"):
+		return "true", nil
+	case strings.Contains(cmd, "MacAddress"):
+		return f.mac, nil
+	case strings.Contains(cmd, "IPAddress"):
+		if f.restarted {
+			return f.afterAddr, nil
+		}
+		return f.beforeAddr, nil
+	case strings.Contains(cmd, "EndpointID"):
+		return f.endpointID, nil
+	default:
+		return "", nil
+	}
+}
+
+// A2's address-changed-across-restart symptom is documented behaviour
+// on ipvlan (docs/reference.md "Restart stability (MAC and IP)", #219,
+// lead directive 2026-09-26): a PASS with a note, not a FAIL, as long
+// as a lease still exists under the new client-id and the source can
+// reach the container there.
+func TestRunA2PassesWithNoteWhenIpvlanAddressChangesAcrossRestart(t *testing.T) {
+	endpointID := "97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a"
+	wantClientID, err := ipvlanClientID(endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := &addrChangeRunner{beforeAddr: "10.200.1.100", afterAddr: "10.200.1.101", endpointID: endpointID}
+	source := &fakeAdapter{leases: []sourceadapter.Lease{
+		{Address: "10.200.1.100", ClientID: wantClientID},
+		{Address: "10.200.1.101", ClientID: wantClientID},
+	}}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeIpvlan, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	v := runA2(context.Background(), e)
+	if v.Result != PASS {
+		t.Fatalf("want PASS, got %s (reason %q)", v.Result, v.Reason)
+	}
+	if !strings.Contains(v.Reason, "#219") {
+		t.Fatalf("reason did not cite the documented ipvlan behaviour: %q", v.Reason)
+	}
+}
+
+// Preservation: the same symptom on bridge (a MAC-keyed shape, which
+// does get a tombstone) is still a FAIL, never tuned away.
+func TestRunA2FailsWhenBridgeAddressChangesAcrossRestart(t *testing.T) {
+	host := &addrChangeRunner{mac: "aa:bb:cc:dd:ee:ff", beforeAddr: "10.200.1.100", afterAddr: "10.200.1.101"}
+	source := &fakeAdapter{leases: []sourceadapter.Lease{
+		{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.200.1.100"},
+		{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.200.1.101"},
+	}}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeBridge, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	v := runA2(context.Background(), e)
+	if v.Result != FAIL {
+		t.Fatalf("want FAIL, got %s (reason %q)", v.Result, v.Reason)
+	}
+}
+
+// A2's new ipvlan PASS path still requires the source to reach the
+// container under its new address, exactly as A5 already does -- the
+// lead's "keep the check honest" instruction (2026-09-26).
+func TestRunA2FailsWhenIpvlanNewAddressIsUnreachable(t *testing.T) {
+	endpointID := "97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a"
+	wantClientID, err := ipvlanClientID(endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := &addrChangeRunner{beforeAddr: "10.200.1.100", afterAddr: "10.200.1.101", endpointID: endpointID}
+	source := &fakeAdapter{
+		leases: []sourceadapter.Lease{
+			{Address: "10.200.1.100", ClientID: wantClientID},
+			{Address: "10.200.1.101", ClientID: wantClientID},
+		},
+		reachErr: fmt.Errorf("no route to host"),
+	}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeIpvlan, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	v := runA2(context.Background(), e)
+	if v.Result != FAIL {
+		t.Fatalf("want FAIL when the source cannot reach the new address, got %s (reason %q)", v.Result, v.Reason)
 	}
 }
 

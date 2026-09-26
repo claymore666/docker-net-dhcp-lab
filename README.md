@@ -47,18 +47,27 @@ source's table on its own, through the same adapter.
 
 `scripts/run-group-a.sh <cell-name> [work-dir] [evidence-dir]` brings a
 cell up, runs the group-A scenarios (first lease, container restart,
-compose down/up, daemon restart, host reboot, plugin upgrade, plugin
-killed, fleet burst) across all three null-IPAM network shapes, and
-tears the cell back down. One evidence bundle is left behind: the
-resolved `lab.yaml`, plugin/engine/kernel versions, a config diff from
-the source's stock install, one packet capture spanning the whole run,
-lease-table snapshots, the plugin's own log, and one verdict file per
-scenario x shape.
+compose down/up, daemon restart, host reboot, host reboot with a fixed
+`mac_address`, plugin upgrade, plugin killed, fleet burst) across all
+three null-IPAM network shapes, and tears the cell back down. One
+evidence bundle is left behind: the resolved `lab.yaml`,
+plugin/engine/kernel versions, a config diff from the source's stock
+install, one packet capture spanning the whole run, lease-table
+snapshots, the plugin's own log, and one verdict file per scenario x
+shape.
 
 A scenario a source cannot run (for example, a capability it does not
 declare) is recorded N/A with a reason, never skipped silently. A FAIL
 is a finding about the plugin, not the runner; the runner never retries
 or tunes a scenario to make it pass.
+
+On `ipvlan`, the container-restart and host-reboot verdicts pass with a
+note instead of failing when the address changes: the plugin writes no
+tombstone for `ipvlan` and its client id does not survive a restart, so
+a new address there is documented behaviour, not a plugin defect (see
+`docs/reference.md` "Restart stability (MAC and IP)", #219, in the
+plugin repo). The verdict still requires a lease under the new address
+and that the source can reach the container.
 
 Under the hood, `labctl run <lab.yaml> <repo-root> <cell-name>
 <bridge|macvlan|ipvlan> <work-dir> <evidence-dir> <pcap-path|->` runs

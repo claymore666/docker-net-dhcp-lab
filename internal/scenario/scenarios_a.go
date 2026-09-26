@@ -88,11 +88,19 @@ func runA1(ctx context.Context, e Env) Verdict {
 
 // runA2 -- container restart: the same container, stopped and started
 // again by Docker itself, must keep the same address in the source's
-// table. A changed address is a FAIL, never tuned away. Re-inspects the
-// container after the restart rather than reusing the pre-restart mac
-// and endpoint id: ipvlan mints a fresh endpoint id (and so a fresh
-// client-id) on every restart (docs/reference.md "DHCP identity", #219),
-// which the "after" lookup must use, not the "before" one.
+// table. Re-inspects the container after the restart rather than
+// reusing the pre-restart mac and endpoint id: ipvlan mints a fresh
+// endpoint id (and so a fresh client-id) on every restart
+// (docs/reference.md "DHCP identity", #219), which the "after" lookup
+// must use, not the "before" one.
+//
+// A changed address is a FAIL on bridge and macvlan, never tuned away.
+// On ipvlan it is a PASS with a note instead: the plugin writes no
+// tombstone for ipvlan and its client id does not survive a restart, so
+// a new address there is documented behaviour, not a plugin defect
+// (docs/reference.md "Restart stability (MAC and IP)", #219). Either
+// way the check still requires a lease under the new address and that
+// the source can reach the container there.
 func runA2(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA2)
 	defer removeContainer(ctx, e.Host, name)
@@ -132,8 +140,17 @@ func runA2(ctx context.Context, e Env) Verdict {
 		return fail(NameA2, e.Cell, e.Shape, "after restart: "+leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID), ev, e.GitSHA)
 	}
 	if afterAddr != addr {
-		return fail(NameA2, e.Cell, e.Shape,
-			fmt.Sprintf("address changed across restart: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+		if e.Shape != ShapeIpvlan {
+			return fail(NameA2, e.Cell, e.Shape,
+				fmt.Sprintf("address changed across restart: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+		}
+		if err := e.Source.Reachable(ctx, afterAddr); err != nil {
+			return fail(NameA2, e.Cell, e.Shape,
+				fmt.Sprintf("container restarted and has a lease for the new address %s, but the source could not reach it: %v", afterAddr, err), ev, e.GitSHA)
+		}
+		return pass(NameA2, e.Cell, e.Shape,
+			fmt.Sprintf("container restarted, address changed (%s -> %s) as documented for ipvlan (#219), confirmed in the source's table both times, reachable from the source", addr, afterAddr),
+			ev, e.GitSHA)
 	}
 	return pass(NameA2, e.Cell, e.Shape,
 		fmt.Sprintf("container restarted, kept address %s, confirmed in the source's table both times", addr),
