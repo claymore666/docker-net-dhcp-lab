@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,72 @@ func TestNetworkNameAndBridgeNameAreDeterministic(t *testing.T) {
 	}
 	if other := NetworkName("kea", ShapeBridge); hostBridgeName(n1) == hostBridgeName(other) {
 		t.Fatalf("hostBridgeName collided for two different network names: %q", hostBridgeName(n1))
+	}
+}
+
+// fakeRunOneHostRunner is a minimal sourceadapter.Runner for RunOne's
+// own precondition check (issue #3, lead directive 2026-09-26): scripted
+// independently of fakeAdapter, since Env.Host and Env.Source are two
+// different interfaces.
+type fakeRunOneHostRunner struct {
+	installed bool
+	pgrepOK   bool
+}
+
+func (f *fakeRunOneHostRunner) Run(_ context.Context, cmd string) (string, error) {
+	switch {
+	case strings.Contains(cmd, "PluginReference"):
+		if !f.installed {
+			return "", context.DeadlineExceeded
+		}
+		return "ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1", nil
+	case strings.Contains(cmd, "pgrep"):
+		if f.pgrepOK {
+			return "1234", nil
+		}
+		return "", context.DeadlineExceeded
+	default:
+		return "", context.DeadlineExceeded // e.g. "plugin enable": no self-heal available here
+	}
+}
+
+// A scenario whose plugin precondition cannot be established (or
+// restored) comes back BLOCKED and never reaches Scenario.Run at all --
+// the one check that keeps a single failure from cascading into FAILs
+// for every scenario after it.
+func TestRunOneReturnsBlockedWhenPluginPreconditionFails(t *testing.T) {
+	ran := false
+	s := Scenario{Name: "probe", Run: func(_ context.Context, _ Env) Verdict {
+		ran = true
+		return pass("probe", "dnsmasq", ShapeBridge, "should never run", map[string]string{"x": "y"}, "sha")
+	}}
+	e := Env{Host: &fakeRunOneHostRunner{installed: false}, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeBridge}
+	v := RunOne(context.Background(), s, e)
+	if v.Result != BLOCKED {
+		t.Fatalf("want BLOCKED, got %s", v.Result)
+	}
+	if v.Reason == "" {
+		t.Fatal("a BLOCKED verdict must carry a reason")
+	}
+	if ran {
+		t.Fatal("Scenario.Run was called despite a failed plugin precondition")
+	}
+}
+
+// Preservation: a healthy precondition still reaches Scenario.Run.
+func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
+	ran := false
+	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
+		ran = true
+		return pass("probe", "dnsmasq", ShapeBridge, "ran", map[string]string{"x": "y"}, "sha")
+	}}
+	e := Env{Host: &fakeRunOneHostRunner{installed: true, pgrepOK: true}, Source: &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}}, Cell: "dnsmasq", Shape: ShapeBridge}
+	v := RunOne(context.Background(), s, e)
+	if !ran {
+		t.Fatalf("Scenario.Run was never called; verdict: %+v", v)
+	}
+	if v.Result != PASS {
+		t.Fatalf("want PASS, got %s", v.Result)
 	}
 }
 

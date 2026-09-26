@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
@@ -207,6 +208,35 @@ func cmdRun(args []string) int {
 	}
 
 	ctx := context.Background()
+
+	// The readiness gate every scenario relies on (RunOne's
+	// ensurePluginKnownState) only runs starting with the first
+	// scenario; NetworkUp runs before that, so it needs its own gate
+	// here (issue #3, lead directive 2026-09-26). A fresh bring-up's
+	// plugin can report done, and even have a live process, before its
+	// socket actually answers.
+	if err := scenario.WaitPluginReady(ctx, hostRunner); err != nil {
+		logPath := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-plugin-not-ready.log", cellName, shape))
+		if logErr := scenario.CapturePluginLog(ctx, hostRunner, logPath); logErr != nil {
+			fmt.Fprintf(os.Stderr, "labctl run: plugin log capture also failed: %v\n", logErr)
+			logPath = "(plugin log capture also failed: " + logErr.Error() + ")"
+		}
+		reason := fmt.Sprintf("plugin never became ready before the first scenario could start: %v; plugin log: %s", err, logPath)
+		for _, s := range scenario.Catalog {
+			v := scenario.Verdict{
+				Scenario: s.Name, Cell: cellName, Shape: shape,
+				Result: scenario.BLOCKED, Reason: reason,
+				GitSHA: gitSHA, Timestamp: time.Now(),
+			}
+			if werr := scenario.Write(evidenceDir, v); werr != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+		}
+		return 0
+	}
+
 	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)

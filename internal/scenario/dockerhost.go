@@ -195,25 +195,62 @@ func pluginPID(ctx context.Context, r sourceadapter.Runner) (string, error) {
 // reading identically to a self-heal (issue #3: never tune a scenario
 // to pass; report what happened).
 func waitPluginBack(ctx context.Context, r sourceadapter.Runner) (recoveredBy string, err error) {
-	if pollPluginPID(ctx, r, 30*time.Second) {
+	return waitPluginBackTuned(ctx, r, 30*time.Second, 30*time.Second, 1*time.Second)
+}
+
+// waitPluginBackTuned is waitPluginBack with both bounds and the poll
+// interval broken out so a test can shrink them, the same split
+// waitHostRebooted/waitHostRebootedTuned already establishes: a real 30s
+// bound is the point of the check, not something a test should have to
+// sit through.
+func waitPluginBackTuned(ctx context.Context, r sourceadapter.Runner, selfTimeout, afterEnableTimeout, poll time.Duration) (recoveredBy string, err error) {
+	if pollPluginPIDTuned(ctx, r, selfTimeout, poll) {
 		return "self", nil
 	}
 	if _, enableErr := r.Run(ctx, "sudo docker plugin enable "+pluginAlias); enableErr != nil {
-		return "", fmt.Errorf("did not come back on its own in 30s, and a manual re-enable failed: %w", enableErr)
+		return "", fmt.Errorf("did not come back on its own in %s, and a manual re-enable failed: %w", selfTimeout, enableErr)
 	}
-	if pollPluginPID(ctx, r, 30*time.Second) {
+	if pollPluginPIDTuned(ctx, r, afterEnableTimeout, poll) {
 		return "manual", nil
 	}
-	return "", fmt.Errorf("did not come back within 30s on its own or 30s after a manual re-enable")
+	return "", fmt.Errorf("did not come back within %s on its own or %s after a manual re-enable", selfTimeout, afterEnableTimeout)
+}
+
+// ensurePluginKnownState is the single precondition every scenario runs
+// through RunOne before it starts (issue #3, lead directive 2026-09-26):
+// every scenario must start from a known plugin state -- installed,
+// enabled, its process alive. Run once before each scenario, it also is
+// the restore step after a failure and the BLOCKED-not-FAIL guard,
+// without any separate before/after hook: the plugin must be installed
+// already (this never knows which tag to install from scratch), and
+// waitPluginBack's own self-heal (a bounded wait, then one enable retry)
+// is the one restore attempt, the same logic A7 already trusts for "the
+// plugin came back after being killed."
+func ensurePluginKnownState(ctx context.Context, r sourceadapter.Runner) error {
+	return ensurePluginKnownStateTuned(ctx, r, 30*time.Second, 30*time.Second, 1*time.Second)
+}
+
+func ensurePluginKnownStateTuned(ctx context.Context, r sourceadapter.Runner, selfTimeout, afterEnableTimeout, poll time.Duration) error {
+	if _, err := installedPluginTag(ctx, r); err != nil {
+		return fmt.Errorf("plugin not installed under alias %s: %w", pluginAlias, err)
+	}
+	if _, err := waitPluginBackTuned(ctx, r, selfTimeout, afterEnableTimeout, poll); err != nil {
+		return fmt.Errorf("plugin process not confirmed running: %w", err)
+	}
+	return nil
 }
 
 func pollPluginPID(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) bool {
+	return pollPluginPIDTuned(ctx, r, timeout, 1*time.Second)
+}
+
+func pollPluginPIDTuned(ctx context.Context, r sourceadapter.Runner, timeout, poll time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if _, err := pluginPID(ctx, r); err == nil {
 			return true
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(poll)
 	}
 	return false
 }
@@ -224,6 +261,71 @@ func installedPluginTag(ctx context.Context, r sourceadapter.Runner) (string, er
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// pluginSocketGlob is this plugin's activation-socket path. The
+// directory name is the plugin's instance ID, which changes on every
+// install, so the glob avoids depending on it.
+const pluginSocketGlob = "/run/docker/plugins/*/net-dhcp.sock"
+
+// WaitPluginReady waits for the plugin to report Enabled, then for its
+// own socket to actually answer, bounded at 60s total and logging how
+// long it took (issue #3, lead directive 2026-09-26): on a fresh kea
+// bring-up, the very first NetworkUp call failed with the socket
+// missing even though cloud-init had already reported done --
+// ensurePluginKnownState's own process check (pgrep, not the socket)
+// would not have caught this either, since the process can exist before
+// its listener does. RunOne's ensurePluginKnownState covers every
+// scenario after the first; this covers the first, which runs before
+// any scenario ever reaches RunOne.
+func WaitPluginReady(ctx context.Context, r sourceadapter.Runner) error {
+	return waitPluginReadyTuned(ctx, r, 60*time.Second, 500*time.Millisecond)
+}
+
+func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, poll time.Duration) error {
+	start := time.Now()
+	for {
+		enabled, _ := r.Run(ctx, fmt.Sprintf("sudo docker plugin inspect -f '{{.Enabled}}' %s 2>/dev/null", pluginAlias))
+		if strings.TrimSpace(enabled) == "true" {
+			if _, err := r.Run(ctx, "sudo sh -c 'ls "+pluginSocketGlob+"' >/dev/null 2>&1"); err == nil {
+				fmt.Fprintf(os.Stderr, "WaitPluginReady: %s enabled with an answering socket after %s\n",
+					pluginAlias, time.Since(start).Round(10*time.Millisecond))
+				return nil
+			}
+		}
+		elapsed := time.Since(start)
+		if elapsed >= timeout {
+			return fmt.Errorf("%s not enabled with an answering socket after %s", pluginAlias, elapsed.Round(10*time.Millisecond))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+// CapturePluginLog writes the docker daemon's own journal, filtered to
+// this plugin's lines, to path -- the same evidence run-group-a.sh
+// already collects at the end of a cell's run, but callable directly so
+// a WaitPluginReady timeout can attach it to the BLOCKED cell before any
+// scenario runs (issue #3, lead directive 2026-09-26).
+func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) error {
+	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
+	if err != nil {
+		return fmt.Errorf("journalctl -u docker: %w", err)
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "net-dhcp") {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	if b.Len() == 0 {
+		b.WriteString("# no net-dhcp lines in the last 10 minutes of the docker journal\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // pluginSettingNames reads the settings a given, already-installed

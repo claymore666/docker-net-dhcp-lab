@@ -76,7 +76,19 @@ const (
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
 // never has to duplicate that check: a scenario whose capability is
 // missing comes back N/A with a reason and never reaches s.Run at all.
+//
+// It also checks the plugin is in a known state -- installed, enabled,
+// its process alive -- before every scenario, including the one right
+// after a previous scenario's failure (issue #3, lead directive
+// 2026-09-26): this one check simultaneously satisfies "known state
+// before each scenario," "restore after a failure," and "BLOCKED, never
+// a cascading FAIL, when it cannot be restored," with no separate
+// before/after hooks and no change to the caller's loop.
 func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
+	if err := ensurePluginKnownState(ctx, e.Host); err != nil {
+		return blocked(s.Name, e.Cell, e.Shape,
+			fmt.Sprintf("plugin not in a known state before this scenario: %v", err), e.GitSHA)
+	}
 	if ok, reason := Applicable(s, e.Source); !ok {
 		return na(s.Name, e.Cell, e.Shape, reason, e.GitSHA)
 	}

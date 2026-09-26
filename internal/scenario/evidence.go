@@ -109,3 +109,16 @@ func na(scenario, cell string, shape Shape, reason, gitSHA string) Verdict {
 		GitSHA: gitSHA, Timestamp: time.Now(),
 	}
 }
+
+// blocked marks a scenario that never reached a known plugin state
+// (issue #3, lead directive 2026-09-26): the precondition check itself
+// failed, or a previous scenario's failure could not be restored, so
+// this scenario never ran and carries no evidence, the same discipline
+// na already applies.
+func blocked(scenario, cell string, shape Shape, reason, gitSHA string) Verdict {
+	return Verdict{
+		Scenario: scenario, Cell: cell, Shape: shape,
+		Result: BLOCKED, Reason: reason, Evidence: nil,
+		GitSHA: gitSHA, Timestamp: time.Now(),
+	}
+}

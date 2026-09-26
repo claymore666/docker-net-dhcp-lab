@@ -2,6 +2,8 @@ package scenario
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +29,198 @@ func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error)
 		return f.addr, nil
 	default:
 		return "", nil
+	}
+}
+
+// fakeKnownStateRunner scripts docker plugin inspect (PluginReference)
+// and pgrep, independently failable, so ensurePluginKnownState's three
+// readings (issue #3, lead directive 2026-09-26) are checked without a
+// real docker host: not installed, installed but process missing (with
+// or without a successful manual re-enable), and the healthy case.
+type fakeKnownStateRunner struct {
+	notInstalled bool
+	pgrepOK      bool
+	enableFixes  bool
+	enabled      bool
+	calls        []string
+}
+
+func (f *fakeKnownStateRunner) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	switch {
+	case strings.Contains(cmd, "PluginReference"):
+		if f.notInstalled {
+			return "", fmt.Errorf("no such plugin")
+		}
+		return "ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1", nil
+	case strings.Contains(cmd, "pgrep"):
+		if f.pgrepOK || f.enabled {
+			return "1234", nil
+		}
+		return "", fmt.Errorf("no process")
+	case strings.Contains(cmd, "plugin enable"):
+		f.enabled = f.enableFixes
+		if !f.enableFixes {
+			return "", fmt.Errorf("enable failed")
+		}
+		return "", nil
+	default:
+		return "", nil
+	}
+}
+
+// knownStateTestBounds shrinks both wait windows and the poll interval
+// so these tests exercise the same code as the real 30s/30s bounds
+// without sitting through them (the same shrink-the-window-only
+// discipline waitHostRebootedTuned's own tests already follow: never a
+// way to weaken the check itself).
+const (
+	knownStateTestBound = 50 * time.Millisecond
+	knownStateTestPoll  = 5 * time.Millisecond
+)
+
+func TestEnsurePluginKnownStateFailsWhenNotInstalled(t *testing.T) {
+	r := &fakeKnownStateRunner{notInstalled: true}
+	if err := ensurePluginKnownStateTuned(context.Background(), r, knownStateTestBound, knownStateTestBound, knownStateTestPoll); err == nil {
+		t.Fatal("want an error when the plugin is not installed under the alias at all")
+	}
+}
+
+func TestEnsurePluginKnownStateOKWhenProcessAlreadyAlive(t *testing.T) {
+	r := &fakeKnownStateRunner{pgrepOK: true}
+	if err := ensurePluginKnownStateTuned(context.Background(), r, knownStateTestBound, knownStateTestBound, knownStateTestPoll); err != nil {
+		t.Fatalf("want no error, got %v", err)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "plugin enable") {
+			t.Fatalf("a healthy plugin was re-enabled unnecessarily: %v", r.calls)
+		}
+	}
+}
+
+// The precondition check restores a missing process the same way A7's
+// own recovery does: it needs a manual enable to come back, and does.
+func TestEnsurePluginKnownStateRestoresViaEnable(t *testing.T) {
+	r := &fakeKnownStateRunner{pgrepOK: false, enableFixes: true}
+	if err := ensurePluginKnownStateTuned(context.Background(), r, knownStateTestBound, knownStateTestBound, knownStateTestPoll); err != nil {
+		t.Fatalf("want the precondition check to restore the process via enable, got %v", err)
+	}
+}
+
+// A process that a manual enable also cannot bring back is unrestorable:
+// the caller (RunOne) must read this as BLOCKED, never attempt the
+// scenario body.
+func TestEnsurePluginKnownStateFailsWhenUnrestorable(t *testing.T) {
+	r := &fakeKnownStateRunner{pgrepOK: false, enableFixes: false}
+	if err := ensurePluginKnownStateTuned(context.Background(), r, knownStateTestBound, knownStateTestBound, knownStateTestPoll); err == nil {
+		t.Fatal("want an error when neither self-heal nor a manual enable brings the process back")
+	}
+}
+
+// fakeReadyRunner scripts docker plugin inspect (Enabled) and the socket
+// glob independently, and counts how many polls each needed before
+// answering true/ok, so waitPluginReadyTuned's two-stage gate (issue #3,
+// lead directive 2026-09-26: enabled, then the socket, bounded and
+// logged) is checked without a real docker host.
+type fakeReadyRunner struct {
+	enabledAfter int // polls before "docker plugin inspect -f Enabled" answers true
+	socketAfter  int // polls before the socket glob answers ok, counted from enabledAfter
+	neverReady   bool
+	polls        int
+}
+
+func (f *fakeReadyRunner) Run(_ context.Context, cmd string) (string, error) {
+	switch {
+	case strings.Contains(cmd, "Enabled"):
+		f.polls++
+		if f.neverReady || f.polls <= f.enabledAfter {
+			return "false", nil
+		}
+		return "true", nil
+	case strings.Contains(cmd, pluginSocketGlob):
+		if f.neverReady || f.polls <= f.enabledAfter+f.socketAfter {
+			return "", fmt.Errorf("no such file or directory")
+		}
+		return "/run/docker/plugins/abc/net-dhcp.sock", nil
+	default:
+		return "", nil
+	}
+}
+
+const (
+	readyTestTimeout = 50 * time.Millisecond
+	readyTestPoll    = 5 * time.Millisecond
+)
+
+func TestWaitPluginReadyOKOnceEnabledAndSocketAnswer(t *testing.T) {
+	r := &fakeReadyRunner{enabledAfter: 1, socketAfter: 1}
+	if err := waitPluginReadyTuned(context.Background(), r, readyTestTimeout, readyTestPoll); err != nil {
+		t.Fatalf("want no error once both enabled and the socket answer, got %v", err)
+	}
+}
+
+func TestWaitPluginReadyOKImmediatelyWhenAlreadyReady(t *testing.T) {
+	r := &fakeReadyRunner{}
+	if err := waitPluginReadyTuned(context.Background(), r, readyTestTimeout, readyTestPoll); err != nil {
+		t.Fatalf("want no error when already enabled with an answering socket, got %v", err)
+	}
+}
+
+func TestWaitPluginReadyFailsAfterTimeoutWhenSocketNeverAnswers(t *testing.T) {
+	r := &fakeReadyRunner{neverReady: true}
+	if err := waitPluginReadyTuned(context.Background(), r, readyTestTimeout, readyTestPoll); err == nil {
+		t.Fatal("want an error when the socket never answers inside the bound")
+	}
+}
+
+// fakeLogRunner scripts journalctl for CapturePluginLog: mixed lines, so
+// the net-dhcp-only filter (issue #3, lead directive 2026-09-26) is
+// checked without a real docker host.
+type fakeLogRunner struct {
+	journal string
+	failErr error
+}
+
+func (f *fakeLogRunner) Run(_ context.Context, cmd string) (string, error) {
+	if !strings.Contains(cmd, "journalctl") {
+		return "", fmt.Errorf("unexpected command: %s", cmd)
+	}
+	if f.failErr != nil {
+		return "", f.failErr
+	}
+	return f.journal, nil
+}
+
+func TestCapturePluginLogKeepsOnlyNetDHCPLines(t *testing.T) {
+	r := &fakeLogRunner{journal: "Sep 26 net-dhcp: started\nSep 26 containerd: unrelated\nSep 26 net-dhcp: ready\n"}
+	path := t.TempDir() + "/plugin.log"
+	if err := CapturePluginLog(context.Background(), r, path); err != nil {
+		t.Fatalf("CapturePluginLog failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if strings.Contains(string(got), "containerd") {
+		t.Fatalf("CapturePluginLog kept a line outside net-dhcp: %q", got)
+	}
+	if !strings.Contains(string(got), "started") || !strings.Contains(string(got), "ready") {
+		t.Fatalf("CapturePluginLog dropped a net-dhcp line: %q", got)
+	}
+}
+
+func TestCapturePluginLogWritesAPlaceholderWhenNothingMatches(t *testing.T) {
+	r := &fakeLogRunner{journal: "Sep 26 containerd: unrelated only\n"}
+	path := t.TempDir() + "/plugin.log"
+	if err := CapturePluginLog(context.Background(), r, path); err != nil {
+		t.Fatalf("CapturePluginLog failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if len(got) == 0 {
+		t.Fatal("CapturePluginLog left the file empty instead of a placeholder; Write() would refuse this as evidence")
 	}
 }
 

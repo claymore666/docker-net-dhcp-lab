@@ -8,15 +8,21 @@ import (
 	"time"
 )
 
-// Result is one of the three readings issue #3 asks a verdict to carry:
-// a scenario this source cannot run is N/A with a reason, never PASS or
-// FAIL.
+// Result is one of the readings issue #3 asks a verdict to carry: a
+// scenario this source cannot run is N/A with a reason, never PASS or
+// FAIL. BLOCKED is the same discipline for a scenario that never reached
+// a known plugin state to begin with (issue #3, lead directive
+// 2026-09-26): one failure must never cascade into FAILs for the
+// scenarios after it, so a scenario whose precondition could not be
+// established, or restored after a previous failure, is recorded as
+// BLOCKED with the reason, not run at all.
 type Result string
 
 const (
-	PASS Result = "PASS"
-	FAIL Result = "FAIL"
-	NA   Result = "N/A"
+	PASS    Result = "PASS"
+	FAIL    Result = "FAIL"
+	NA      Result = "N/A"
+	BLOCKED Result = "BLOCKED"
 )
 
 // Verdict is the interface issue #4's results matrix reads. Evidence
@@ -51,6 +57,9 @@ func Write(dir string, v Verdict) error {
 	}
 	if v.Result == NA && len(v.Evidence) != 0 {
 		return fmt.Errorf("verdict %s/%s/%s: an N/A result carries evidence %v; a scenario that did not run has only its reason", v.Cell, v.Shape, v.Scenario, v.Evidence)
+	}
+	if v.Result == BLOCKED && len(v.Evidence) != 0 {
+		return fmt.Errorf("verdict %s/%s/%s: a BLOCKED result carries evidence %v; a scenario that never reached a known starting state has only its reason", v.Cell, v.Shape, v.Scenario, v.Evidence)
 	}
 	for label, path := range v.Evidence {
 		fi, err := os.Stat(path)
