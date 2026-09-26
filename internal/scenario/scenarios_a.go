@@ -114,7 +114,7 @@ func runA2(ctx context.Context, e Env) Verdict {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA2, "leases-before")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	beforeLease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
@@ -134,14 +134,34 @@ func runA2(ctx context.Context, e Env) Verdict {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("inspect after restart: %v", err), evBefore, e.GitSHA)
 	}
 
+	// The plugin's own IPAM driver mode mints a fresh MAC on every
+	// restart, but re-sends the previous client identifier from the
+	// endpoint's own lease record (docs/reference.md "Restart
+	// stability (MAC and IP)"): the restarted container's row is found
+	// by that identifier, never by the new MAC docker inspect now
+	// reports (issue #3 part 2, lab fault fix -- looking this up by mac
+	// produced a FAIL for behaviour the plugin documents as normal).
+	isIPAMShape := e.Shape == ShapeBridgeIPAM || e.Shape == ShapeMacvlanIPAM
 	afterSnap := evidencePath(e, NameA2, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterEndpointID, afterSnap)
+	var afterReason string
+	if isIPAMShape {
+		if beforeLease.ClientID == "" {
+			return fail(NameA2, e.Cell, e.Shape,
+				"before restart: the lease carried no client identifier to look the restarted container up by",
+				evBefore, e.GitSHA)
+		}
+		_, _, ok, err = lookupLeaseByClientID(ctx, e.Source, beforeLease.ClientID, afterSnap)
+		afterReason = fmt.Sprintf("after restart: no lease for client identifier %s (address %s) in the source's own table", beforeLease.ClientID, afterAddr)
+	} else {
+		_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterEndpointID, afterSnap)
+		afterReason = "after restart: " + leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID)
+	}
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after restart: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA2, e.Cell, e.Shape, "after restart: "+leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID), ev, e.GitSHA)
+		return fail(NameA2, e.Cell, e.Shape, afterReason, ev, e.GitSHA)
 	}
 	if afterAddr != addr {
 		if e.Shape != ShapeIpvlan {
@@ -390,15 +410,37 @@ func runA5b(ctx context.Context, e Env) Verdict {
 	if err != nil {
 		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
+
+	// Issue #3 part 2, ruling item 3: raw evidence of what
+	// Docker actually passed the plugin for this container's first
+	// address request -- the plugin log lines around the first
+	// RequestAddress call, and the docker-inspect mac/endpoint captured
+	// right after start -- carried on every verdict below, whichever
+	// way this scenario ends. No judgement here about whether it
+	// matches the fixed mac_address; a bridge-ipam run's first lease
+	// went out under a different client-id than the fixed MAC, and
+	// that reading is left to whoever reads the evidence.
+	firstReqMACPath := evidencePath(e, NameA5b, "first-request-mac")
+	firstReqNote := fmt.Sprintf("container=%s docker_inspect_mac=%s docker_endpoint_id=%s fixed_mac_configured=%s captured_at=%s\n",
+		name, mac, endpointID, fixedMAC, time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(firstReqMACPath, []byte(firstReqNote), 0o644); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not write first-request-mac evidence: %v", err), nil, e.GitSHA)
+	}
+	firstReqLogPath := evidencePath(e, NameA5b, "plugin-log-first-request")
+	if err := capturePluginLogAroundFirstRequestAddress(ctx, e.Host, firstReqLogPath); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not capture plugin log around first RequestAddress: %v", err), nil, e.GitSHA)
+	}
+	firstReqEv := map[string]string{"first-request-mac": firstReqMACPath, "plugin-log-first-request": firstReqLogPath}
+
 	if mac != fixedMAC {
-		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container reported mac %s, want the fixed mac %s", mac, fixedMAC), nil, e.GitSHA)
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container reported mac %s, want the fixed mac %s", mac, fixedMAC), firstReqEv, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA5b, "leases-before")
 	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
-		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), firstReqEv, e.GitSHA)
 	}
-	evBefore := map[string]string{"leases-before": beforeSnap}
+	evBefore := map[string]string{"leases-before": beforeSnap, "first-request-mac": firstReqMACPath, "plugin-log-first-request": firstReqLogPath}
 	if !ok {
 		return fail(NameA5b, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
 	}
@@ -425,7 +467,10 @@ func runA5b(ctx context.Context, e Env) Verdict {
 	if err != nil {
 		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
 	}
-	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	ev := map[string]string{
+		"leases-before": beforeSnap, "leases-after": afterSnap,
+		"first-request-mac": firstReqMACPath, "plugin-log-first-request": firstReqLogPath,
+	}
 	if !ok {
 		return fail(NameA5b, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
 	}

@@ -16,21 +16,34 @@ import (
 // internal/sourceadapter/adapter_test.go already uses for its fakeRunner:
 // every scenario-package test below runs with no real source VM at all.
 type fakeAdapter struct {
-	caps       []sourceadapter.Capability
-	leases     []sourceadapter.Lease
-	err        error
-	reachErr   error
-	shortenErr error
-	restoreErr error
-	shortened  bool
-	restored   bool
+	caps   []sourceadapter.Capability
+	leases []sourceadapter.Lease
+	// leases2, when non-nil, is returned starting with the SECOND call
+	// to Leases() (issue #3 part 2's IPAM-shape A2 fix needs a "before"
+	// and "after" table that can genuinely differ, e.g. a row's own MAC
+	// field changing across a restart while its client-id stays put --
+	// something one static leases slice cannot represent).
+	leases2     []sourceadapter.Lease
+	leasesCalls int
+	err         error
+	reachErr    error
+	shortenErr  error
+	restoreErr  error
+	resetErr    error
+	shortened   bool
+	restored    bool
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
 func (f *fakeAdapter) Leases(_ context.Context) ([]sourceadapter.Lease, error) {
+	f.leasesCalls++
+	if f.leasesCalls > 1 && f.leases2 != nil {
+		return f.leases2, f.err
+	}
 	return f.leases, f.err
 }
 func (f *fakeAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
+func (f *fakeAdapter) ResetLeases(_ context.Context) error             { return f.resetErr }
 func (f *fakeAdapter) Restart(_ context.Context) error                 { return nil }
 func (f *fakeAdapter) Stop(_ context.Context) error                    { return nil }
 func (f *fakeAdapter) Start(_ context.Context) error                   { return nil }
@@ -239,7 +252,13 @@ func TestRunA6IsNAWithNoPreviousPluginTag(t *testing.T) {
 // exercised without a real docker host.
 type addrChangeRunner struct {
 	mac, beforeAddr, afterAddr, endpointID string
-	restarted                              bool
+	// afterMac, when set, is what docker inspect reports for the MAC
+	// address once restarted is true instead of mac (issue #3 part 2:
+	// the plugin's own IPAM driver mode mints Docker a fresh MAC on
+	// every restart -- docs/reference.md "Restart stability"). Empty
+	// keeps every existing test's behaviour unchanged (mac throughout).
+	afterMac  string
+	restarted bool
 }
 
 func (f *addrChangeRunner) Run(_ context.Context, cmd string) (string, error) {
@@ -250,6 +269,9 @@ func (f *addrChangeRunner) Run(_ context.Context, cmd string) (string, error) {
 	case strings.Contains(cmd, "State.Running"):
 		return "true", nil
 	case strings.Contains(cmd, "MacAddress"):
+		if f.restarted && f.afterMac != "" {
+			return f.afterMac, nil
+		}
 		return f.mac, nil
 	case strings.Contains(cmd, "IPAddress"):
 		if f.restarted {
@@ -325,6 +347,48 @@ func TestRunA2FailsWhenIpvlanNewAddressIsUnreachable(t *testing.T) {
 	v := runA2(context.Background(), e)
 	if v.Result != FAIL {
 		t.Fatalf("want FAIL when the source cannot reach the new address, got %s (reason %q)", v.Result, v.Reason)
+	}
+}
+
+// Issue #3 part 2's IPAM-shape lab fault fix: the plugin's own IPAM
+// driver mode mints Docker a fresh MAC on every restart, but re-sends
+// the same client identifier from before (docs/reference.md "Restart
+// stability (MAC and IP)"). The source's own table reflects that new
+// MAC on the row from the moment the container comes back up -- there
+// is no longer any row under the old MAC at all -- so leases2 gives
+// the after-restart snapshot a different MAC on the very same
+// client-id and address. A mac-keyed after lookup (the pre-fix
+// behaviour) would find nothing here and FAIL; the fix must PASS.
+func TestRunA2IPAMShapeLooksUpAfterLeaseByClientIDAcrossMacChange(t *testing.T) {
+	const clientID = "00:aa:bb:cc:dd:ee:ff:00"
+	const oldMAC, newMAC, addr = "aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02", "10.200.1.179"
+	host := &addrChangeRunner{mac: oldMAC, afterMac: newMAC, beforeAddr: addr, afterAddr: addr}
+	source := &fakeAdapter{
+		leases:  []sourceadapter.Lease{{MAC: oldMAC, Address: addr, ClientID: clientID}},
+		leases2: []sourceadapter.Lease{{MAC: newMAC, Address: addr, ClientID: clientID}},
+	}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeBridgeIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	v := runA2(context.Background(), e)
+	if v.Result != PASS {
+		t.Fatalf("want PASS, got %s (reason %q)", v.Result, v.Reason)
+	}
+}
+
+// The IPAM-shape branch cannot look a restarted container up by
+// client-id when the before-restart lease never carried one; that is
+// a FAIL with a reason naming the missing identifier, never a panic
+// or a silent fall-through to the mac-keyed lookup.
+func TestRunA2IPAMShapeFailsWhenBeforeLeaseHasNoClientID(t *testing.T) {
+	const mac, addr = "aa:bb:cc:dd:ee:01", "10.200.1.179"
+	host := &addrChangeRunner{mac: mac, beforeAddr: addr, afterAddr: addr}
+	source := &fakeAdapter{leases: []sourceadapter.Lease{{MAC: mac, Address: addr}}}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeMacvlanIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	v := runA2(context.Background(), e)
+	if v.Result != FAIL {
+		t.Fatalf("want FAIL, got %s", v.Result)
+	}
+	if !strings.Contains(v.Reason, "client identifier") {
+		t.Fatalf("reason did not name the missing client identifier: %q", v.Reason)
 	}
 }
 

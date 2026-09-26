@@ -21,8 +21,12 @@ func (a *ISCDHCPAdapter) Capabilities() []Capability {
 	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 }
 
+// iscLeaseFile is the on-disk lease table this adapter reads directly
+// (Leases()) and is the file ResetLeases truncates (issue #3 part 2).
+const iscLeaseFile = "/var/lib/dhcp/dhcpd.leases"
+
 func (a *ISCDHCPAdapter) Leases(ctx context.Context) ([]Lease, error) {
-	out, err := a.Runner.Run(ctx, "sudo cat /var/lib/dhcp/dhcpd.leases")
+	out, err := a.Runner.Run(ctx, "sudo cat "+iscLeaseFile)
 	if err != nil {
 		return nil, fmt.Errorf("isc-dhcp: read dhcpd.leases: %w", err)
 	}
@@ -153,6 +157,12 @@ func (a *ISCDHCPAdapter) Start(ctx context.Context) error   { return a.systemctl
 
 func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
+}
+
+// ResetLeases stops isc-dhcp-server, truncates iscLeaseFile, and starts
+// it again (issue #3 part 2).
+func (a *ISCDHCPAdapter) ResetLeases(ctx context.Context) error {
+	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, "isc-dhcp-server", "isc-dhcp")
 }
 
 func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {

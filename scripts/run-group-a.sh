@@ -82,10 +82,22 @@ done
 # One shape at a time, never overlapping: each labctl run tears its own
 # network down (deferred inside cmdRun) before returning, so the next
 # shape's NetworkUp never races it (issue #3 defeat list).
+#
+# Exit code 3 is labctl's own sentinel for a lab error, not a scenario
+# FAIL (issue #3 part 2, ruling item 1): the pre-shape pool
+# check found the source's pool cannot cover even this one shape's
+# worst case. Continuing to the next shape would run it against the
+# same undersized pool, so the whole cell aborts here instead.
 RUNNER_FAILED=0
 for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	echo "== scenarios: $shape =="
-	if ! go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap"; then
+	rc=0
+	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" || rc=$?
+	if [ "$rc" -eq 3 ]; then
+		echo "run-group-a: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
+		RUNNER_FAILED=1
+		break
+	elif [ "$rc" -ne 0 ]; then
 		echo "run-group-a: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2
 		RUNNER_FAILED=1
 	fi

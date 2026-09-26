@@ -559,6 +559,54 @@ func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) 
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+// capturePluginLogAroundFirstRequestAddress writes the plugin's own
+// net-dhcp journal lines from the last 10 minutes to path, sliced to a
+// fixed window of context lines around the first line mentioning
+// RequestAddress (issue #3 part 2, ruling item 3, A5b's
+// evidence): a raw, mechanical slice, never a judgement about what
+// those lines show -- a bridge-ipam run's first lease going out under a
+// different client-id than the fixed MAC is left for whoever reads the
+// evidence, not this capture to characterise.
+func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
+	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
+	if err != nil {
+		return fmt.Errorf("journalctl -u docker: %w", err)
+	}
+	var netDHCP []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "net-dhcp") {
+			netDHCP = append(netDHCP, line)
+		}
+	}
+	const contextLines = 10
+	firstMatch := -1
+	for i, line := range netDHCP {
+		if strings.Contains(line, "RequestAddress") {
+			firstMatch = i
+			break
+		}
+	}
+	var b strings.Builder
+	if firstMatch == -1 {
+		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's net-dhcp lines\n")
+	} else {
+		start := firstMatch - contextLines
+		if start < 0 {
+			start = 0
+		}
+		end := firstMatch + contextLines + 1
+		if end > len(netDHCP) {
+			end = len(netDHCP)
+		}
+		fmt.Fprintf(&b, "# net-dhcp journal lines %d..%d of %d, centred on the first RequestAddress line (index %d)\n", start, end-1, len(netDHCP), firstMatch)
+		for _, line := range netDHCP[start:end] {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
 // pluginSettingNames reads the settings a given, already-installed
 // plugin ref actually declares, from the plugin's own Config.Env
 // (issue #3): an older or different tag does not

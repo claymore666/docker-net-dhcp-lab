@@ -82,6 +82,14 @@ type Adapter interface {
 	// alone: every other scenario's timing assumes the stock lease
 	// time, never this one's.
 	ShortenLeaseTime(ctx context.Context, seconds int) (restore func(ctx context.Context) error, err error)
+	// ResetLeases stops the source, truncates its lease file to zero
+	// bytes, and starts it again (issue #3 part 2). The plugin's own
+	// default is release_lease=never (docs/reference.md), so nothing
+	// else ever frees a lease between shapes: five shapes of fresh
+	// MACs/client-ids on the one small pool this lab uses run it out
+	// unless the runner resets the source before every shape, which is
+	// what this is for.
+	ResetLeases(ctx context.Context) error
 }
 
 // Runner executes one command on the source VM's own management
@@ -176,4 +184,22 @@ func shortenLeaseTimeViaSubstitution(ctx context.Context, r Runner, path string,
 		return restart(ctx)
 	}
 	return restore, nil
+}
+
+// resetLeasesViaTruncate stops the service, truncates leaseFile to zero
+// bytes, and starts the service again, in one chained remote command
+// (issue #3 part 2) -- the same single-command idiom ReserveMAC's own
+// write-then-restart already uses on each adapter. GNU truncate creates
+// a missing file rather than erroring on one (coreutils truncate(1)),
+// so this works whether or not the source has ever written the file
+// yet. If the truncate or the start fails, the chain stops there and
+// the error names which step failed; the caller treats it as an
+// infrastructure error, the same as any other failed Restart/Stop/
+// Start.
+func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile, service, label string) error {
+	cmd := fmt.Sprintf("sudo systemctl stop %s && sudo truncate -s 0 %s && sudo systemctl start %s", service, leaseFile, service)
+	if _, err := r.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("%s: reset leases (stop %s, truncate %s, start %s): %w", label, service, leaseFile, service, err)
+	}
+	return nil
 }

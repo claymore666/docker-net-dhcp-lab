@@ -250,6 +250,7 @@ func (a *sequencedLeaseAdapter) Leases(_ context.Context) ([]sourceadapter.Lease
 	return a.sequence[i], nil
 }
 func (a *sequencedLeaseAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
+func (a *sequencedLeaseAdapter) ResetLeases(_ context.Context) error             { return nil }
 func (a *sequencedLeaseAdapter) Restart(_ context.Context) error                 { return nil }
 func (a *sequencedLeaseAdapter) Stop(_ context.Context) error                    { return nil }
 func (a *sequencedLeaseAdapter) Start(_ context.Context) error                   { return nil }

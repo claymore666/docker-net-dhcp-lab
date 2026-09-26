@@ -25,8 +25,13 @@ func (a *DnsmasqAdapter) Capabilities() []Capability {
 	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 }
 
+// dnsmasqLeaseFile is the on-disk lease table this adapter reads
+// directly (Leases()) and is the file ResetLeases truncates (issue #3
+// part 2).
+const dnsmasqLeaseFile = "/var/lib/misc/dnsmasq.leases"
+
 func (a *DnsmasqAdapter) Leases(ctx context.Context) ([]Lease, error) {
-	out, err := a.Runner.Run(ctx, "sudo cat /var/lib/misc/dnsmasq.leases")
+	out, err := a.Runner.Run(ctx, "sudo cat "+dnsmasqLeaseFile)
 	if err != nil {
 		return nil, fmt.Errorf("dnsmasq: read dnsmasq.leases: %w", err)
 	}
@@ -93,6 +98,12 @@ func (a *DnsmasqAdapter) Start(ctx context.Context) error   { return a.systemctl
 
 func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
+}
+
+// ResetLeases stops dnsmasq, truncates dnsmasqLeaseFile, and starts it
+// again (issue #3 part 2).
+func (a *DnsmasqAdapter) ResetLeases(ctx context.Context) error {
+	return resetLeasesViaTruncate(ctx, a.Runner, dnsmasqLeaseFile, "dnsmasq", "dnsmasq")
 }
 
 func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {

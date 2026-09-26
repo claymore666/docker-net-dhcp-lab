@@ -94,6 +94,25 @@ const (
 	NameA16 = "A16-forced-remove-running"
 )
 
+// MinPoolAddresses is the most pool addresses one full A1-A16 pass under
+// one shape could hold onto, worst case (issue #3 part 2). The plugin's
+// own default is release_lease=never (docs/reference.md): nothing frees
+// a lease on its own, so every fresh MAC/client-id a scenario mints
+// keeps its address until the source's lease database is reset
+// (sourceadapter.Adapter.ResetLeases, called once before every shape).
+// Counted straight from the catalog, one fresh address for every
+// container start an event could mint in the worst case, even though
+// most of the time it reuses the same one: A1(1) + A2(2) + A3(2) +
+// A4(2) + A5(2) + A5b(2) + A6(1, persists across the upgrade) +
+// A7(1, persists across the kill) + A8(10, fleet burst) + A9(2) +
+// A10(2) + A11(1, pause/unpause mints nothing new) + A12(2) + A13(1,
+// its own second network is Docker's default IPAM, never this pool) +
+// A14(1) + A15(5, peak replica count) + A16(1) = 38. The pre-shape
+// check in cmd/labctl compares a pool's free addresses against this and
+// aborts the cell as a lab error, never as a scenario FAIL, when the
+// pool cannot cover even one shape's run.
+const MinPoolAddresses = 38
+
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
 // never has to duplicate that check: a scenario whose capability is
 // missing comes back N/A with a reason and never reaches s.Run at all.

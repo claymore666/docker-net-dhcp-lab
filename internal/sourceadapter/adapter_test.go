@@ -2,6 +2,7 @@ package sourceadapter
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -553,6 +554,66 @@ func TestShortenLeaseTimeSubstitutesAndRestores(t *testing.T) {
 		}
 		if !strings.Contains(r.calls[1], "restart "+c.svc) {
 			t.Errorf("%s: restore call 1 = %q, want a restart of %s", c.name, r.calls[1], c.svc)
+		}
+	}
+}
+
+// TestResetLeasesStopsTruncatesAndStarts drives each adapter's real
+// ResetLeases (issue #3 part 2): one chained remote command that stops
+// the service, truncates its own lease file, and starts the service
+// again, in that order, so nothing else can read a half-cleared table
+// in between.
+func TestResetLeasesStopsTruncatesAndStarts(t *testing.T) {
+	cases := []struct {
+		name string
+		a    Adapter
+		svc  string
+		file string
+	}{
+		{"kea", &KeaAdapter{}, "kea-dhcp4-server", keaLeaseFile},
+		{"isc-dhcp", &ISCDHCPAdapter{}, "isc-dhcp-server", iscLeaseFile},
+		{"dnsmasq", &DnsmasqAdapter{}, "dnsmasq", dnsmasqLeaseFile},
+	}
+	for _, c := range cases {
+		r := &fakeRunner{}
+		switch v := c.a.(type) {
+		case *KeaAdapter:
+			v.Runner = r
+		case *ISCDHCPAdapter:
+			v.Runner = r
+		case *DnsmasqAdapter:
+			v.Runner = r
+		}
+		if err := c.a.ResetLeases(context.Background()); err != nil {
+			t.Fatalf("%s: ResetLeases: %v", c.name, err)
+		}
+		if len(r.calls) != 1 {
+			t.Fatalf("%s: want 1 chained call, got %d: %v", c.name, len(r.calls), r.calls)
+		}
+		call := r.calls[0]
+		stopAt := strings.Index(call, "stop "+c.svc)
+		truncAt := strings.Index(call, "truncate -s 0 "+c.file)
+		startAt := strings.Index(call, "start "+c.svc)
+		if stopAt < 0 || truncAt < 0 || startAt < 0 {
+			t.Fatalf("%s: call = %q, want it to stop %s, truncate %s and start %s", c.name, call, c.svc, c.file, c.svc)
+		}
+		if !(stopAt < truncAt && truncAt < startAt) {
+			t.Fatalf("%s: call = %q, want stop before truncate before start", c.name, call)
+		}
+	}
+}
+
+// TestResetLeasesPropagatesRunnerError: a failing remote command must
+// surface as an error, never a silent no-op that leaves the caller
+// believing the pool is now empty when it is not.
+func TestResetLeasesPropagatesRunnerError(t *testing.T) {
+	for name, a := range map[string]Adapter{
+		"kea":      &KeaAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+		"isc-dhcp": &ISCDHCPAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+		"dnsmasq":  &DnsmasqAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+	} {
+		if err := a.ResetLeases(context.Background()); err == nil {
+			t.Errorf("%s: ResetLeases with a failing runner was accepted, want an error", name)
 		}
 	}
 }

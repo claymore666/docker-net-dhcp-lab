@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,13 @@ import (
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
+
+// labErrorExitCode signals a lab-side abort, distinct from an ordinary
+// tool failure (1) or a clean BLOCKED-for-unready-plugin run (0):
+// run-group-a.sh's shape loop treats this one specially and aborts the
+// whole cell rather than trying the remaining shapes against the same
+// undersized pool (issue #3 part 2, ruling item 1).
+const labErrorExitCode = 3
 
 func main() {
 	if len(os.Args) < 2 {
@@ -236,6 +245,57 @@ func cmdRun(args []string) int {
 		return 0
 	}
 
+	// Reset before every shape (issue #3 part 2, ruling item
+	// 1): the plugin's own default is release_lease=never
+	// (docs/reference.md), so nothing else ever frees a lease between
+	// shapes, and five shapes of fresh MACs/client-ids on one pool
+	// otherwise ran it out -- a lab fault, not a plugin defect. Logged
+	// in evidence so a run's own record shows the reset happened.
+	if err := source.ResetLeases(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run: ResetLeases:", err)
+		return 1
+	}
+	resetLog := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-lease-reset.txt", cellName, shape))
+	resetNote := fmt.Sprintf("%s source's lease database reset before this shape: cell=%s shape=%s sha=%s at=%s\n",
+		cell.Source.Type, cellName, shape, gitSHA, time.Now().UTC().Format(time.RFC3339))
+	if err := os.WriteFile(resetLog, []byte(resetNote), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run: could not write lease-reset evidence:", err)
+		return 1
+	}
+
+	// Pre-shape pool-capacity check (issue #3 part 2, ruling
+	// item 1): a pool that cannot even cover one shape's worst-case
+	// address need aborts the cell as a lab error here, before any
+	// scenario runs, rather than surfacing 30+ scenarios later as
+	// pool-exhaustion FAILs that read like plugin defects.
+	capacity, err := poolCapacity(cell.Source.PoolStart, cell.Source.PoolEnd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run: pool capacity:", err)
+		return 1
+	}
+	heldLeases, err := source.Leases(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run: Leases after reset:", err)
+		return 1
+	}
+	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.MinPoolAddresses); !ok {
+		reason = "pool cannot cover this shape's run: " + reason
+		for _, s := range scenario.Catalog {
+			v := scenario.Verdict{
+				Scenario: s.Name, Cell: cellName, Shape: shape,
+				Result: scenario.BLOCKED, Reason: reason,
+				GitSHA: gitSHA, Timestamp: time.Now(),
+			}
+			if werr := scenario.Write(evidenceDir, v); werr != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+		}
+		fmt.Fprintf(os.Stderr, "labctl run: %s\n", reason)
+		return labErrorExitCode
+	}
+
 	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)
@@ -276,6 +336,44 @@ func cmdRun(args []string) int {
 			failed, len(scenario.Catalog), cellName, shape)
 	}
 	return 0
+}
+
+// poolCapacity returns the number of addresses in an IPv4 pool,
+// inclusive of both ends (issue #3 part 2). start and end are already
+// validated as parseable, start-before-end IPv4 addresses by
+// labyaml.Load, so an error here means this cell's own config
+// validation has a gap, not something a lab run's environment caused.
+func poolCapacity(start, end string) (int, error) {
+	s, err := netip.ParseAddr(start)
+	if err != nil {
+		return 0, fmt.Errorf("pool_start %q: %w", start, err)
+	}
+	e, err := netip.ParseAddr(end)
+	if err != nil {
+		return 0, fmt.Errorf("pool_end %q: %w", end, err)
+	}
+	if !s.Is4() || !e.Is4() {
+		return 0, fmt.Errorf("pool_start %q and pool_end %q must both be IPv4", start, end)
+	}
+	sb, eb := s.As4(), e.As4()
+	sN, eN := binary.BigEndian.Uint32(sb[:]), binary.BigEndian.Uint32(eb[:])
+	if eN < sN {
+		return 0, fmt.Errorf("pool_end %q is before pool_start %q", end, start)
+	}
+	return int(eN-sN) + 1, nil
+}
+
+// poolHasCapacityFor reports whether a pool has at least need addresses
+// free once held is subtracted from capacity, and a reason worth
+// logging either way (issue #3 part 2, ruling item 1): the
+// cell's pre-shape check calls this once, right after the lease
+// database reset and before any scenario can mint a single new lease.
+func poolHasCapacityFor(capacity, held, need int) (bool, string) {
+	free := capacity - held
+	if free < need {
+		return false, fmt.Sprintf("%d free address(es) (%d held of %d total), needs at least %d", free, held, capacity, need)
+	}
+	return true, fmt.Sprintf("%d free address(es) (%d held of %d total), at least %d needed", free, held, capacity, need)
 }
 
 func gitRevParseHEAD(repoRoot string) (string, error) {

@@ -30,6 +30,14 @@ func (a *KeaAdapter) Capabilities() []Capability {
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
 	`-d '{"command":"lease4-get-all","service":["dhcp4"]}' http://127.0.0.1:8000/`
 
+// keaLeaseFile is the on-disk path the cloud-init template now names
+// explicitly in "lease-database".name (issue #3 part 2): without an
+// explicit name the package's own default is not something this
+// adapter can rely on being the same across a Debian package upgrade,
+// and ResetLeases has to truncate the exact file the running config
+// actually writes to.
+const keaLeaseFile = "/var/lib/kea/kea-leases4.csv"
+
 // keaResponse mirrors the control agent's own reply shape: a JSON array,
 // one element per queried service, `result` 0 for leases present, 3 for
 // "no leases" (Kea's own CONTROL_RESULT_EMPTY), anything else an error
@@ -109,6 +117,14 @@ func (a *KeaAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx
 
 func (a *KeaAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
+}
+
+// ResetLeases stops kea-dhcp4-server, truncates keaLeaseFile, and
+// starts it again (issue #3 part 2). kea-ctrl-agent is left alone: it
+// serves the control API this adapter's own Leases() reads and carries
+// no lease state itself.
+func (a *KeaAdapter) ResetLeases(ctx context.Context) error {
+	return resetLeasesViaTruncate(ctx, a.Runner, keaLeaseFile, "kea-dhcp4-server", "kea")
 }
 
 func (a *KeaAdapter) systemctl(ctx context.Context, action string) error {

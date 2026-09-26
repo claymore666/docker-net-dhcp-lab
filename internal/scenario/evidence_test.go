@@ -24,6 +24,7 @@ func (a *countingReachAdapter) Leases(_ context.Context) ([]sourceadapter.Lease,
 	return nil, nil
 }
 func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
+func (a *countingReachAdapter) ResetLeases(_ context.Context) error             { return nil }
 func (a *countingReachAdapter) Restart(_ context.Context) error                 { return nil }
 func (a *countingReachAdapter) Stop(_ context.Context) error                    { return nil }
 func (a *countingReachAdapter) Start(_ context.Context) error                   { return nil }
