@@ -71,22 +71,88 @@ func waitDockerBack(ctx context.Context, r sourceadapter.Runner, timeout time.Du
 	return fmt.Errorf("dockerd did not come back within %s: %v", timeout, lastErr)
 }
 
-// waitSSHBack retries a harmless remote command, bounded by wall clock
-// rather than the caller's context: a host reboot (issue #3's A5) drops
-// the connection this Run is issued over, and that is expected, not an
-// error to surface -- only never coming back inside the bound is.
-func waitSSHBack(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if _, err := r.Run(ctx, "true"); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		time.Sleep(2 * time.Second)
+// bootID reads the kernel's own boot id, the one identifier that
+// actually distinguishes "the old boot, still shutting down" from "the
+// new boot, up for real" -- unlike a bare SSH poll, which sshd keeps
+// answering on for a beat after `systemctl reboot` is issued.
+func bootID(ctx context.Context, r sourceadapter.Runner) (string, error) {
+	out, err := r.Run(ctx, "cat /proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
 	}
-	return fmt.Errorf("ssh did not come back within %s: %v", timeout, lastErr)
+	id := strings.TrimSpace(out)
+	if id == "" {
+		return "", fmt.Errorf("empty boot id")
+	}
+	return id, nil
+}
+
+// waitHostRebooted replaces the old first-poll-wins waitSSHBack after a
+// live diagnostic against a real cell (issue #3, A5, 2026-09-26): a bare
+// successful SSH poll right after `systemctl reboot` is not evidence the
+// reboot happened. Measured directly: two polls landed successfully at
+// +1.05s and +2.4s after the reboot command returned, both still against
+// the OLD boot id (sshd keeps answering while the box is mid-shutdown);
+// the connection only actually dropped on the third poll, ~4.1s in. A
+// scenario that trusted the first of those polls would report the host
+// "back" while it was still going down for the real reboot over the
+// next ~59s -- exactly the shape of the cascade this fix addresses (A6
+// onward failing with connection-refused right after an A5 PASS).
+//
+// So this checks three things, in order, all bounded by wall clock:
+//  1. the kernel's own boot id changes from the one recorded before the
+//     reboot was issued (not just "SSH answers again" -- that answered a
+//     survived response, twice, from the boot that was already dying);
+//  2. a second poll against that SAME new boot id lands at least 10s
+//     after the first sighting, so a lucky single ping (or a second,
+//     unplanned reboot mid-settle) cannot pass on its own;
+//  3. `docker info` answers on the confirmed new boot.
+func waitHostRebooted(ctx context.Context, r sourceadapter.Runner, beforeBootID string, timeout time.Duration) error {
+	return waitHostRebootedTuned(ctx, r, beforeBootID, timeout, 10*time.Second, 2*time.Second)
+}
+
+// waitHostRebootedTuned is waitHostRebooted with the settle window and
+// poll interval broken out so a test can shrink both (a real 10s settle
+// window is the point of the fix, not something to skip -- shrinking it
+// is a test-speed concern only, never a way to weaken the check itself).
+func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBootID string, timeout, settle, poll time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	var newID string
+	for time.Now().Before(deadline) {
+		if id, err := bootID(ctx, r); err == nil && id != beforeBootID {
+			newID = id
+			break
+		}
+		time.Sleep(poll)
+	}
+	if newID == "" {
+		return fmt.Errorf("boot id never changed from %s within %s: host did not come back on a new boot", beforeBootID, timeout)
+	}
+	firstSeen := time.Now()
+
+	settled := false
+	for time.Now().Before(deadline) {
+		if time.Since(firstSeen) >= settle {
+			id, err := bootID(ctx, r)
+			if err == nil && id == newID {
+				settled = true
+				break
+			}
+			if err == nil && id != newID {
+				return fmt.Errorf("boot id changed again mid-settle (%s -> %s): a second reboot happened while waiting for %s to settle", newID, id, newID)
+			}
+		}
+		time.Sleep(poll)
+	}
+	if !settled {
+		return fmt.Errorf("boot id %s never got a second confirmation >=%s later within %s", newID, settle, timeout)
+	}
+
+	if _, err := r.Run(ctx, "sudo docker info >/dev/null"); err != nil {
+		return fmt.Errorf("boot id %s confirmed twice, but docker info did not answer: %w", newID, err)
+	}
+	return nil
 }
 
 // pluginPID finds the plugin's own process by exact name. The plugin

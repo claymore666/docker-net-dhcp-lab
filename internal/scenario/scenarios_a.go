@@ -243,13 +243,15 @@ func runA5(ctx context.Context, e Env) Verdict {
 		return fail(NameA5, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr), evBefore, e.GitSHA)
 	}
 
-	// systemctl reboot drops this very SSH connection; that is expected,
-	// not a failure to surface (issue #3 defeat list on waitSSHBack).
-	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
-	if err := waitSSHBack(ctx, e.Host, 3*time.Minute); err != nil {
-		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	beforeBootID, err := bootID(ctx, e.Host)
+	if err != nil {
+		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read boot id before reboot: %v", err), evBefore, e.GitSHA)
 	}
-	if err := waitDockerBack(ctx, e.Host, 60*time.Second); err != nil {
+
+	// systemctl reboot drops this very SSH connection; that is expected,
+	// not a failure to surface (issue #3 defeat list on waitHostRebooted).
+	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
+	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
 		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
