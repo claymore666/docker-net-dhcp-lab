@@ -38,8 +38,9 @@ fail=0
 while IFS= read -r -d '' f; do
 	case "$f" in
 	*/.git/*) continue ;;
-	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
-	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
+	scripts/hygiene-check.sh) continue ;;             # its own regex literals look like addresses but are not
+	scripts/hygiene-check-test.sh) continue ;;        # deliberately carries disallowed-looking fixtures, never real
+	scripts/commit-message-check-test.sh) continue ;; # same shape: fixtures for a throwaway repo, never real
 	esac
 	# A _test.go fixture legitimately carries made-up private addresses
 	# (a TempDir source, never shipped or run anywhere real), so it

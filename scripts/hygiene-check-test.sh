@@ -151,8 +151,16 @@ run_case "test file, role word" \
 	$'// as the lead noted, this fixture is synthetic\n' fail sample_test.go || fail=1
 run_case "test file, handover pointer" \
 	$'// (.claude/handover/some-file.md)\n' fail sample_test.go || fail=1
+# commit-message-check-test.sh is the same shape of file as
+# hygiene-check-test.sh itself: a fixture suite that deliberately
+# carries disallowed-looking strings inside a throwaway git repo it
+# builds at run time, never a real commit here. It needs the same
+# blanket exemption hygiene-check.sh already gives its own fixture
+# file, or its own fixtures trip this check just by existing.
+run_case "commit-message-check-test.sh, role word, exempt" \
+	$'run_case "x" "fix: apply the reviewer note" "" fail\n' ok scripts/commit-message-check-test.sh || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 32 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 33 cases behaved as expected"
