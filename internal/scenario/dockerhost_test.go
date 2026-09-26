@@ -226,6 +226,71 @@ func TestCapturePluginLogWritesAPlaceholderWhenNothingMatches(t *testing.T) {
 	}
 }
 
+// Issue #3 part 2, ruling item 3: the A5b evidence capture
+// must actually centre on the first RequestAddress line and keep only
+// net-dhcp lines, not the whole journal -- a raw slice, nothing
+// asserted here about what the lines mean.
+func TestCapturePluginLogAroundFirstRequestAddressCentresOnFirstMatch(t *testing.T) {
+	journal := "Sep 27 net-dhcp: line -3\n" +
+		"Sep 27 containerd: unrelated\n" +
+		"Sep 27 net-dhcp: line -2\n" +
+		"Sep 27 net-dhcp: line -1\n" +
+		"Sep 27 net-dhcp: RequestAddress mac=aa:bb:cc:dd:ee:01\n" +
+		"Sep 27 net-dhcp: line +1\n" +
+		"Sep 27 net-dhcp: RequestAddress mac=aa:bb:cc:dd:ee:02\n" // a second, later RequestAddress
+	r := &fakeLogRunner{journal: journal}
+	path := t.TempDir() + "/first-request.log"
+	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
+		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	s := string(got)
+	if strings.Contains(s, "containerd") {
+		t.Fatalf("kept a line outside net-dhcp: %q", s)
+	}
+	if !strings.Contains(s, "aa:bb:cc:dd:ee:01") {
+		t.Fatalf("dropped the first RequestAddress line: %q", s)
+	}
+	if !strings.Contains(s, "line -3") || !strings.Contains(s, "line +1") {
+		t.Fatalf("did not keep the context lines around the first match: %q", s)
+	}
+	if !strings.Contains(s, "aa:bb:cc:dd:ee:02") {
+		t.Fatalf("want the second RequestAddress line kept too (it's within the context window), got: %q", s)
+	}
+}
+
+func TestCapturePluginLogAroundFirstRequestAddressPlaceholderWhenNoMatch(t *testing.T) {
+	r := &fakeLogRunner{journal: "Sep 27 net-dhcp: started\nSep 27 net-dhcp: ready\n"}
+	path := t.TempDir() + "/first-request.log"
+	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
+		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if len(got) == 0 {
+		t.Fatal("left the file empty instead of a placeholder; Write() would refuse this as evidence")
+	}
+	if !strings.Contains(string(got), "no RequestAddress line found") {
+		t.Fatalf("want the placeholder to say no RequestAddress line was found, got: %q", got)
+	}
+	if strings.Contains(string(got), "started") || strings.Contains(string(got), "ready") {
+		t.Fatalf("placeholder should not echo journal content it never centred on: %q", got)
+	}
+}
+
+func TestCapturePluginLogAroundFirstRequestAddressPropagatesRunnerError(t *testing.T) {
+	r := &fakeLogRunner{failErr: fmt.Errorf("ssh: connection refused")}
+	path := t.TempDir() + "/first-request.log"
+	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err == nil {
+		t.Fatal("want an error when the runner fails, got nil")
+	}
+}
+
 // fakeInstallRunner answers the Config.Env settings-name query with a
 // scripted list and records every command, so installPluginChecked's
 // "only set what the ref actually declares" rule (#3) is checked
