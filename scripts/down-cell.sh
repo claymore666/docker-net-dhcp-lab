@@ -66,6 +66,22 @@ fi
 # before it was copied off the host). A sibling of $WORK, not inside it,
 # so this rm -rf can never reach it again.
 evidence_dir="${LAB_EVIDENCE_DIR:-$(dirname "$WORK")/evidence}"
+
+# Refuse rather than silently destroy: an evidence dir inside $WORK
+# would be removed by the rm -rf below right after this script just
+# moved the pcaps into it -- the same class of loss the comment above
+# already names for a bare pcap, but for the whole bundle (verdicts,
+# lease snapshots, config diff, versions, plugin log). Measured live
+# 2026-09-26: run-group-a.sh's own EVIDENCE_DIR default nests it inside
+# $WORK, and every evidence bundle from a run that hit this path was
+# gone by the time down-cell.sh printed "torn down".
+case "$evidence_dir" in
+"$WORK" | "$WORK"/*)
+	echo "down-cell: REFUSED -- evidence dir $evidence_dir is inside $WORK; the rm -rf below would destroy it. Pass an evidence dir that is a sibling of \$WORK, never inside it." >&2
+	exit 1
+	;;
+esac
+
 if [ -d "$WORK" ]; then
 	mapfile -t pcaps < <(find "$WORK" -type f -name '*.pcap')
 	if [ "${#pcaps[@]}" -gt 0 ]; then

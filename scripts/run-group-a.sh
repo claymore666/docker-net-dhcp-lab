@@ -10,7 +10,13 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CELL=${1:?usage: run-group-a.sh <cell-name> [work-dir] [evidence-dir]}
 WORK=${2:-/srv/lab/work/$(whoami)/$CELL}
-EVIDENCE_DIR=${3:-$WORK/evidence}
+# A sibling of $WORK, never inside it: down-cell.sh's own rm -rf at the
+# end of this script removes the whole of $WORK, and now refuses to run
+# at all if the evidence dir it was handed is nested inside $WORK
+# (measured live 2026-09-26: this default used to nest it there, and
+# every evidence bundle from a run that hit that path was destroyed
+# along with $WORK).
+EVIDENCE_DIR=${3:-$(dirname "$WORK")/evidence}
 LAB_YAML="${LAB_YAML:-$REPO_ROOT/lab.yaml}"
 
 mkdir -p "$WORK" "$EVIDENCE_DIR"

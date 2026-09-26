@@ -298,7 +298,41 @@ if ! grep -qE '^virsh undefine lab-case6cell-source --nvram$' "$sudolog6"; then
 	fail=1
 fi
 
+# Case 7: the evidence dir is inside $WORK (the exact shape
+# run-group-a.sh's old default produced, and every evidence bundle it
+# built was destroyed by the rm -rf below before this guard existed --
+# measured live 2026-09-26). Must refuse, must not touch $WORK at all
+# (not even the pcap move), and must not print "torn down".
+case7=$(mktemp -d "$tmp/case7-XXXXXX")
+work7="$case7/work"
+mkdir -p "$work7"
+echo fake >"$work7/capture.pcap"
+cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+chmod +x "$tmp/virsh"
+evdir7="$work7/evidence"
+if out7=$(LAB_EVIDENCE_DIR="$evdir7" PATH="$tmp:$PATH" "$SCRIPT" case7cell "$work7" 2>&1); then
+	echo "down-cell-test: FAIL -- case 7: exited 0 with an evidence dir nested inside \$WORK" >&2
+	fail=1
+else
+	out7_captured="$out7"
+fi
+if grep -q "torn down" <<<"${out7_captured:-}"; then
+	echo "down-cell-test: FAIL -- case 7: printed the torn-down confirmation with a nested evidence dir" >&2
+	fail=1
+fi
+if [ ! -d "$work7" ] || [ ! -f "$work7/capture.pcap" ]; then
+	echo "down-cell-test: FAIL -- case 7: \$WORK or its pcap was removed despite the refusal" >&2
+	fail=1
+fi
+if ! grep -q "REFUSED" <<<"${out7_captured:-}"; then
+	echo "down-cell-test: FAIL -- case 7: did not print a REFUSED message for the nested evidence dir" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- all six cases behaved as expected"
+echo "down-cell-test: PASS -- all seven cases behaved as expected"
