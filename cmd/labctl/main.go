@@ -245,15 +245,15 @@ func cmdRun(args []string) int {
 	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
 
 	env := scenario.Env{
-		Host:        hostRunner,
-		Source:      source,
-		Cell:        cellName,
-		Shape:       shape,
-		Network:     net,
-		PCAP:        pcap,
-		RepoRoot:    repoRoot,
-		WorkDir:     workDir,
-		EvidenceDir: evidenceDir,
+		Host:              hostRunner,
+		Source:            source,
+		Cell:              cellName,
+		Shape:             shape,
+		Network:           net,
+		PCAP:              pcap,
+		RepoRoot:          repoRoot,
+		WorkDir:           workDir,
+		EvidenceDir:       evidenceDir,
 		PluginTag:         cell.DockerHost.PluginTag,
 		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
 		GitSHA:            gitSHA,
@@ -272,7 +272,7 @@ func cmdRun(args []string) int {
 		}
 	}
 	if failed > 0 {
-		fmt.Printf("labctl run: %d/%d scenarios FAILed on %s/%s -- a finding about the plugin, not the runner\n",
+		fmt.Printf("labctl run: %d/%d scenarios FAILed on %s/%s; see verdicts\n",
 			failed, len(scenario.Catalog), cellName, shape)
 	}
 	return 0
