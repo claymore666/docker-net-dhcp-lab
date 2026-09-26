@@ -16,8 +16,8 @@ const bootIDCmd = "cat /proc/sys/kernel/random/boot_id"
 // (issue #3, lead directive 2026-09-26: A4/A5 need --restart
 // unless-stopped) is checked without a real docker host.
 type fakeContainerRunner struct {
-	mac, addr string
-	calls     []string
+	mac, addr, endpointID string
+	calls                 []string
 }
 
 func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error) {
@@ -27,6 +27,8 @@ func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error)
 		return f.mac, nil
 	case strings.Contains(cmd, "IPAddress"):
 		return f.addr, nil
+	case strings.Contains(cmd, "EndpointID"):
+		return f.endpointID, nil
 	default:
 		return "", nil
 	}
@@ -287,8 +289,8 @@ func TestInstallPluginCheckedSetsSettingTheRefDeclares(t *testing.T) {
 }
 
 func TestRunContainerPolicyAddsRestartFlagWhenGiven(t *testing.T) {
-	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100"}
-	mac, addr, err := runContainerPolicy(context.Background(), r, "net1", "box1", "unless-stopped")
+	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100", endpointID: "abc123"}
+	mac, addr, _, err := runContainerPolicy(context.Background(), r, ShapeBridge, "net1", "box1", "unless-stopped")
 	if err != nil {
 		t.Fatalf("runContainerPolicy failed: %v", err)
 	}
@@ -310,8 +312,8 @@ func TestRunContainerPolicyAddsRestartFlagWhenGiven(t *testing.T) {
 // container with no restart flag at all, matching Docker's own default
 // -- A1/A2/A3/A6/A7/A8 must not silently start setting one too.
 func TestRunContainerHasNoRestartFlag(t *testing.T) {
-	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100"}
-	if _, _, err := runContainer(context.Background(), r, "net1", "box1"); err != nil {
+	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100", endpointID: "abc123"}
+	if _, _, _, err := runContainer(context.Background(), r, ShapeBridge, "net1", "box1"); err != nil {
 		t.Fatalf("runContainer failed: %v", err)
 	}
 	var runCmd string
@@ -322,6 +324,42 @@ func TestRunContainerHasNoRestartFlag(t *testing.T) {
 	}
 	if strings.Contains(runCmd, "--restart") {
 		t.Fatalf("runContainer's docker run unexpectedly carried a restart flag: %q", runCmd)
+	}
+}
+
+// ipvlan slaves share the parent NIC's MAC (docs/parent-attached-modes.md),
+// so docker legitimately reports an empty MacAddress for them; that must
+// not fail inspectContainer under this one shape (issue #3, lead
+// directive 2026-09-26, item 3).
+func TestInspectContainerAllowsEmptyMACUnderIpvlan(t *testing.T) {
+	r := &fakeContainerRunner{mac: "", addr: "10.200.1.100", endpointID: "abc123"}
+	mac, addr, endpointID, err := inspectContainer(context.Background(), r, ShapeIpvlan, "box1")
+	if err != nil {
+		t.Fatalf("inspectContainer failed on an empty MAC under ipvlan: %v", err)
+	}
+	if mac != "" || addr != "10.200.1.100" || endpointID != "abc123" {
+		t.Fatalf("got mac=%q addr=%q endpointID=%q", mac, addr, endpointID)
+	}
+}
+
+// Under bridge (and macvlan) an empty MAC is not documented behaviour and
+// must still fail loudly, exactly as it did before ipvlan's carve-out was
+// added.
+func TestInspectContainerRejectsEmptyMACUnderBridge(t *testing.T) {
+	r := &fakeContainerRunner{mac: "", addr: "10.200.1.100", endpointID: "abc123"}
+	if _, _, _, err := inspectContainer(context.Background(), r, ShapeBridge, "box1"); err == nil {
+		t.Fatal("want an error when a bridge-shape container reports no MAC")
+	}
+}
+
+// The ipvlan client-id lookup (issue #3, lead directive 2026-09-26, item
+// 3) is built from the endpoint id, so a container with none reported
+// cannot be looked up at all -- inspectContainer must fail here rather
+// than hand an unusable empty string on to the lease lookup.
+func TestInspectContainerRejectsEmptyEndpointIDUnderIpvlan(t *testing.T) {
+	r := &fakeContainerRunner{mac: "", addr: "10.200.1.100", endpointID: ""}
+	if _, _, _, err := inspectContainer(context.Background(), r, ShapeIpvlan, "box1"); err == nil {
+		t.Fatal("want an error when an ipvlan container reports no endpoint id")
 	}
 }
 

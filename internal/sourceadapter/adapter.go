@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 )
 
 // Capability is a source's declared ability. A declared capability is a
@@ -24,11 +25,31 @@ const (
 )
 
 // Lease is one entry from a source's own table, normalized across the
-// three source shapes (JSON, dhcpd.leases, dnsmasq.leases).
+// three source shapes (JSON, dhcpd.leases, dnsmasq.leases). ClientID is
+// DHCP option 61, normalized to lowercase colon-hex across all three
+// (Kea's own "client-id" field, ISC's "uid", dnsmasq's fifth lease-line
+// field) -- empty when the row carries none. ipvlan slaves share the
+// parent NIC's MAC (docs/reference.md "DHCP identity"), so ClientID is
+// the only field that identifies one slave's lease from another's
+// (issue #3, lead directive 2026-09-26, item 3).
 type Lease struct {
 	MAC      string
 	Address  string
 	Hostname string
+	ClientID string
+}
+
+// hexColon renders raw bytes as lowercase colon-hex, the shape every
+// adapter normalizes its own client-id encoding into.
+func hexColon(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	parts := make([]string, len(b))
+	for i, v := range b {
+		parts[i] = fmt.Sprintf("%02x", v)
+	}
+	return strings.Join(parts, ":")
 }
 
 // Adapter is the interface issue #2 asks for. Every method reads or

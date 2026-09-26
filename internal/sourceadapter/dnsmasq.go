@@ -48,7 +48,14 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 		if _, err := net.ParseMAC(mac); err != nil {
 			return nil, fmt.Errorf("dnsmasq: lease line %d: invalid MAC %q: %w", i+1, mac, err)
 		}
-		leases = append(leases, Lease{MAC: mac, Address: ip, Hostname: host})
+		l := Lease{MAC: mac, Address: ip, Hostname: host}
+		// Field 5, the client-id (option 61), is dnsmasq's own
+		// colon-hex encoding, or "*" when the client sent none
+		// (issue #3, lead directive 2026-09-26, item 3).
+		if len(fields) >= 5 && fields[4] != "*" {
+			l.ClientID = strings.ToLower(fields[4])
+		}
+		leases = append(leases, l)
 	}
 	return leases, nil
 }

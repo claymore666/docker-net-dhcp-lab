@@ -53,19 +53,19 @@ func runA1(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA1)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA1, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 
 	snap := evidencePath(e, NameA1, "leases-after")
-	lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, snap)
+	lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
 	if err != nil {
 		return fail(NameA1, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	ev := map[string]string{"leases-after": snap}
 	if !ok {
-		return fail(NameA1, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr), ev, e.GitSHA)
+		return fail(NameA1, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
 	corroborate(ctx, e, mac, ev, NameA1, "capture-check")
 	return pass(NameA1, e.Cell, e.Shape,
@@ -75,23 +75,27 @@ func runA1(ctx context.Context, e Env) Verdict {
 
 // runA2 -- container restart: the same container, stopped and started
 // again by Docker itself, must keep the same address in the source's
-// table. A changed address is a FAIL, never tuned away.
+// table. A changed address is a FAIL, never tuned away. Re-inspects the
+// container after the restart rather than reusing the pre-restart mac
+// and endpoint id: ipvlan mints a fresh endpoint id (and so a fresh
+// client-id) on every restart (docs/reference.md "DHCP identity", #219),
+// which the "after" lookup must use, not the "before" one.
 func runA2(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA2)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA2, "leases-before")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, beforeSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	evBefore := map[string]string{"leases-before": beforeSnap}
 	if !ok {
-		return fail(NameA2, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr), evBefore, e.GitSHA)
+		return fail(NameA2, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
 	}
 
 	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker restart %s", name)); err != nil {
@@ -100,19 +104,19 @@ func runA2(ctx context.Context, e Env) Verdict {
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA2, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
-	afterAddr, err := inspectField(ctx, e.Host, name, "IPAddress")
+	_, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("inspect after restart: %v", err), evBefore, e.GitSHA)
 	}
 
 	afterSnap := evidencePath(e, NameA2, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterEndpointID, afterSnap)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after restart: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA2, e.Cell, e.Shape, "after restart: "+leaseFailReason(e.Shape, mac, afterAddr), ev, e.GitSHA)
+		return fail(NameA2, e.Cell, e.Shape, "after restart: "+leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID), ev, e.GitSHA)
 	}
 	if afterAddr != addr {
 		return fail(NameA2, e.Cell, e.Shape,
@@ -133,33 +137,33 @@ func runA3(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA3)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac1, addr1, err := runContainer(ctx, e.Host, e.Network, name)
+	mac1, addr1, endpointID1, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("container did not start (down): %v", err), nil, e.GitSHA)
 	}
 	downSnap := evidencePath(e, NameA3, "leases-down")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac1, addr1, downSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac1, addr1, endpointID1, downSnap)
 	if err != nil {
 		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	evDown := map[string]string{"leases-down": downSnap}
 	if !ok {
-		return fail(NameA3, e.Cell, e.Shape, "before down: "+leaseFailReason(e.Shape, mac1, addr1), evDown, e.GitSHA)
+		return fail(NameA3, e.Cell, e.Shape, "before down: "+leaseFailReason(e.Shape, mac1, addr1, endpointID1), evDown, e.GitSHA)
 	}
 	removeContainer(ctx, e.Host, name)
 
-	mac2, addr2, err := runContainer(ctx, e.Host, e.Network, name)
+	mac2, addr2, endpointID2, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("container did not start (up): %v", err), evDown, e.GitSHA)
 	}
 	upSnap := evidencePath(e, NameA3, "leases-up")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac2, addr2, upSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac2, addr2, endpointID2, upSnap)
 	if err != nil {
 		return fail(NameA3, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after up: %v", err), evDown, e.GitSHA)
 	}
 	ev := map[string]string{"leases-down": downSnap, "leases-up": upSnap}
 	if !ok {
-		return fail(NameA3, e.Cell, e.Shape, "after up: "+leaseFailReason(e.Shape, mac2, addr2), ev, e.GitSHA)
+		return fail(NameA3, e.Cell, e.Shape, "after up: "+leaseFailReason(e.Shape, mac2, addr2, endpointID2), ev, e.GitSHA)
 	}
 	reuse := "reused the same address"
 	if addr2 != addr1 {
@@ -183,18 +187,18 @@ func runA4(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA4)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainerPolicy(ctx, e.Host, e.Network, name, "unless-stopped")
+	mac, addr, endpointID, err := runContainerPolicy(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped")
 	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA4, "leases-before")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, beforeSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	evBefore := map[string]string{"leases-before": beforeSnap}
 	if !ok {
-		return fail(NameA4, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr), evBefore, e.GitSHA)
+		return fail(NameA4, e.Cell, e.Shape, "before restart: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
 	}
 
 	if _, err := e.Host.Run(ctx, "sudo systemctl restart docker"); err != nil {
@@ -206,18 +210,18 @@ func runA4(ctx context.Context, e Env) Verdict {
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA4, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
-	afterAddr, err := inspectField(ctx, e.Host, name, "IPAddress")
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
 	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("inspect after daemon restart: %v", err), evBefore, e.GitSHA)
 	}
 	afterSnap := evidencePath(e, NameA4, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
 	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after daemon restart: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA4, e.Cell, e.Shape, "after daemon restart: "+leaseFailReason(e.Shape, mac, afterAddr), ev, e.GitSHA)
+		return fail(NameA4, e.Cell, e.Shape, "after daemon restart: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
 	}
 	leaseNote := fmt.Sprintf("kept address %s", addr)
 	if afterAddr != addr {
@@ -225,7 +229,7 @@ func runA4(ctx context.Context, e Env) Verdict {
 	}
 	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
 		return fail(NameA4, e.Cell, e.Shape,
-			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", mac, afterAddr, err), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", afterMac, afterAddr, err), ev, e.GitSHA)
 	}
 	return pass(NameA4, e.Cell, e.Shape,
 		fmt.Sprintf("dockerd restarted, container running, %s, confirmed in the source's table both times, reachable from the source", leaseNote),
@@ -246,18 +250,18 @@ func runA5(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA5)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainerPolicy(ctx, e.Host, e.Network, name, "unless-stopped")
+	mac, addr, endpointID, err := runContainerPolicy(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped")
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA5, "leases-before")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, beforeSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	evBefore := map[string]string{"leases-before": beforeSnap}
 	if !ok {
-		return fail(NameA5, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr), evBefore, e.GitSHA)
+		return fail(NameA5, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
 	}
 
 	beforeBootID, err := bootID(ctx, e.Host)
@@ -279,13 +283,13 @@ func runA5(ctx context.Context, e Env) Verdict {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("inspect after reboot: %v", err), evBefore, e.GitSHA)
 	}
 	afterSnap := evidencePath(e, NameA5, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, endpointID, afterSnap)
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, mac, afterAddr), ev, e.GitSHA)
+		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, mac, afterAddr, endpointID), ev, e.GitSHA)
 	}
 	leaseNote := fmt.Sprintf("kept address %s", addr)
 	if afterAddr != addr {
@@ -327,18 +331,18 @@ func runA6(ctx context.Context, e Env) Verdict {
 		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("install previous tag %s: %v", prev, err), nil, e.GitSHA)
 	}
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("container did not start under %s: %v", prev, err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA6, "leases-before-upgrade")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, beforeSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table under %s: %v", prev, err), nil, e.GitSHA)
 	}
 	evBefore := map[string]string{"leases-before-upgrade": beforeSnap}
 	if !ok {
-		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("under %s: %s", prev, leaseFailReason(e.Shape, mac, addr)), evBefore, e.GitSHA)
+		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("under %s: %s", prev, leaseFailReason(e.Shape, mac, addr, endpointID)), evBefore, e.GitSHA)
 	}
 
 	if _, err := e.Host.Run(ctx, "sudo docker plugin disable "+pluginAlias); err != nil {
@@ -361,13 +365,13 @@ func runA6(ctx context.Context, e Env) Verdict {
 	}
 
 	afterSnap := evidencePath(e, NameA6, "leases-after-upgrade")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, afterSnap)
 	if err != nil {
 		return fail(NameA6, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after upgrade: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before-upgrade": beforeSnap, "leases-after-upgrade": afterSnap}
 	if !ok {
-		return fail(NameA6, e.Cell, e.Shape, "after upgrade: "+leaseFailReason(e.Shape, mac, addr), ev, e.GitSHA)
+		return fail(NameA6, e.Cell, e.Shape, "after upgrade: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
 	return pass(NameA6, e.Cell, e.Shape,
 		fmt.Sprintf("upgraded %s -> %s, pre-existing container's lease %s confirmed after", prev, e.PluginTag, addr),
@@ -383,18 +387,18 @@ func runA7(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA7)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
 		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
 	beforeSnap := evidencePath(e, NameA7, "leases-before")
-	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, beforeSnap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
 	if err != nil {
 		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	evBefore := map[string]string{"leases-before": beforeSnap}
 	if !ok {
-		return fail(NameA7, e.Cell, e.Shape, "before kill: "+leaseFailReason(e.Shape, mac, addr), evBefore, e.GitSHA)
+		return fail(NameA7, e.Cell, e.Shape, "before kill: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
 	}
 
 	pid, err := pluginPID(ctx, e.Host)
@@ -411,13 +415,13 @@ func runA7(ctx context.Context, e Env) Verdict {
 	}
 
 	afterSnap := evidencePath(e, NameA7, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, afterSnap)
 	if err != nil {
 		return fail(NameA7, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after kill: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA7, e.Cell, e.Shape, "after kill: "+leaseFailReason(e.Shape, mac, addr), ev, e.GitSHA)
+		return fail(NameA7, e.Cell, e.Shape, "after kill: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
 	return pass(NameA7, e.Cell, e.Shape,
 		fmt.Sprintf("plugin process killed, recovered by %s, pre-existing lease %s still confirmed", recoveredBy, addr),
@@ -431,7 +435,7 @@ func runA7(ctx context.Context, e Env) Verdict {
 func runA8(ctx context.Context, e Env) Verdict {
 	const n = 10
 	type created struct {
-		name, mac, addr string
+		name, mac, addr, endpointID string
 	}
 	var containers []created
 	defer func() {
@@ -442,19 +446,19 @@ func runA8(ctx context.Context, e Env) Verdict {
 
 	for i := 0; i < n; i++ {
 		name := containerName(e, NameA8) + "-" + strconv.Itoa(i)
-		mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+		mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 		if err != nil {
 			return fail(NameA8, e.Cell, e.Shape,
 				fmt.Sprintf("container %d/%d (%s) did not start: %v", i+1, n, name, err), nil, e.GitSHA)
 		}
-		containers = append(containers, created{name, mac, addr})
+		containers = append(containers, created{name, mac, addr, endpointID})
 	}
 
 	snap := evidencePath(e, NameA8, "leases-after")
 	confirmed := 0
 	seen := map[string]bool{}
 	for _, c := range containers {
-		lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, c.mac, c.addr, snap)
+		lease, _, ok, err := lookupLease(ctx, e.Source, e.Shape, c.mac, c.addr, c.endpointID, snap)
 		if err != nil {
 			return fail(NameA8, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 		}

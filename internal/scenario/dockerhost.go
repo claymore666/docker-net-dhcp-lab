@@ -12,12 +12,13 @@ import (
 )
 
 // runContainer starts one throwaway container on net and returns the
-// MAC/address the plugin reported to docker: an identifier to look up
-// in the source's own table, never evidence on its own (same discipline
-// scripts/run-source-lease-test.sh already established for issue #2).
-// It carries no restart policy, matching Docker's own default.
-func runContainer(ctx context.Context, r sourceadapter.Runner, net, name string) (mac, addr string, err error) {
-	return runContainerPolicy(ctx, r, net, name, "")
+// MAC/address/endpoint id the plugin reported to docker: an identifier
+// to look up in the source's own table, never evidence on its own (same
+// discipline scripts/run-source-lease-test.sh already established for
+// issue #2). It carries no restart policy, matching Docker's own
+// default.
+func runContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name string) (mac, addr, endpointID string, err error) {
+	return runContainerPolicy(ctx, r, shape, net, name, "")
 }
 
 // runContainerPolicy is runContainer with an explicit Docker restart
@@ -27,25 +28,41 @@ func runContainer(ctx context.Context, r sourceadapter.Runner, net, name string)
 // own documented default, not a plugin defect, and a scenario that leaves
 // it unset is testing something no real user configured (issue #3, lead
 // directive 2026-09-26).
-func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, net, name, restart string) (mac, addr string, err error) {
+func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, restart string) (mac, addr, endpointID string, err error) {
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
 	restartFlag := ""
 	if restart != "" {
 		restartFlag = fmt.Sprintf(" --restart %s", restart)
 	}
 	if _, err = r.Run(ctx, fmt.Sprintf("sudo docker run -d --name %s --network %s%s alpine:3.20 sleep 600", name, net, restartFlag)); err != nil {
-		return "", "", fmt.Errorf("docker run: %w", err)
+		return "", "", "", fmt.Errorf("docker run: %w", err)
 	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
+// inspectContainer reads back what docker actually recorded for the
+// named container and fails on anything a verdict cannot be built from.
+// ipvlan slaves legitimately report an empty MAC -- they share the
+// parent NIC's (docs/parent-attached-modes.md) -- so only shape says
+// whether an empty MAC is fatal; an empty address is fatal under every
+// shape (issue #3, lead directive 2026-09-26, item 3).
+func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, name string) (mac, addr, endpointID string, err error) {
 	if mac, err = inspectField(ctx, r, name, "MacAddress"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	if addr, err = inspectField(ctx, r, name, "IPAddress"); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	if mac == "" || addr == "" {
-		return "", "", fmt.Errorf("container %s has no mac/address reported", name)
+	if endpointID, err = inspectField(ctx, r, name, "EndpointID"); err != nil {
+		return "", "", "", err
 	}
-	return mac, addr, nil
+	if addr == "" || (mac == "" && shape != ShapeIpvlan) {
+		return "", "", "", fmt.Errorf("container %s has no mac/address reported", name)
+	}
+	if shape == ShapeIpvlan && endpointID == "" {
+		return "", "", "", fmt.Errorf("container %s has no endpoint id reported, needed for its ipvlan client-id", name)
+	}
+	return mac, addr, endpointID, nil
 }
 
 func inspectField(ctx context.Context, r sourceadapter.Runner, name, field string) (string, error) {

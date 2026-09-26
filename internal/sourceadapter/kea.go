@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // KeaAdapter reads leases through the Kea control agent's own HTTP API,
@@ -35,6 +36,7 @@ type keaResponse struct {
 			IPAddress string `json:"ip-address"`
 			HWAddress string `json:"hw-address"`
 			Hostname  string `json:"hostname"`
+			ClientID  string `json:"client-id"`
 		} `json:"leases"`
 	} `json:"arguments"`
 }
@@ -65,7 +67,10 @@ func parseKeaLeases(raw string) ([]Lease, error) {
 	}
 	leases := make([]Lease, 0, len(resp[0].Arguments.Leases))
 	for _, l := range resp[0].Arguments.Leases {
-		leases = append(leases, Lease{MAC: l.HWAddress, Address: l.IPAddress, Hostname: l.Hostname})
+		leases = append(leases, Lease{
+			MAC: l.HWAddress, Address: l.IPAddress, Hostname: l.Hostname,
+			ClientID: strings.ToLower(l.ClientID),
+		})
 	}
 	return leases, nil
 }

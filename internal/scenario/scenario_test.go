@@ -354,23 +354,53 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestLookupLeaseUsesAddressOnlyMatchForIpvlan(t *testing.T) {
+// ipvlan slaves share the parent NIC's MAC, so an address-only match
+// (the old rule) could attribute one container's lease to another when
+// both held the same address at different times within one snapshot's
+// staleness window. The lookup now matches by DHCP client-id (option 61)
+// instead: type byte 0x00 plus the first 8 bytes of the endpoint id
+// (issue #3, lead directive 2026-09-26, item 3). This endpoint id and
+// client-id pairing is the one the live Kea measurement in
+// ipvlanClientID's own doc comment recorded.
+func TestLookupLeaseUsesClientIDMatchForIpvlan(t *testing.T) {
 	dir := t.TempDir()
 	sharedMAC := "aa:bb:cc:dd:ee:ff"
+	endpointID := "97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a"
+	wantClientID, err := ipvlanClientID(endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	a := &fakeAdapter{leases: []sourceadapter.Lease{
-		{MAC: sharedMAC, Address: "10.200.1.100", Hostname: "slave1"},
-		{MAC: sharedMAC, Address: "10.200.1.101", Hostname: "slave2"},
+		{MAC: sharedMAC, Address: "10.200.1.100", Hostname: "slave1", ClientID: "00:aa:bb:cc:dd:ee:ff:00:11"},
+		{MAC: sharedMAC, Address: "10.200.1.101", Hostname: "slave2", ClientID: wantClientID},
 	}}
 	snap := filepath.Join(dir, "snap.txt")
-	lease, _, ok, err := lookupLease(context.Background(), a, ShapeIpvlan, sharedMAC, "10.200.1.101", snap)
+	// The address argument deliberately points at slave1's row: only a
+	// pure client-id match, ignoring address, can still resolve slave2.
+	lease, _, ok, err := lookupLease(context.Background(), a, ShapeIpvlan, sharedMAC, "10.200.1.100", endpointID, snap)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok || lease.Hostname != "slave2" {
-		t.Fatalf("want slave2 via address-only match, got ok=%v lease=%+v", ok, lease)
+		t.Fatalf("want slave2 via client-id match (address arg deliberately points at slave1's row), got ok=%v lease=%+v", ok, lease)
 	}
 	if fi, statErr := os.Stat(snap); statErr != nil || fi.Size() == 0 {
 		t.Fatalf("lease snapshot was not written or is empty: %v", statErr)
+	}
+}
+
+// An endpoint id too short to hold the 8 bytes the client-id needs must
+// be reported by name, not silently mis-derive a shorter or wrong
+// client-id.
+func TestLookupLeaseReportsShortEndpointIDForIpvlan(t *testing.T) {
+	dir := t.TempDir()
+	a := &fakeAdapter{leases: []sourceadapter.Lease{
+		{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.200.1.100", ClientID: "00:11"},
+	}}
+	snap := filepath.Join(dir, "snap.txt")
+	_, _, _, err := lookupLease(context.Background(), a, ShapeIpvlan, "aa:bb:cc:dd:ee:ff", "10.200.1.100", "abcd", snap)
+	if err == nil {
+		t.Fatal("a too-short endpoint id was silently accepted instead of reported")
 	}
 }
 
@@ -378,7 +408,7 @@ func TestLookupLeasePropagatesAdapterError(t *testing.T) {
 	dir := t.TempDir()
 	a := &fakeAdapter{err: context.DeadlineExceeded}
 	snap := filepath.Join(dir, "snap.txt")
-	if _, _, _, err := lookupLease(context.Background(), a, ShapeBridge, "aa:bb:cc:dd:ee:ff", "10.200.1.100", snap); err == nil {
+	if _, _, _, err := lookupLease(context.Background(), a, ShapeBridge, "aa:bb:cc:dd:ee:ff", "10.200.1.100", "", snap); err == nil {
 		t.Fatal("an adapter error was silently swallowed instead of propagated")
 	}
 }
