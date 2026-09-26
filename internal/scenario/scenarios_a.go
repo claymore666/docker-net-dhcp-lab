@@ -454,7 +454,7 @@ func runA5b(ctx context.Context, e Env) Verdict {
 // and confirm the pre-existing container's lease survived. The install
 // only sets DHCP_LOG_LEVEL if the previous tag actually declares that
 // setting -- an older version may not have it, and installing with an
-// unknown setting fails outright (same directive). N/A when
+// unknown setting fails outright. N/A when
 // e.PreviousPluginTag is empty: a documented, narrow limitation, never a
 // silent guess at an unrelated tag.
 func runA6(ctx context.Context, e Env) Verdict {

@@ -111,16 +111,13 @@ func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content 
 // lab-only fix (renumbering the port unit to win the race) was
 // rejected: that only made the lab win a race a real user on the same
 // stack would lose, so it stopped testing what a user actually does.
-// This is a docs finding, recorded in the plugin repo's handover
-// (`.claude/handover/lab-bridge-netplan-docs-finding.md`), not
-// reproduced here. netplan itself has no such race: it merges each
-// interface's config across every matching file instead of taking the
-// first, so this recipe applies cleanly over cloud-init's own file for
-// eth1 with no renumbering trick needed.
+// This race is a gap in the plugin's bridge-mode docs, not reproduced
+// here. netplan itself has no such race: it merges each interface's
+// config across every matching file instead of taking the first, so
+// this recipe applies cleanly over cloud-init's own file for eth1
+// with no renumbering trick needed.
 //
-// Docs finding recorded rather than worked around (the directive: "if
-// the docs are not enough on their own, that is a docs finding: record
-// it, and do not add anything the docs do not say"): the docs' own
+// Docs finding recorded rather than worked around: the docs' own
 // netplan recipe sets dhcp4: true on the bridge because the documented
 // use case replaces the host's own LAN uplink with the bridge. This
 // lab's segment bridge carries only container traffic -- SegmentNIC's
