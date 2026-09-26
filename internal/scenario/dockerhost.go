@@ -65,6 +65,26 @@ func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, 
 	return mac, addr, endpointID, nil
 }
 
+// runContainerFixedMAC is runContainer with an explicit --mac-address,
+// for A5b: a container whose mac_address is fixed must report the same
+// MAC and address after a host reboot (issue #3, lead directive
+// 2026-09-26, item 2). Not meaningful under ipvlan, where
+// `--mac-address` fails outright with `invalid MAC address`
+// (docs/parent-attached-modes.md) -- callers guard that with an NA
+// before ever reaching here.
+func runContainerFixedMAC(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, restart, macAddr string) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	restartFlag := ""
+	if restart != "" {
+		restartFlag = fmt.Sprintf(" --restart %s", restart)
+	}
+	cmd := fmt.Sprintf("sudo docker run -d --name %s --network %s --mac-address %s%s alpine:3.20 sleep 600", name, net, macAddr, restartFlag)
+	if _, err = r.Run(ctx, cmd); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
 func inspectField(ctx context.Context, r sourceadapter.Runner, name, field string) (string, error) {
 	out, err := r.Run(ctx, fmt.Sprintf(
 		`sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.%s}}{{end}}' %s`, field, name))

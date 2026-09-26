@@ -68,9 +68,14 @@ const (
 	NameA3 = "A3-compose-down-up"
 	NameA4 = "A4-daemon-restart"
 	NameA5 = "A5-host-reboot"
-	NameA6 = "A6-plugin-upgrade"
-	NameA7 = "A7-plugin-killed"
-	NameA8 = "A8-fleet-burst"
+	// NameA5b tests the documented promise A5 itself cannot (a plain
+	// container may legitimately get a new mac/address on a reboot,
+	// issue #3, lead directive 2026-09-26, item 2): a container with a
+	// fixed mac_address must keep both across a host reboot.
+	NameA5b = "A5b-host-reboot-fixed-mac"
+	NameA6  = "A6-plugin-upgrade"
+	NameA7  = "A7-plugin-killed"
+	NameA8  = "A8-fleet-burst"
 )
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -114,6 +119,7 @@ var Catalog = []Scenario{
 	{Name: NameA3, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA3},
 	{Name: NameA4, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA4},
 	{Name: NameA5, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA5},
+	{Name: NameA5b, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA5b},
 	{Name: NameA6, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA6},
 	{Name: NameA7, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA7},
 	{Name: NameA8, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA8},

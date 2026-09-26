@@ -3,11 +3,24 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
+
+// fixedMACFor derives a deterministic, valid locally-administered
+// unicast MAC for A5b, distinct per cell x shape so parallel cells never
+// collide on the same segment (issue #3, lead directive 2026-09-26,
+// item 2).
+func fixedMACFor(cell string, shape Shape) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
+	sum := h.Sum32()
+	return fmt.Sprintf("02:42:%02x:%02x:%02x:%02x", byte(sum>>24), byte(sum>>16), byte(sum>>8), byte(sum))
+}
 
 // containerName is deterministic per cell x shape x scenario: a re-run
 // finds and removes exactly the container a previous run left, the same
@@ -239,13 +252,23 @@ func runA4(ctx context.Context, e Env) Verdict {
 // runA5 -- host reboot: the whole docker host VM reboots. Bounded waits
 // for the boot id to change and settle, then dockerd, then the
 // container, then PASS needs all of: Running again, the source's table
-// showing the same MAC with a renewed or new lease, and the source able
-// to reach the container. Same --restart unless-stopped reasoning as
-// A4: with no restart policy the container is never supposed to survive
-// a host reboot, by Docker's own design (issue #3, lead directive
-// 2026-09-26). The 30s Running-wait bound is unchanged; if it proves too
-// short once a real restart policy is in play, that is a genuine finding
-// to report, never a reason to widen it.
+// showing a confirmed lease, and the source able to reach the container.
+// Same --restart unless-stopped reasoning as A4: with no restart policy
+// the container is never supposed to survive a host reboot, by Docker's
+// own design (issue #3, lead directive 2026-09-26).
+//
+// Re-reads the container's current mac/address/endpoint id after the
+// reboot rather than reusing the pre-reboot ones (issue #3, lead
+// directive 2026-09-26, item 2): a host reboot is out of scope for the
+// plugin's own restart-stability identity (docs/reference.md "DHCP
+// identity" only names `docker restart`/`systemctl restart docker`,
+// never a full host reboot), so the plugin is free to hand this
+// container a new mac and/or address on this boot, and that is
+// documented behaviour, not a defect -- looking the lease up under the
+// stale pre-reboot mac after a change would silently miss the very
+// lease that exists. A mac or address change is reported in the PASS
+// reason, never turned into a FAIL by itself; A5b (below) is the
+// scenario that pins a mac_address and asserts it does NOT change.
 func runA5(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA5)
 	defer removeContainer(ctx, e.Host, name)
@@ -278,29 +301,108 @@ func runA5(ctx context.Context, e Env) Verdict {
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
-	afterAddr, err := inspectField(ctx, e.Host, name, "IPAddress")
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("inspect after reboot: %v", err), evBefore, e.GitSHA)
 	}
 	afterSnap := evidencePath(e, NameA5, "leases-after")
-	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, endpointID, afterSnap)
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
 	}
 	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
 	if !ok {
-		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, mac, afterAddr, endpointID), ev, e.GitSHA)
+		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
 	}
-	leaseNote := fmt.Sprintf("kept address %s", addr)
+
+	var notes []string
+	if afterMac != mac {
+		notes = append(notes, fmt.Sprintf("mac changed (%s -> %s)", mac, afterMac))
+	} else {
+		notes = append(notes, fmt.Sprintf("kept mac %s", mac))
+	}
 	if afterAddr != addr {
-		leaseNote = fmt.Sprintf("got a new address (%s -> %s)", addr, afterAddr)
+		notes = append(notes, fmt.Sprintf("address changed (%s -> %s)", addr, afterAddr))
+	} else {
+		notes = append(notes, fmt.Sprintf("kept address %s", addr))
 	}
 	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
 		return fail(NameA5, e.Cell, e.Shape,
-			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", mac, afterAddr, err), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", afterMac, afterAddr, err), ev, e.GitSHA)
 	}
 	return pass(NameA5, e.Cell, e.Shape,
-		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source", leaseNote),
+		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source", strings.Join(notes, ", ")),
+		ev, e.GitSHA)
+}
+
+// runA5b -- host reboot, fixed mac_address: what the docs promise for
+// this exact case (issue #3, lead directive 2026-09-26, item 2) -- a
+// container whose mac_address is fixed must keep the SAME mac and the
+// SAME address after a host reboot, unlike A5's plain container, which
+// may legitimately get new ones. N/A under ipvlan, where every
+// container shares the parent NIC's mac regardless of what
+// --mac-address asks for (docs/reference.md "Restart stability": ipvlan
+// has no stable per-container MAC at all).
+func runA5b(ctx context.Context, e Env) Verdict {
+	if e.Shape == ShapeIpvlan {
+		return na(NameA5b, e.Cell, e.Shape, "ipvlan containers share the parent NIC's MAC; a fixed mac_address is not meaningful here", e.GitSHA)
+	}
+
+	name := containerName(e, NameA5b)
+	defer removeContainer(ctx, e.Host, name)
+	fixedMAC := fixedMACFor(e.Cell, e.Shape)
+
+	mac, addr, endpointID, err := runContainerFixedMAC(ctx, e.Host, e.Shape, e.Network, name, "unless-stopped", fixedMAC)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	if mac != fixedMAC {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("container reported mac %s, want the fixed mac %s", mac, fixedMAC), nil, e.GitSHA)
+	}
+	beforeSnap := evidencePath(e, NameA5b, "leases-before")
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, beforeSnap)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	evBefore := map[string]string{"leases-before": beforeSnap}
+	if !ok {
+		return fail(NameA5b, e.Cell, e.Shape, "before reboot: "+leaseFailReason(e.Shape, mac, addr, endpointID), evBefore, e.GitSHA)
+	}
+
+	beforeBootID, err := bootID(ctx, e.Host)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read boot id before reboot: %v", err), evBefore, e.GitSHA)
+	}
+
+	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
+	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+	}
+
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("inspect after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	afterSnap := evidencePath(e, NameA5b, "leases-after")
+	_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, afterMac, afterAddr, afterEndpointID, afterSnap)
+	if err != nil {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table after reboot: %v", err), evBefore, e.GitSHA)
+	}
+	ev := map[string]string{"leases-before": beforeSnap, "leases-after": afterSnap}
+	if !ok {
+		return fail(NameA5b, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, afterMac, afterAddr, afterEndpointID), ev, e.GitSHA)
+	}
+	if afterMac != fixedMAC {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("fixed mac did not survive the reboot: %s -> %s", fixedMAC, afterMac), ev, e.GitSHA)
+	}
+	if afterAddr != addr {
+		return fail(NameA5b, e.Cell, e.Shape, fmt.Sprintf("address changed across the reboot despite a fixed mac_address: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+	}
+	return pass(NameA5b, e.Cell, e.Shape,
+		fmt.Sprintf("host rebooted, fixed mac %s kept address %s, confirmed in the source's table both times", fixedMAC, addr),
 		ev, e.GitSHA)
 }
 

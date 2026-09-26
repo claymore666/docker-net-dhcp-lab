@@ -363,6 +363,28 @@ func TestInspectContainerRejectsEmptyEndpointIDUnderIpvlan(t *testing.T) {
 	}
 }
 
+// A5b's fixed-MAC container carries --mac-address through to docker run,
+// alongside the restart policy A5b also needs.
+func TestRunContainerFixedMACCarriesMacAddressFlag(t *testing.T) {
+	r := &fakeContainerRunner{mac: "02:42:aa:bb:cc:dd", addr: "10.200.1.100", endpointID: "abc123"}
+	mac, addr, _, err := runContainerFixedMAC(context.Background(), r, ShapeBridge, "net1", "box1", "unless-stopped", "02:42:aa:bb:cc:dd")
+	if err != nil {
+		t.Fatalf("runContainerFixedMAC failed: %v", err)
+	}
+	if mac != "02:42:aa:bb:cc:dd" || addr != "10.200.1.100" {
+		t.Fatalf("got mac=%q addr=%q", mac, addr)
+	}
+	var runCmd string
+	for _, c := range r.calls {
+		if strings.Contains(c, "docker run") {
+			runCmd = c
+		}
+	}
+	if !strings.Contains(runCmd, "--mac-address 02:42:aa:bb:cc:dd") || !strings.Contains(runCmd, "--restart unless-stopped") {
+		t.Fatalf("docker run did not carry both flags: %q", runCmd)
+	}
+}
+
 // fakeBootRunner answers bootIDCmd with a scripted sequence of ids (one
 // entry consumed per call, the last entry repeats once exhausted) and
 // docker info with a canned error. It exists because
