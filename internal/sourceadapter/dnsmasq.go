@@ -78,6 +78,10 @@ func (a *DnsmasqAdapter) Restart(ctx context.Context) error { return a.systemctl
 func (a *DnsmasqAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
 func (a *DnsmasqAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
 
+func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
+	return reachable(ctx, a.Runner, addr)
+}
+
 func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" dnsmasq"); err != nil {
 		return fmt.Errorf("dnsmasq: systemctl %s: %w", action, err)

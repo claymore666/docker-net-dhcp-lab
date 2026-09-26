@@ -14,9 +14,10 @@ import (
 // internal/sourceadapter/adapter_test.go already uses for its fakeRunner:
 // every scenario-package test below runs with no real source VM at all.
 type fakeAdapter struct {
-	caps   []sourceadapter.Capability
-	leases []sourceadapter.Lease
-	err    error
+	caps     []sourceadapter.Capability
+	leases   []sourceadapter.Lease
+	err      error
+	reachErr error
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -27,6 +28,7 @@ func (f *fakeAdapter) ReserveMAC(_ context.Context, _, _ string) error { return 
 func (f *fakeAdapter) Restart(_ context.Context) error                 { return nil }
 func (f *fakeAdapter) Stop(_ context.Context) error                    { return nil }
 func (f *fakeAdapter) Start(_ context.Context) error                   { return nil }
+func (f *fakeAdapter) Reachable(_ context.Context, _ string) error     { return f.reachErr }
 
 func TestNetworkNameAndBridgeNameAreDeterministic(t *testing.T) {
 	n1 := NetworkName("dnsmasq", ShapeBridge)

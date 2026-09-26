@@ -171,13 +171,19 @@ func runA3(ctx context.Context, e Env) Verdict {
 }
 
 // runA4 -- daemon restart: dockerd on the docker host is restarted while
-// the container is up; the container's address must still be confirmed
-// in the source's table afterwards.
+// the container is up; PASS needs all of: the container Running again,
+// the source's own table showing the same MAC with a renewed or new
+// lease, and the source able to reach the container afterwards. The
+// container runs with --restart unless-stopped: with no restart policy
+// Docker never brings a container back after dockerd restarts or the
+// host reboots, by design, so a scenario testing that case would be
+// testing a container no real user would run this way, not the plugin
+// (issue #3, lead directive 2026-09-26).
 func runA4(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA4)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, err := runContainerPolicy(ctx, e.Host, e.Network, name, "unless-stopped")
 	if err != nil {
 		return fail(NameA4, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
@@ -213,23 +219,34 @@ func runA4(ctx context.Context, e Env) Verdict {
 	if !ok {
 		return fail(NameA4, e.Cell, e.Shape, "after daemon restart: "+leaseFailReason(e.Shape, mac, afterAddr), ev, e.GitSHA)
 	}
+	leaseNote := fmt.Sprintf("kept address %s", addr)
 	if afterAddr != addr {
+		leaseNote = fmt.Sprintf("got a new address (%s -> %s)", addr, afterAddr)
+	}
+	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
 		return fail(NameA4, e.Cell, e.Shape,
-			fmt.Sprintf("address changed across daemon restart: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", mac, afterAddr, err), ev, e.GitSHA)
 	}
 	return pass(NameA4, e.Cell, e.Shape,
-		fmt.Sprintf("dockerd restarted, container kept address %s, confirmed in the source's table both times", addr),
+		fmt.Sprintf("dockerd restarted, container running, %s, confirmed in the source's table both times, reachable from the source", leaseNote),
 		ev, e.GitSHA)
 }
 
 // runA5 -- host reboot: the whole docker host VM reboots. Bounded waits
-// for SSH, then dockerd, then the container, then re-confirms the
-// address in the source's table.
+// for the boot id to change and settle, then dockerd, then the
+// container, then PASS needs all of: Running again, the source's table
+// showing the same MAC with a renewed or new lease, and the source able
+// to reach the container. Same --restart unless-stopped reasoning as
+// A4: with no restart policy the container is never supposed to survive
+// a host reboot, by Docker's own design (issue #3, lead directive
+// 2026-09-26). The 30s Running-wait bound is unchanged; if it proves too
+// short once a real restart policy is in play, that is a genuine finding
+// to report, never a reason to widen it.
 func runA5(ctx context.Context, e Env) Verdict {
 	name := containerName(e, NameA5)
 	defer removeContainer(ctx, e.Host, name)
 
-	mac, addr, err := runContainer(ctx, e.Host, e.Network, name)
+	mac, addr, err := runContainerPolicy(ctx, e.Host, e.Network, name, "unless-stopped")
 	if err != nil {
 		return fail(NameA5, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
 	}
@@ -270,12 +287,16 @@ func runA5(ctx context.Context, e Env) Verdict {
 	if !ok {
 		return fail(NameA5, e.Cell, e.Shape, "after reboot: "+leaseFailReason(e.Shape, mac, afterAddr), ev, e.GitSHA)
 	}
+	leaseNote := fmt.Sprintf("kept address %s", addr)
 	if afterAddr != addr {
+		leaseNote = fmt.Sprintf("got a new address (%s -> %s)", addr, afterAddr)
+	}
+	if err := e.Source.Reachable(ctx, afterAddr); err != nil {
 		return fail(NameA5, e.Cell, e.Shape,
-			fmt.Sprintf("address changed across host reboot: %s -> %s", addr, afterAddr), ev, e.GitSHA)
+			fmt.Sprintf("container running and mac %s has a lease for %s, but the source could not reach it: %v", mac, afterAddr, err), ev, e.GitSHA)
 	}
 	return pass(NameA5, e.Cell, e.Shape,
-		fmt.Sprintf("host rebooted, container kept address %s, confirmed in the source's table both times", addr),
+		fmt.Sprintf("host rebooted, container running, %s, confirmed in the source's table both times, reachable from the source", leaseNote),
 		ev, e.GitSHA)
 }
 

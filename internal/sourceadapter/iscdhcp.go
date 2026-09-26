@@ -99,6 +99,10 @@ func (a *ISCDHCPAdapter) Restart(ctx context.Context) error { return a.systemctl
 func (a *ISCDHCPAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
 func (a *ISCDHCPAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
 
+func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
+	return reachable(ctx, a.Runner, addr)
+}
+
 func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" isc-dhcp-server"); err != nil {
 		return fmt.Errorf("isc-dhcp: systemctl %s: %w", action, err)

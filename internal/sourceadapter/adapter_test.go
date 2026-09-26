@@ -87,6 +87,52 @@ func TestReserveMACSendsNormalizedValues(t *testing.T) {
 	}
 }
 
+// Reachable's addr round-trips through the same validateAddr guard as
+// ReserveMAC (issue #3, lead directive 2026-09-26): a bad or
+// injection-bearing address must never reach the runner at all, across
+// every adapter, not just one.
+func TestReachableRejectsInjectionBeforeAnySSH(t *testing.T) {
+	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fd42:200::1", ""}
+	adapters := map[string]Adapter{
+		"kea":      &KeaAdapter{},
+		"isc-dhcp": &ISCDHCPAdapter{},
+		"dnsmasq":  &DnsmasqAdapter{},
+	}
+	for name, a := range adapters {
+		for _, addr := range bad {
+			r := &fakeRunner{}
+			switch v := a.(type) {
+			case *KeaAdapter:
+				v.Runner = r
+			case *ISCDHCPAdapter:
+				v.Runner = r
+			case *DnsmasqAdapter:
+				v.Runner = r
+			}
+			if err := a.Reachable(context.Background(), addr); err == nil {
+				t.Errorf("%s: Reachable(%q) was accepted, want rejected", name, addr)
+			}
+			if len(r.calls) != 0 {
+				t.Errorf("%s: Reachable(%q) reached the runner before validation failed", name, addr)
+			}
+		}
+	}
+}
+
+// Preservation: a real address reaches the runner as a single ping,
+// carrying the normalized form, and the adapter reports the runner's
+// own error rather than swallowing it.
+func TestReachableSendsPingAndPropagatesRunnerError(t *testing.T) {
+	r := &fakeRunner{err: context.DeadlineExceeded}
+	a := &KeaAdapter{Runner: r}
+	if err := a.Reachable(context.Background(), "10.200.1.100"); err == nil {
+		t.Fatal("runner error was swallowed instead of propagated")
+	}
+	if len(r.calls) != 1 || !strings.Contains(r.calls[0], "ping") || !strings.Contains(r.calls[0], "10.200.1.100") {
+		t.Fatalf("want one ping call naming the address, got %v", r.calls)
+	}
+}
+
 func TestKeaParsesEmptyResultAsEmptyTable(t *testing.T) {
 	leases, err := parseKeaLeases(`[{"result":3,"text":"no leases"}]`)
 	if err != nil {

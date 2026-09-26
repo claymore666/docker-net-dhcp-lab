@@ -9,6 +9,66 @@ import (
 
 const bootIDCmd = "cat /proc/sys/kernel/random/boot_id"
 
+// fakeContainerRunner answers docker inspect with canned mac/addr and
+// records every command, so runContainerPolicy's command construction
+// (issue #3, lead directive 2026-09-26: A4/A5 need --restart
+// unless-stopped) is checked without a real docker host.
+type fakeContainerRunner struct {
+	mac, addr string
+	calls     []string
+}
+
+func (f *fakeContainerRunner) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	switch {
+	case strings.Contains(cmd, "MacAddress"):
+		return f.mac, nil
+	case strings.Contains(cmd, "IPAddress"):
+		return f.addr, nil
+	default:
+		return "", nil
+	}
+}
+
+func TestRunContainerPolicyAddsRestartFlagWhenGiven(t *testing.T) {
+	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100"}
+	mac, addr, err := runContainerPolicy(context.Background(), r, "net1", "box1", "unless-stopped")
+	if err != nil {
+		t.Fatalf("runContainerPolicy failed: %v", err)
+	}
+	if mac != "aa:bb:cc:dd:ee:ff" || addr != "10.200.1.100" {
+		t.Fatalf("got mac=%q addr=%q", mac, addr)
+	}
+	var runCmd string
+	for _, c := range r.calls {
+		if strings.Contains(c, "docker run") {
+			runCmd = c
+		}
+	}
+	if !strings.Contains(runCmd, "--restart unless-stopped") {
+		t.Fatalf("docker run did not carry --restart unless-stopped: %q", runCmd)
+	}
+}
+
+// Preservation: runContainer (no policy argument) still starts a
+// container with no restart flag at all, matching Docker's own default
+// -- A1/A2/A3/A6/A7/A8 must not silently start setting one too.
+func TestRunContainerHasNoRestartFlag(t *testing.T) {
+	r := &fakeContainerRunner{mac: "aa:bb:cc:dd:ee:ff", addr: "10.200.1.100"}
+	if _, _, err := runContainer(context.Background(), r, "net1", "box1"); err != nil {
+		t.Fatalf("runContainer failed: %v", err)
+	}
+	var runCmd string
+	for _, c := range r.calls {
+		if strings.Contains(c, "docker run") {
+			runCmd = c
+		}
+	}
+	if strings.Contains(runCmd, "--restart") {
+		t.Fatalf("runContainer's docker run unexpectedly carried a restart flag: %q", runCmd)
+	}
+}
+
 // fakeBootRunner answers bootIDCmd with a scripted sequence of ids (one
 // entry consumed per call, the last entry repeats once exhausted) and
 // docker info with a canned error. It exists because

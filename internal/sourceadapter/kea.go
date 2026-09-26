@@ -97,6 +97,10 @@ func (a *KeaAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx
 func (a *KeaAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
 func (a *KeaAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
 
+func (a *KeaAdapter) Reachable(ctx context.Context, addr string) error {
+	return reachable(ctx, a.Runner, addr)
+}
+
 func (a *KeaAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" kea-dhcp4-server"); err != nil {
 		return fmt.Errorf("kea: systemctl %s: %w", action, err)
