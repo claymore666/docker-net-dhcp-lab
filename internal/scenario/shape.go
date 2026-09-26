@@ -297,40 +297,22 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 	return net, nil
 }
 
-// NetworkUpSecondary brings up a second, independent network for A13
-// (one container, two plugin networks, issue #3 part 2), alongside
-// whatever NetworkUp already brought up for shape. Only the
-// parent-attached shapes can do this: Linux macvlan/ipvlan both allow
-// many independent devices off one parent NIC, so a second logical
-// plugin network on the same physical SegmentNIC is a real, supported
-// configuration. Bridge and bridge-ipam cannot: SegmentNIC is enslaved
-// wholly to the one host bridge NetworkUp already built for the
-// caller's shape, and a NIC cannot also be enslaved to a second bridge
-// at the same time -- callers report A13 N/A for those two shapes for
-// exactly that reason, never by attempting this and swallowing the
-// failure.
-func NetworkUpSecondary(ctx context.Context, r sourceadapter.Runner, netName string, shape Shape) error {
-	mode := ""
-	switch shape {
-	case ShapeMacvlan, ShapeMacvlanIPAM:
-		mode = "macvlan"
-	case ShapeIpvlan:
-		mode = "ipvlan"
-	default:
-		return fmt.Errorf("networkupsecondary: shape %q has no independent second network available", shape)
-	}
+// NetworkUpInternal brings up an ordinary Docker bridge network with
+// Docker's own default driver and IPAM, no plugin driver and no
+// SegmentNIC involvement at all: the "internal network" half of A13's
+// compose-app case (issue #3 part 2, redesigned 2026-09-27). Works
+// identically under every shape, since it never touches the segment.
+func NetworkUpInternal(ctx context.Context, r sourceadapter.Runner, netName string) error {
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", netName))
-	create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s %s",
-		driverAlias, ipamDriverFor(shape), mode, SegmentNIC, netName)
-	if _, err := r.Run(ctx, create); err != nil {
-		return fmt.Errorf("networkupsecondary(%s): %w", shape, err)
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network create %s", netName)); err != nil {
+		return fmt.Errorf("networkupinternal: %w", err)
 	}
 	return nil
 }
 
-// NetworkDownSecondary removes the network NetworkUpSecondary created.
+// NetworkDownInternal removes the network NetworkUpInternal created.
 // Best-effort and idempotent, the same style NetworkDown already uses.
-func NetworkDownSecondary(ctx context.Context, r sourceadapter.Runner, netName string) {
+func NetworkDownInternal(ctx context.Context, r sourceadapter.Runner, netName string) {
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", netName))
 }
 

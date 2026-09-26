@@ -41,6 +41,7 @@ runcmd:
           "id": 1,
           "subnet": "__SEG_SUBNET__",
           "pools": [ { "pool": "__POOL_START__ - __POOL_END__" } ],
+          "option-data": [ { "name": "routers", "data": "__SEG_GATEWAY__" } ],
           "reservations": <?include "/etc/kea/reservations.json"?>
         }
       ]

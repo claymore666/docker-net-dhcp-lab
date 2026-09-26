@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -257,6 +258,50 @@ func inspectContainerNetwork(ctx context.Context, r sourceadapter.Runner, shape 
 		return "", "", "", fmt.Errorf("container %s on network %s has no endpoint id reported, needed for its ipvlan client-id", name, netName)
 	}
 	return mac, addr, endpointID, nil
+}
+
+// containerDefaultGateway reads the container's own kernel routing
+// table via /proc/net/route rather than assuming the throwaway image
+// ships an `ip` binary (issue #3, A13 redesign): the default route is
+// the row whose Destination is 00000000, and its Gateway field is a
+// hex-encoded IPv4 address with its four bytes in reverse order.
+// Returns "" with no error when the container has no default route.
+func containerDefaultGateway(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker exec %s cat /proc/net/route", name))
+	if err != nil {
+		return "", fmt.Errorf("docker exec %s cat /proc/net/route: %w", name, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[1] != "00000000" {
+			continue
+		}
+		gw, err := hexLEToIPv4(fields[2])
+		if err != nil {
+			return "", fmt.Errorf("container %s default route gateway field %q: %w", name, fields[2], err)
+		}
+		return gw, nil
+	}
+	return "", nil
+}
+
+// hexLEToIPv4 decodes /proc/net/route's own gateway encoding: 8 hex
+// digits, byte-reversed relative to the address's normal dotted order
+// (e.g. a gateway printed elsewhere as w.x.y.z appears here as the hex
+// of z.y.x.w).
+func hexLEToIPv4(hex string) (string, error) {
+	if len(hex) != 8 {
+		return "", fmt.Errorf("want 8 hex digits, got %q", hex)
+	}
+	octets := make([]int64, 4)
+	for i := 0; i < 4; i++ {
+		v, err := strconv.ParseInt(hex[i*2:i*2+2], 16, 32)
+		if err != nil {
+			return "", fmt.Errorf("byte %d: %w", i, err)
+		}
+		octets[i] = v
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", octets[3], octets[2], octets[1], octets[0]), nil
 }
 
 func waitDockerBack(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) error {

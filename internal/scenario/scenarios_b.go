@@ -294,81 +294,68 @@ func runA12(ctx context.Context, e Env) Verdict {
 		ev, e.GitSHA)
 }
 
-// runA13 -- one container, two plugin networks: N/A on the two
-// host-bridge shapes, where SegmentNIC is already wholly enslaved to
-// the one bridge NetworkUp built for the caller's own shape and cannot
-// also be enslaved to a second bridge (issue #3 part 2,
-// NetworkUpSecondary's doc comment). On the three parent-attached
-// shapes, a second independent network on the same parent NIC is a
-// real, supported configuration, so it is attempted, not defaulted to
-// N/A.
+// runA13 -- one container on the plugin's own network plus one ordinary
+// Docker bridge network with Docker's own default IPAM: the real-world
+// case of a compose app on the LAN network plus an internal one (issue
+// #3 part 2, redesigned 2026-09-27, replacing an earlier two-plugin-
+// network design). Works under every shape, so there is no N/A branch.
+// Two plugin networks sharing one segment cannot both take: Docker
+// refuses a second sandbox interface in a subnet its own routing table
+// already covers (measured live, the reason this scenario was
+// redesigned rather than fixed in place).
 func runA13(ctx context.Context, e Env) Verdict {
-	if e.Shape == ShapeBridge || e.Shape == ShapeBridgeIPAM {
-		return na(NameA13, e.Cell, e.Shape,
-			"the docker host's segment NIC is already wholly enslaved to this shape's one host bridge; it cannot also be enslaved to a second bridge for a second network", e.GitSHA)
-	}
-
 	name := containerName(e, NameA13)
-	net2 := NetworkName(e.Cell, e.Shape) + "-a13b"
+	internalNet := NetworkName(e.Cell, e.Shape) + "-a13-internal"
 	defer removeContainer(ctx, e.Host, name)
-	defer NetworkDownSecondary(ctx, e.Host, net2)
+	defer NetworkDownInternal(ctx, e.Host, internalNet)
 
-	if err := NetworkUpSecondary(ctx, e.Host, net2, e.Shape); err != nil {
-		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("could not bring up a second network: %v", err), nil, e.GitSHA)
+	if err := NetworkUpInternal(ctx, e.Host, internalNet); err != nil {
+		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("could not bring up the internal network: %v", err), nil, e.GitSHA)
 	}
 
-	mac1, addr1, endpointID1, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
 	if err != nil {
-		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("container did not start on the first network: %v", err), nil, e.GitSHA)
+		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("container did not start on the plugin network: %v", err), nil, e.GitSHA)
 	}
-	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker network connect %s %s", net2, name)); err != nil {
-		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("docker network connect %s %s: %v", net2, name, err), nil, e.GitSHA)
+	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker network connect %s %s", internalNet, name)); err != nil {
+		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("docker network connect %s %s: %v", internalNet, name, err), nil, e.GitSHA)
 	}
-	mac2, addr2, endpointID2, err := inspectContainerNetwork(ctx, e.Host, e.Shape, name, net2)
+	_, internalAddr, _, err := inspectContainerNetwork(ctx, e.Host, e.Shape, name, internalNet)
 	if err != nil {
-		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("inspect on the second network: %v", err), nil, e.GitSHA)
+		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("inspect on the internal network: %v", err), nil, e.GitSHA)
 	}
 
 	snap := evidencePath(e, NameA13, "leases-after")
-	_, leases, ok1, err := lookupLease(ctx, e.Source, e.Shape, mac1, addr1, endpointID1, snap)
+	_, _, ok, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
 	if err != nil {
 		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
 	}
 	ev := map[string]string{"leases-after": snap}
-	if !ok1 {
-		return fail(NameA13, e.Cell, e.Shape, "first network: "+leaseFailReason(e.Shape, mac1, addr1, endpointID1), ev, e.GitSHA)
+	if !ok {
+		return fail(NameA13, e.Cell, e.Shape, "plugin network: "+leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
+	}
+	if internalAddr == "" {
+		return fail(NameA13, e.Cell, e.Shape, "the internal network reported no address for the container", ev, e.GitSHA)
 	}
 
-	var ok2 bool
-	if e.Shape == ShapeIpvlan {
-		cid, cidErr := ipvlanClientID(endpointID2)
-		if cidErr != nil {
-			return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("second network: %v", cidErr), ev, e.GitSHA)
-		}
-		_, ok2 = findLeaseByClientID(leases, cid)
-	} else {
-		_, ok2 = findLease(leases, mac2, addr2)
-	}
-	if !ok2 {
-		return fail(NameA13, e.Cell, e.Shape, "second network: "+leaseFailReason(e.Shape, mac2, addr2, endpointID2), ev, e.GitSHA)
-	}
-	if addr1 == addr2 {
+	secs, err := reachableWithRetry(ctx, e.Source, addr)
+	if err != nil {
 		return fail(NameA13, e.Cell, e.Shape,
-			fmt.Sprintf("both networks reported the same address %s for one container; want two distinct leases", addr1), ev, e.GitSHA)
+			fmt.Sprintf("plugin network lease confirmed (%s), internal address %s present, but the source could not reach the plugin address within %ds: %v", addr, internalAddr, secs, err), ev, e.GitSHA)
 	}
 
-	secs1, err := reachableWithRetry(ctx, e.Source, addr1)
+	gw, err := containerDefaultGateway(ctx, e.Host, name)
 	if err != nil {
-		return fail(NameA13, e.Cell, e.Shape,
-			fmt.Sprintf("two distinct leases confirmed (%s, %s), but the first network's address was not reachable within %ds: %v", addr1, addr2, secs1, err), ev, e.GitSHA)
+		return fail(NameA13, e.Cell, e.Shape, fmt.Sprintf("could not read the container's default route: %v", err), ev, e.GitSHA)
 	}
-	secs2, err := reachableWithRetry(ctx, e.Source, addr2)
-	if err != nil {
+	if gw != e.SegGateway {
 		return fail(NameA13, e.Cell, e.Shape,
-			fmt.Sprintf("two distinct leases confirmed (%s, %s), but the second network's address was not reachable within %ds: %v", addr1, addr2, secs2, err), ev, e.GitSHA)
+			fmt.Sprintf("container's default route is via %q, want the plugin network's lease gateway %q", gw, e.SegGateway), ev, e.GitSHA)
 	}
+
 	return pass(NameA13, e.Cell, e.Shape,
-		fmt.Sprintf("one container on two plugin networks: %s (reachable after %ds) and %s (reachable after %ds), both confirmed in the source's own table", addr1, secs1, addr2, secs2),
+		fmt.Sprintf("plugin network address %s (reachable after %ds, default route via its lease gateway %s) plus an ordinary Docker internal network address %s, on one container",
+			addr, secs, gw, internalAddr),
 		ev, e.GitSHA)
 }
 

@@ -580,3 +580,108 @@ func TestCrashContainerSucceeds(t *testing.T) {
 		t.Fatalf("no kill -9 4242 command among: %v", r.calls)
 	}
 }
+
+// hexLEToIPv4 must decode /proc/net/route's own byte-reversed encoding
+// (issue #3, A13 redesign): the worked example below is the well-known
+// one -- a gateway printed elsewhere as 192.168.1.1 appears in the file
+// as "0101A8C0".
+func TestHexLEToIPv4DecodesTheWellKnownExample(t *testing.T) {
+	got, err := hexLEToIPv4("0101A8C0")
+	if err != nil {
+		t.Fatalf("hexLEToIPv4: %v", err)
+	}
+	if got != "192.168.1.1" {
+		t.Fatalf("got %q, want 192.168.1.1", got)
+	}
+}
+
+// A hex string of the wrong length is malformed input, never a route
+// with no gateway (that case is an all-zero field, not a short one).
+func TestHexLEToIPv4RejectsTheWrongLength(t *testing.T) {
+	for _, bad := range []string{"", "0101A8", "0101A8C0FF"} {
+		if _, err := hexLEToIPv4(bad); err == nil {
+			t.Fatalf("hexLEToIPv4(%q) succeeded, want an error", bad)
+		}
+	}
+}
+
+// Non-hex characters must fail cleanly, not silently decode to garbage.
+func TestHexLEToIPv4RejectsNonHexCharacters(t *testing.T) {
+	if _, err := hexLEToIPv4("ZZZZZZZZ"); err == nil {
+		t.Fatal("hexLEToIPv4(\"ZZZZZZZZ\") succeeded, want an error")
+	}
+}
+
+// fakeRouteRunner answers a `cat /proc/net/route` exec with a canned
+// body and every other command with an empty success, matching the
+// shape containerDefaultGateway itself expects.
+type fakeRouteRunner struct {
+	route string
+}
+
+func (f *fakeRouteRunner) Run(_ context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "cat /proc/net/route") {
+		return f.route, nil
+	}
+	return "", nil
+}
+
+// containerDefaultGateway must find the row whose Destination is
+// 00000000 among others, and decode only that row's Gateway field.
+func TestContainerDefaultGatewayFindsTheDefaultRouteRow(t *testing.T) {
+	route := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		"eth1\t0A64C8AC\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n" + // a non-default route first
+		"eth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+	r := &fakeRouteRunner{route: route}
+	got, err := containerDefaultGateway(context.Background(), r, "box1")
+	if err != nil {
+		t.Fatalf("containerDefaultGateway: %v", err)
+	}
+	if got != "192.168.1.1" {
+		t.Fatalf("got %q, want 192.168.1.1", got)
+	}
+}
+
+// A container with no default route (only non-default rows, or an
+// empty table) is not an error -- some throwaway containers legitimately
+// have none -- so containerDefaultGateway must return "" with no error.
+func TestContainerDefaultGatewayReturnsEmptyWhenNoDefaultRoute(t *testing.T) {
+	route := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		"eth0\t0A64C8AC\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+	r := &fakeRouteRunner{route: route}
+	got, err := containerDefaultGateway(context.Background(), r, "box1")
+	if err != nil {
+		t.Fatalf("containerDefaultGateway: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("got %q, want empty", got)
+	}
+}
+
+// A malformed Gateway field on the default-route row must fail, not
+// silently report a wrong or empty gateway.
+func TestContainerDefaultGatewayFailsOnAMalformedGatewayField(t *testing.T) {
+	route := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		"eth0\t00000000\tZZ\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+	r := &fakeRouteRunner{route: route}
+	if _, err := containerDefaultGateway(context.Background(), r, "box1"); err == nil {
+		t.Fatal("containerDefaultGateway succeeded on a malformed gateway field, want an error")
+	}
+}
+
+// The exec itself failing (docker exec against a stopped/missing
+// container, for example) must surface as an error, not an empty
+// gateway that reads like "no default route".
+func TestContainerDefaultGatewayFailsWhenExecFails(t *testing.T) {
+	if _, err := containerDefaultGateway(context.Background(), execErrRunner{}, "box1"); err == nil {
+		t.Fatal("containerDefaultGateway succeeded although the exec itself failed, want an error")
+	}
+}
+
+// execErrRunner fails every command, for the one test above that only
+// needs to prove the exec's own error is surfaced.
+type execErrRunner struct{}
+
+func (execErrRunner) Run(_ context.Context, _ string) (string, error) {
+	return "", fmt.Errorf("exec failed")
+}

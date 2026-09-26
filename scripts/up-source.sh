@@ -56,12 +56,18 @@ pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 seg_network=${seg_subnet%/*}
 seg_netmask=255.255.255.0
 
+# The DHCP server's own router option (issue #3, A13 redesign): the
+# source VM's seg_address stripped of its CIDR suffix, mirroring a real
+# Fritz.Box, where the DHCP server and the LAN gateway are the same box.
+seg_addr_ip=${seg_addr%%/*}
+
 tmpl="$REPO_ROOT/cloud-init/${source_type}-user-data.tmpl.yaml"
 seed_dir="$WORK/seed-source"
 mkdir -p "$seed_dir"
 sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__SEG_SUBNET__#$seg_subnet#g" -e "s#__SEG_NETWORK__#$seg_network#g" \
 	-e "s#__SEG_NETMASK__#$seg_netmask#g" \
+	-e "s#__SEG_GATEWAY__#$seg_addr_ip#g" \
 	-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
 	"$tmpl" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \

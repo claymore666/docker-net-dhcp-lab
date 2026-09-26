@@ -28,6 +28,7 @@ runcmd:
     authoritative;
     subnet __SEG_NETWORK__ netmask __SEG_NETMASK__ {
       range __POOL_START__ __POOL_END__;
+      option routers __SEG_GATEWAY__;
     }
     include "/etc/dhcp/lab-reservations.conf";
     DHCPDEOF

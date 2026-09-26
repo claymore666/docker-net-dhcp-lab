@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -211,40 +212,28 @@ func TestNetworkUpBridgeIPAMUsesHostBridgeMachinery(t *testing.T) {
 	}
 }
 
-// NetworkUpSecondary is A13's mechanism (one container, two plugin
-// networks, #3 part 2): it must work for the parent-attached shapes,
-// where Linux allows many independent macvlan/ipvlan devices off one
-// NIC, and refuse outright for the two bridge shapes, where SegmentNIC
-// is already wholly enslaved to the one bridge NetworkUp built -- a
-// second bridge network on the same NIC is not a real configuration,
-// so a caller must get an error here, never a silently broken network.
-func TestNetworkUpSecondaryByShape(t *testing.T) {
-	ok := []Shape{ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM}
-	for _, shape := range ok {
+// NetworkUpInternal is A13's internal-network half (issue #3 part 2,
+// redesigned 2026-09-27): an ordinary Docker bridge network, same
+// command shape regardless of which shape the caller is running under,
+// since it never touches SegmentNIC at all.
+func TestNetworkUpInternalCreatesAnOrdinaryBridgeNetwork(t *testing.T) {
+	for _, shape := range Shapes {
 		r := &fakeShapeRunner{}
-		if err := NetworkUpSecondary(context.Background(), r, "labrun-dnsmasq-"+string(shape)+"-a13b", shape); err != nil {
-			t.Errorf("%s: NetworkUpSecondary: %v", shape, err)
+		netName := "labrun-dnsmasq-" + string(shape) + "-a13-internal"
+		if err := NetworkUpInternal(context.Background(), r, netName); err != nil {
+			t.Errorf("%s: NetworkUpInternal: %v", shape, err)
 		}
 		var sawCreate bool
 		for _, c := range r.calls {
-			if strings.Contains(c, "docker network create") {
+			if c == fmt.Sprintf("sudo docker network create %s", netName) {
 				sawCreate = true
+			}
+			if strings.Contains(c, "-o parent=") || strings.Contains(c, "--ipam-driver") {
+				t.Errorf("%s: NetworkUpInternal must never name SegmentNIC or a plugin ipam-driver; calls: %v", shape, r.calls)
 			}
 		}
 		if !sawCreate {
-			t.Errorf("%s: NetworkUpSecondary never created a network; calls: %v", shape, r.calls)
-		}
-	}
-	refused := []Shape{ShapeBridge, ShapeBridgeIPAM}
-	for _, shape := range refused {
-		r := &fakeShapeRunner{}
-		if err := NetworkUpSecondary(context.Background(), r, "labrun-dnsmasq-"+string(shape)+"-a13b", shape); err == nil {
-			t.Errorf("%s: NetworkUpSecondary succeeded, want refused (one NIC cannot join a second bridge)", shape)
-		}
-		for _, c := range r.calls {
-			if strings.Contains(c, "docker network create") {
-				t.Errorf("%s: NetworkUpSecondary ran docker network create despite being refused; calls: %v", shape, r.calls)
-			}
+			t.Errorf("%s: NetworkUpInternal never created a plain bridge network; calls: %v", shape, r.calls)
 		}
 	}
 }

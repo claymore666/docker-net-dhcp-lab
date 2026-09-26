@@ -298,94 +298,153 @@ func TestRunA12NotesLeaseReleasedAtDisconnect(t *testing.T) {
 	}
 }
 
-// TestRunA13IsNAOnBothHostBridgeShapes is the edge case the issue asked
-// for by name: A13 must never attempt a second bridge on the one NIC a
-// host-bridge shape's own NetworkUp already enslaved, on EITHER
-// host-bridge shape.
-func TestRunA13IsNAOnBothHostBridgeShapes(t *testing.T) {
-	for _, shape := range []Shape{ShapeBridge, ShapeBridgeIPAM} {
-		e := Env{Cell: "dnsmasq", Shape: shape, Network: "net1", GitSHA: "sha"}
-		v := runA13(context.Background(), e)
-		if v.Result != NA {
-			t.Fatalf("shape %s: want NA, got %s (reason %q)", shape, v.Result, v.Reason)
-		}
-		if v.Reason == "" {
-			t.Fatalf("shape %s: an N/A verdict must carry a reason", shape)
-		}
-	}
-}
-
-// a13Runner backs A13's happy-path test on a parent-attached shape: one
-// container joins two networks, and inspectContainerNetwork's
-// index-by-name template must resolve the SECOND network's own
-// mac/address/endpoint id, distinct from the first.
+// a13Runner backs A13's tests (issue #3 part 2, redesigned 2026-09-27):
+// one container on the plugin network plus one ordinary Docker internal
+// network. inspectContainerNetwork's index-by-name template must resolve
+// the internal network's own mac/address/endpoint id, distinct from the
+// plugin network's, and a `cat /proc/net/route` exec must answer with a
+// canned routing table so containerDefaultGateway has something to
+// decode.
 type a13Runner struct {
-	net2Name                 string
-	mac1, addr1, endpointID1 string
-	mac2, addr2, endpointID2 string
+	internalNet                           string
+	mac, addr, endpointID                 string
+	internalMac, internalAddr, internalEP string
+	route                                 string
 }
 
 func (f *a13Runner) Run(_ context.Context, cmd string) (string, error) {
-	onNet2 := f.net2Name != "" && strings.Contains(cmd, fmt.Sprintf("%q", f.net2Name))
+	onInternal := f.internalNet != "" && strings.Contains(cmd, fmt.Sprintf("%q", f.internalNet))
 	switch {
-	case onNet2 && strings.Contains(cmd, "MacAddress"):
-		return f.mac2, nil
-	case onNet2 && strings.Contains(cmd, "IPAddress"):
-		return f.addr2, nil
-	case onNet2 && strings.Contains(cmd, "EndpointID"):
-		return f.endpointID2, nil
+	case strings.Contains(cmd, "cat /proc/net/route"):
+		return f.route, nil
+	case onInternal && strings.Contains(cmd, "MacAddress"):
+		return f.internalMac, nil
+	case onInternal && strings.Contains(cmd, "IPAddress"):
+		return f.internalAddr, nil
+	case onInternal && strings.Contains(cmd, "EndpointID"):
+		return f.internalEP, nil
 	case strings.Contains(cmd, "MacAddress"):
-		return f.mac1, nil
+		return f.mac, nil
 	case strings.Contains(cmd, "IPAddress"):
-		return f.addr1, nil
+		return f.addr, nil
 	case strings.Contains(cmd, "EndpointID"):
-		return f.endpointID1, nil
+		return f.endpointID, nil
 	default:
 		return "", nil
 	}
 }
 
-// TestRunA13PassesWithTwoDistinctLeasesOnMacvlan covers A13's ordinary
-// path on a parent-attached shape: two independent networks on one
-// container, each with its own confirmed, reachable lease.
-func TestRunA13PassesWithTwoDistinctLeasesOnMacvlan(t *testing.T) {
-	cell, shape := "dnsmasq", ShapeMacvlan
-	net2 := NetworkName(cell, shape) + "-a13b"
-	host := &a13Runner{
-		net2Name: net2,
-		mac1:     "aa:bb:cc:dd:ee:05", addr1: "10.200.1.105", endpointID1: "ep-13a",
-		mac2: "aa:bb:cc:dd:ee:06", addr2: "10.200.1.106", endpointID2: "ep-13b",
+// a13Route builds a /proc/net/route body with one default-route row
+// (Destination 00000000) whose Gateway field is gwHex, matching the real
+// file's column layout closely enough for containerDefaultGateway's own
+// field-scan (issue #3, A13 redesign).
+func a13Route(gwHex string) string {
+	return "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		"eth0\t00000000\t" + gwHex + "\t0003\t0\t0\t0\t00000000\t0\t0\t0\n"
+}
+
+// TestRunA13PassesOnEveryShape covers A13's ordinary path (issue #3
+// part 2, redesigned 2026-09-27): the plugin network's lease is
+// confirmed and reachable, the internal network's address is present,
+// and the container's default route matches the plugin network's lease
+// gateway -- on every shape, since the redesign dropped A13's old
+// bridge-shape N/A entirely.
+func TestRunA13PassesOnEveryShape(t *testing.T) {
+	// A real hex endpoint id, long enough for ipvlanClientID (>= 16 hex
+	// chars): the plugin-network lease is looked up by client-id on
+	// ipvlan and by MAC+address on every other shape, so the fake
+	// source below carries both a MAC-keyed and a client-id-keyed
+	// lease for the same address.
+	const endpointID = "97ce0dfd016fae55"
+	clientID, err := ipvlanClientID(endpointID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	source := &fakeAdapter{leases: []sourceadapter.Lease{
-		{MAC: host.mac1, Address: host.addr1},
-		{MAC: host.mac2, Address: host.addr2},
-	}}
-	e := Env{Host: host, Source: source, Cell: cell, Shape: shape, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
-	v := runA13(context.Background(), e)
-	if v.Result != PASS {
-		t.Fatalf("want PASS, got %s (reason %q)", v.Result, v.Reason)
+	for _, shape := range Shapes {
+		cell := "dnsmasq"
+		internalNet := NetworkName(cell, shape) + "-a13-internal"
+		host := &a13Runner{
+			internalNet: internalNet,
+			mac:         "aa:bb:cc:dd:ee:05", addr: "10.200.1.105", endpointID: endpointID,
+			internalMac: "aa:bb:cc:dd:ee:06", internalAddr: "172.20.0.2", internalEP: "ep-13b",
+			route: a13Route("0201C80A"), // -> 10.200.1.2, matching SegGateway below
+		}
+		source := &fakeAdapter{leases: []sourceadapter.Lease{
+			{MAC: host.mac, Address: host.addr},
+			{ClientID: clientID, Address: host.addr},
+		}}
+		e := Env{
+			Host: host, Source: source, Cell: cell, Shape: shape, Network: "net1",
+			EvidenceDir: t.TempDir(), GitSHA: "sha", SegGateway: "10.200.1.2",
+		}
+		v := runA13(context.Background(), e)
+		if v.Result != PASS {
+			t.Fatalf("%s: want PASS, got %s (reason %q)", shape, v.Result, v.Reason)
+		}
 	}
 }
 
-// TestRunA13FailsWhenBothNetworksReportTheSameAddress preserves A13's own
-// duplicate-address guard: two networks that somehow reported the same
-// address for one container is a defect, not two independent leases.
-func TestRunA13FailsWhenBothNetworksReportTheSameAddress(t *testing.T) {
+// TestRunA13FailsWhenInternalNetworkReportsNoAddress covers the internal
+// network half of A13's assertion list: a container joined to the
+// internal network but reporting no address there is a defect, not a
+// pass.
+func TestRunA13FailsWhenInternalNetworkReportsNoAddress(t *testing.T) {
 	cell, shape := "dnsmasq", ShapeMacvlan
-	net2 := NetworkName(cell, shape) + "-a13b"
+	internalNet := NetworkName(cell, shape) + "-a13-internal"
 	host := &a13Runner{
-		net2Name: net2,
-		mac1:     "aa:bb:cc:dd:ee:05", addr1: "10.200.1.105", endpointID1: "ep-13a",
-		mac2: "aa:bb:cc:dd:ee:06", addr2: "10.200.1.105", endpointID2: "ep-13b",
+		internalNet: internalNet,
+		mac:         "aa:bb:cc:dd:ee:05", addr: "10.200.1.105", endpointID: "ep-13a",
+		internalMac: "aa:bb:cc:dd:ee:06", internalAddr: "", internalEP: "ep-13b",
+		route: a13Route("0201C80A"),
 	}
 	source := &fakeAdapter{leases: []sourceadapter.Lease{
-		{MAC: host.mac1, Address: host.addr1},
-		{MAC: host.mac2, Address: host.addr2},
+		{MAC: host.mac, Address: host.addr},
 	}}
-	e := Env{Host: host, Source: source, Cell: cell, Shape: shape, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	e := Env{
+		Host: host, Source: source, Cell: cell, Shape: shape, Network: "net1",
+		EvidenceDir: t.TempDir(), GitSHA: "sha", SegGateway: "10.200.1.2",
+	}
 	v := runA13(context.Background(), e)
 	if v.Result != FAIL {
-		t.Fatalf("want FAIL when both networks report the same address, got %s", v.Result)
+		t.Fatalf("want FAIL when the internal network reports no address, got %s", v.Result)
+	}
+	if !strings.Contains(v.Reason, "internal network") {
+		t.Fatalf("reason does not mention the internal network: %q", v.Reason)
+	}
+}
+
+// TestRunA13FailsWhenDefaultRouteIsNotViaTheLeaseGateway covers A13's
+// last assertion: the container's default route must be via the plugin
+// network's own lease gateway, not via whatever else Docker's own
+// internal network happened to install.
+func TestRunA13FailsWhenDefaultRouteIsNotViaTheLeaseGateway(t *testing.T) {
+	cell, shape := "dnsmasq", ShapeIpvlan
+	const endpointID = "97ce0dfd016fae55"
+	clientID, err := ipvlanClientID(endpointID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internalNet := NetworkName(cell, shape) + "-a13-internal"
+	host := &a13Runner{
+		internalNet: internalNet,
+		mac:         "aa:bb:cc:dd:ee:05", addr: "10.200.1.105", endpointID: endpointID,
+		internalMac: "aa:bb:cc:dd:ee:06", internalAddr: "172.20.0.2", internalEP: "ep-13b",
+		route: a13Route("0301C80A"), // -> 10.200.1.3, does not match SegGateway
+	}
+	source := &fakeAdapter{leases: []sourceadapter.Lease{
+		{MAC: host.mac, Address: host.addr},
+		{ClientID: clientID, Address: host.addr},
+	}}
+	e := Env{
+		Host: host, Source: source, Cell: cell, Shape: shape, Network: "net1",
+		EvidenceDir: t.TempDir(), GitSHA: "sha", SegGateway: "10.200.1.2",
+	}
+	v := runA13(context.Background(), e)
+	if v.Result != FAIL {
+		t.Fatalf("want FAIL when the default route is not via the lease gateway, got %s", v.Result)
+	}
+	if !strings.Contains(v.Reason, "default route") {
+		t.Fatalf("reason does not mention the default route: %q", v.Reason)
 	}
 }
 

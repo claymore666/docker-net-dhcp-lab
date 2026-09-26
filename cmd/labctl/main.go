@@ -256,6 +256,7 @@ func cmdRun(args []string) int {
 		PluginTag:         cell.DockerHost.PluginTag,
 		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
 		GitSHA:            gitSHA,
+		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
 	}
 
 	failed := 0

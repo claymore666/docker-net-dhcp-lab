@@ -30,6 +30,11 @@ type Env struct {
 	// Empty means A6 has nothing to upgrade from and reports N/A.
 	PreviousPluginTag string
 	GitSHA            string
+	// SegGateway is the address the segment's DHCP server hands out as
+	// the router option, cell.source.seg_address stripped of its CIDR
+	// suffix (issue #3, A13 redesign): A13 checks the container's own
+	// default route against this, not against a hardcoded address.
+	SegGateway string
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -80,11 +85,9 @@ const (
 	NameA10 = "A10-kill-restart-policy"
 	NameA11 = "A11-pause-unpause"
 	NameA12 = "A12-network-disconnect-reconnect"
-	// NameA13 is N/A for the two host-bridge shapes (ShapeBridge,
-	// ShapeBridgeIPAM): the docker host's segment NIC is already wholly
-	// enslaved to that shape's one host bridge, and it cannot also be
-	// enslaved to a second bridge for a second network (#3 part 2,
-	// NetworkUpSecondary's own doc comment).
+	// NameA13 runs under every shape (#3 part 2, redesigned 2026-09-27):
+	// one plugin network plus one ordinary Docker bridge network, never
+	// two plugin networks on the one segment (runA13's own doc comment).
 	NameA13 = "A13-two-networks-one-container"
 	NameA14 = "A14-short-lease-renewal"
 	NameA15 = "A15-compose-scale"
