@@ -65,8 +65,8 @@ func findLeaseByAddr(leases []sourceadapter.Lease, addr string) (sourceadapter.L
 }
 
 // findLeaseByClientID matches by DHCP client-id (option 61) alone: the
-// only field that survives ipvlan's shared parent MAC (issue #3, lead
-// directive 2026-09-26, item 3). Comparison is case-insensitive; both
+// only field that survives ipvlan's shared parent MAC (issue #3,
+// item 3). Comparison is case-insensitive; both
 // sides are already lowercase colon-hex by construction, but a raw
 // source field is not guaranteed to be.
 func findLeaseByClientID(leases []sourceadapter.Lease, clientID string) (sourceadapter.Lease, bool) {
@@ -81,8 +81,8 @@ func findLeaseByClientID(leases []sourceadapter.Lease, clientID string) (sourcea
 
 // ipvlanClientID derives the DHCP client-id (option 61) the plugin
 // documents for ipvlan mode: type byte 0x00 followed by the first 8
-// bytes of the Docker endpoint id, lowercase colon-hex (issue #3, lead
-// directive 2026-09-26, item 3; docs/parent-attached-modes.md). Measured
+// bytes of the Docker endpoint id, lowercase colon-hex (issue #3,
+// item 3; docs/parent-attached-modes.md). Measured
 // live against a Kea lease: endpoint id
 // 97ce0dfd016fae55148e376d84988fc42e5f0690900ec178ca415a056ac6236a
 // produced client-id 00:97:ce:0d:fd:01:6f:ae:55.
@@ -108,8 +108,8 @@ func hexColonID(b []byte) string {
 
 // lookupLease snapshots the source's table to path, then resolves the
 // container's lease by the matching rule for shape: MAC+address for
-// bridge/macvlan, client-id for ipvlan (issue #3, lead directive
-// 2026-09-26, item 3) -- an address-only match let one ipvlan
+// bridge/macvlan, client-id for ipvlan (issue #3, item 3) -- an
+// address-only match let one ipvlan
 // container's verdict silently read another's lease when both held the
 // same address at different times within one snapshot's staleness
 // window; client-id does not have that collision.
@@ -132,27 +132,36 @@ func lookupLease(ctx context.Context, a sourceadapter.Adapter, shape Shape, mac,
 
 // reachabilityWindow bounds reachableWithRetry: a single ping taken
 // right after a lease is confirmed can race the container's network
-// attach (project note: Join returns before the attach lands). The lead
-// set this window as a definition, not a value tuned to any one result
-// (lab lead, 2026-09-26); a dig at 98b3478 measured 0.7s to first reply
+// attach, since the network join call can return before the attach
+// actually lands. The window is a fixed definition, not a value tuned
+// to one result: a dig at commit 98b3478 measured 0.7s to first reply
 // on a clean isc-dhcp/bridge host reboot, well inside it.
 const reachabilityWindow = 10 * time.Second
 
 // reachableWithRetry pings addr through the source once per second,
-// starting as soon as the caller has a confirmed lease, until the first
-// reply or reachabilityWindow elapses. It always returns the whole
-// seconds elapsed, on success or on timeout, so every verdict this
-// backs records how long the check took either way (lab lead,
-// 2026-09-26).
+// starting as soon as the caller has a confirmed lease, until a reply
+// arrives inside reachabilityWindow or the window elapses. It always
+// returns the whole seconds actually elapsed, on success or on timeout,
+// so every verdict this backs records how long the check took either
+// way. A reply that only arrives once the window has already elapsed
+// does not count as reachable.
 func reachableWithRetry(ctx context.Context, a sourceadapter.Adapter, addr string) (int, error) {
 	start := time.Now()
 	var lastErr error
 	for {
-		if lastErr = a.Reachable(ctx, addr); lastErr == nil {
-			return int(time.Since(start).Round(time.Second) / time.Second), nil
+		attemptErr := a.Reachable(ctx, addr)
+		elapsed := time.Since(start)
+		withinWindow := elapsed < reachabilityWindow
+		if attemptErr == nil && withinWindow {
+			return int(elapsed.Round(time.Second) / time.Second), nil
 		}
-		if time.Since(start) >= reachabilityWindow {
-			return int(reachabilityWindow / time.Second), lastErr
+		if attemptErr == nil {
+			lastErr = fmt.Errorf("reachable only after the %s window had already elapsed", reachabilityWindow)
+		} else {
+			lastErr = attemptErr
+		}
+		if !withinWindow {
+			return int(elapsed.Round(time.Second) / time.Second), lastErr
 		}
 		select {
 		case <-ctx.Done():
@@ -198,7 +207,7 @@ func na(scenario, cell string, shape Shape, reason, gitSHA string) Verdict {
 }
 
 // blocked marks a scenario that never reached a known plugin state
-// (issue #3, lead directive 2026-09-26): the precondition check itself
+// (issue #3): the precondition check itself
 // failed, or a previous scenario's failure could not be restored, so
 // this scenario never ran and carries no evidence, the same discipline
 // na already applies.
