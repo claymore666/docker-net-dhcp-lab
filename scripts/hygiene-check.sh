@@ -18,15 +18,21 @@ ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\
 
 # Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
 # markers (e.g. exchange-1), role words that name how this project is
-# worked on (lead, coordinator, maintainer, reviewer), and a review
-# finding's own number never belong in a public tracked file; caught by
-# shape, so no real tag or role word appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|finding [0-9]+)\b'
+# worked on (lead, coordinator, maintainer, reviewer), a private record
+# a public reader cannot open (handover) or the instruction it recorded
+# (directive), and a review finding's own number never belong in a
+# public tracked file; caught by shape, so no real tag or role word
+# appears here.
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|finding [0-9]+|handover|directive)\b'
 # A review verdict word is all-caps only in real use; the ordinary
 # English verb a comment might use ("this will hold", "make it clear")
 # is lowercase and must stay clean, so this one is matched
 # case-sensitively instead of joining PROCESS_RE above.
 VERDICT_RE='\b(HOLD|CLEAR)\b'
+# A `.claude/...` path is never openable by a public reader; matched as
+# a plain fixed string, not a regex, so it needs no escaping and cannot
+# itself be misread as a pattern.
+CLAUDE_PATH='.claude'
 
 fail=0
 while IFS= read -r -d '' f; do
@@ -34,7 +40,16 @@ while IFS= read -r -d '' f; do
 	*/.git/*) continue ;;
 	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
 	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
-	*_test.go) continue ;;                     # synthetic fixtures in a TempDir, never shipped or run anywhere real
+	esac
+	# A _test.go fixture legitimately carries made-up private addresses
+	# (a TempDir source, never shipped or run anywhere real), so it
+	# skips the address check below -- but not the process/path check
+	# further down: a leaked private pointer or role word belongs in no
+	# tracked file, test or not, and skipping the whole file missed
+	# exactly that in the past.
+	skip_addr=0
+	case "$f" in
+	*_test.go) skip_addr=1 ;;
 	esac
 	line_no=0
 	# `|| [ -n "$line" ]` picks up a last line with no trailing newline:
@@ -42,16 +57,18 @@ while IFS= read -r -d '' f; do
 	# silently skip that line's body.
 	while IFS= read -r line || [ -n "$line" ]; do
 		line_no=$((line_no + 1))
-		# RFC1918 and link-local candidates only; a public IP is not house detail.
-		matches=$(grep -oE '\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b' <<<"$line" || true)
-		if [ -n "$matches" ]; then
-			while IFS= read -r m; do
-				[ -z "$m" ] && continue
-				if ! [[ "$m" =~ $ALLOWED_RE ]]; then
-					echo "hygiene: candidate at $f:$line_no" >&2
-					fail=1
-				fi
-			done <<<"$matches"
+		if [ "$skip_addr" -eq 0 ]; then
+			# RFC1918 and link-local candidates only; a public IP is not house detail.
+			matches=$(grep -oE '\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b' <<<"$line" || true)
+			if [ -n "$matches" ]; then
+				while IFS= read -r m; do
+					[ -z "$m" ] && continue
+					if ! [[ "$m" =~ $ALLOWED_RE ]]; then
+						echo "hygiene: candidate at $f:$line_no" >&2
+						fail=1
+					fi
+				done <<<"$matches"
+			fi
 		fi
 		# A line that IS the pattern definition, not prose using it, carries
 		# this exact trailing marker and is exempt from this one check only
@@ -66,7 +83,7 @@ while IFS= read -r -d '' f; do
 				continue
 			fi
 		fi
-		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line"; then
+		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qF "$CLAUDE_PATH" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi
