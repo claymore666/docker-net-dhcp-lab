@@ -76,6 +76,19 @@ const (
 	NameA6  = "A6-plugin-upgrade"
 	NameA7  = "A7-plugin-killed"
 	NameA8  = "A8-fleet-burst"
+	NameA9  = "A9-stop-wait-start"
+	NameA10 = "A10-kill-restart-policy"
+	NameA11 = "A11-pause-unpause"
+	NameA12 = "A12-network-disconnect-reconnect"
+	// NameA13 is N/A for the two host-bridge shapes (ShapeBridge,
+	// ShapeBridgeIPAM): the docker host's segment NIC is already wholly
+	// enslaved to that shape's one host bridge, and it cannot also be
+	// enslaved to a second bridge for a second network (#3 part 2,
+	// NetworkUpSecondary's own doc comment).
+	NameA13 = "A13-two-networks-one-container"
+	NameA14 = "A14-short-lease-renewal"
+	NameA15 = "A15-compose-scale"
+	NameA16 = "A16-forced-remove-running"
 )
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -122,4 +135,12 @@ var Catalog = []Scenario{
 	{Name: NameA6, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA6},
 	{Name: NameA7, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA7},
 	{Name: NameA8, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA8},
+	{Name: NameA9, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA9},
+	{Name: NameA10, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA10},
+	{Name: NameA11, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA11},
+	{Name: NameA12, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA12},
+	{Name: NameA13, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA13},
+	{Name: NameA14, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runA14},
+	{Name: NameA15, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA15},
+	{Name: NameA16, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA16},
 }
