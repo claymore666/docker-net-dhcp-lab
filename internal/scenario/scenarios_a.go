@@ -45,14 +45,25 @@ func corroborate(ctx context.Context, e Env, mac string, ev map[string]string, s
 		return
 	}
 	path := evidencePath(e, scenario, label)
-	reason, err := dhcpExchangeReason(ctx, e.RepoRoot, e.PCAP, mac)
 	var text string
-	if err != nil {
-		text = fmt.Sprintf("dhcp_exchange_reason error: %v\n", err)
-	} else if reason == "" {
-		text = "clean 4-message exchange for this mac in the cell capture\n"
+	if _, statErr := os.Stat(e.PCAP); statErr != nil {
+		// The whole-cell capture is not written until every shape for
+		// this cell has run (capture-stop.sh, issue #8): checking now
+		// would always read a missing file and misreport a disagreement
+		// no capture ever supported. Record the mac so
+		// capture-check-regenerate.sh can finish this check once the
+		// final pcap exists.
+		text = fmt.Sprintf("capture check deferred to the final pcap, mac %s\n", mac)
 	} else {
-		text = fmt.Sprintf("capture disagreement: %s\n", reason)
+		reason, err := dhcpExchangeReason(ctx, e.RepoRoot, e.PCAP, mac)
+		switch {
+		case err != nil:
+			text = fmt.Sprintf("dhcp_exchange_reason error, mac %s: %v\n", mac, err)
+		case reason == "":
+			text = fmt.Sprintf("clean 4-message exchange for mac %s in the cell capture\n", mac)
+		default:
+			text = fmt.Sprintf("capture disagreement for mac %s: %s\n", mac, reason)
+		}
 	}
 	if writeErr := os.WriteFile(path, []byte(text), 0o644); writeErr == nil {
 		ev[label] = path

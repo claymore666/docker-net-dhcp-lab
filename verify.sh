@@ -146,6 +146,7 @@ echo "== capture-start/capture-stop orchestration and sudo -n tests =="
 echo "== DHCP four-message check, against real pcap fixtures =="
 if command -v tcpdump >/dev/null; then
 	./scripts/dhcp-exchange-check-test.sh
+	./scripts/capture-check-regenerate-test.sh
 else
 	echo "verify.sh: tcpdump not installed, skipping" >&2
 fi

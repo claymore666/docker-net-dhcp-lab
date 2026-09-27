@@ -119,6 +119,9 @@ echo "== capture: stop =="
 "$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK"
 cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
 
+echo "== capture: regenerate the capture-check evidence against the final pcap (issue #8) =="
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR"
+
 echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 # dockerd tags a managed plugin's own stdout/stderr lines with
 # "plugin=<instance id>", never with the literal text "net-dhcp"
