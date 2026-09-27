@@ -2,8 +2,10 @@ package scenario
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeShapeRunner is the same no-network fakeRunner pattern
@@ -144,4 +146,201 @@ func TestNetworkDownToleratesForwardRuleAlreadyAbsent(t *testing.T) {
 
 	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == delCmd }}
 	NetworkDown(context.Background(), r, "kea", ShapeBridge) // must not panic or block
+}
+
+// The two IPAM shapes (issue #3 part 2) must pass --ipam-driver with
+// this plugin's own alias, never null, while every original shape keeps
+// null-IPAM exactly as before -- a mixed-up flag would silently hand a
+// container docker's own default IPAM instead of a real regression.
+func TestNetworkUpPicksIPAMDriverByShape(t *testing.T) {
+	cases := []struct {
+		shape Shape
+		want  string
+	}{
+		{ShapeBridge, "--ipam-driver null"},
+		{ShapeMacvlan, "--ipam-driver null"},
+		{ShapeIpvlan, "--ipam-driver null"},
+		{ShapeBridgeIPAM, "--ipam-driver " + driverAlias},
+		{ShapeMacvlanIPAM, "--ipam-driver " + driverAlias},
+	}
+	for _, c := range cases {
+		r := &fakeShapeRunner{}
+		if _, err := NetworkUp(context.Background(), r, "dnsmasq", c.shape); err != nil {
+			t.Fatalf("%s: NetworkUp: %v", c.shape, err)
+		}
+		var sawCreate bool
+		for _, cmd := range r.calls {
+			if strings.Contains(cmd, "docker network create") {
+				sawCreate = true
+				if !strings.Contains(cmd, c.want) {
+					t.Errorf("%s: create command %q does not contain %q", c.shape, cmd, c.want)
+				}
+			}
+		}
+		if !sawCreate {
+			t.Errorf("%s: NetworkUp never ran docker network create; calls: %v", c.shape, r.calls)
+		}
+	}
+}
+
+// bridge-ipam is IPAM-mode's L2 attachment axis unchanged from bridge:
+// it still needs the same host-bridge machinery (netplan, FORWARD rule)
+// bridge itself needs, since that machinery is about the L2 attachment,
+// never about which IPAM driver is layered over it.
+func TestNetworkUpBridgeIPAMUsesHostBridgeMachinery(t *testing.T) {
+	r := &fakeShapeRunner{}
+	net := NetworkName("kea", ShapeBridgeIPAM)
+	br := hostBridgeName(net)
+
+	if _, err := NetworkUp(context.Background(), r, "kea", ShapeBridgeIPAM); err != nil {
+		t.Fatalf("NetworkUp: %v", err)
+	}
+	wantCheck := forwardRuleCheck(br)
+	var sawCheck bool
+	for _, c := range r.calls {
+		if c == wantCheck {
+			sawCheck = true
+		}
+	}
+	if !sawCheck {
+		t.Fatalf("NetworkUp(bridge-ipam) never verified the FORWARD rule %q; calls: %v", wantCheck, r.calls)
+	}
+	if !usesHostBridge(ShapeBridgeIPAM) {
+		t.Fatal("usesHostBridge(bridge-ipam) = false, want true")
+	}
+	if usesHostBridge(ShapeMacvlanIPAM) {
+		t.Fatal("usesHostBridge(macvlan-ipam) = true, want false")
+	}
+}
+
+// NetworkUpInternal is A13's internal-network half (issue #3 part 2,
+// redesigned 2026-09-27): an ordinary Docker bridge network, same
+// command shape regardless of which shape the caller is running under,
+// since it never touches SegmentNIC at all.
+func TestNetworkUpInternalCreatesAnOrdinaryBridgeNetwork(t *testing.T) {
+	for _, shape := range Shapes {
+		r := &fakeShapeRunner{}
+		netName := "labrun-dnsmasq-" + string(shape) + "-a13-internal"
+		if err := NetworkUpInternal(context.Background(), r, netName); err != nil {
+			t.Errorf("%s: NetworkUpInternal: %v", shape, err)
+		}
+		var sawCreate bool
+		for _, c := range r.calls {
+			if c == fmt.Sprintf("sudo docker network create %s", netName) {
+				sawCreate = true
+			}
+			if strings.Contains(c, "-o parent=") || strings.Contains(c, "--ipam-driver") {
+				t.Errorf("%s: NetworkUpInternal must never name SegmentNIC or a plugin ipam-driver; calls: %v", shape, r.calls)
+			}
+		}
+		if !sawCreate {
+			t.Errorf("%s: NetworkUpInternal never created a plain bridge network; calls: %v", shape, r.calls)
+		}
+	}
+}
+
+// IsolateIPAMNetwork must refuse a null-IPAM shape outright: the identity
+// hold it isolates against (docs/reference.md, "Restart stability (MAC
+// and IP)" -> "In IPAM mode") does not exist there, so isolating between
+// scenarios on those shapes would just be wasted network churn.
+func TestIsolateIPAMNetworkRefusesNonIPAMShapes(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
+		r := &fakeShapeRunner{}
+		if _, _, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, nil); err == nil {
+			t.Errorf("%s: IsolateIPAMNetwork succeeded on a non-IPAM shape", shape)
+		}
+	}
+}
+
+// The common case: recreation succeeds, so IsolateIPAMNetwork must
+// report "network recreated" and must never call sleep -- a redo pass
+// that always fell back to the 80s wait even when recreation worked
+// would make every IPAM-shape re-run far slower than the fix promised.
+func TestIsolateIPAMNetworkRecreatesWhenPossible(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridgeIPAM, ShapeMacvlanIPAM} {
+		r := &fakeShapeRunner{}
+		var slept []time.Duration
+		sleep := func(d time.Duration) { slept = append(slept, d) }
+
+		net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+		if err != nil {
+			t.Fatalf("%s: IsolateIPAMNetwork: %v", shape, err)
+		}
+		if net != NetworkName("kea", shape) {
+			t.Errorf("%s: net = %q, want %q", shape, net, NetworkName("kea", shape))
+		}
+		if !strings.Contains(method, "recreated") {
+			t.Errorf("%s: method = %q, want it to say the network was recreated", shape, method)
+		}
+		if len(slept) != 0 {
+			t.Errorf("%s: sleep was called %v although recreation succeeded", shape, slept)
+		}
+
+		var sawRemove, sawCreate bool
+		for _, c := range r.calls {
+			if strings.Contains(c, "docker network rm") {
+				sawRemove = true
+			}
+			if strings.Contains(c, "docker network create") {
+				sawCreate = true
+			}
+		}
+		if !sawRemove || !sawCreate {
+			t.Errorf("%s: IsolateIPAMNetwork did not both remove and create the network; calls: %v", shape, r.calls)
+		}
+	}
+}
+
+// When recreation fails, IsolateIPAMNetwork must fall back to sleeping
+// out the identity-hold window rather than silently handing back a
+// network that might still be holding a previous scenario's identity.
+func TestIsolateIPAMNetworkFallsBackToWaitingWhenRecreateFails(t *testing.T) {
+	shape := ShapeMacvlanIPAM
+	r := &fakeShapeRunner{fail: func(cmd string) bool {
+		return strings.Contains(cmd, "docker network create")
+	}}
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	if err != nil {
+		t.Fatalf("IsolateIPAMNetwork: %v", err)
+	}
+	if net != NetworkName("kea", shape) {
+		t.Errorf("net = %q, want %q", net, NetworkName("kea", shape))
+	}
+	if !strings.Contains(method, "waited") {
+		t.Errorf("method = %q, want it to say a wait was used", method)
+	}
+	if len(slept) != 1 || slept[0] != isolationWaitWindow {
+		t.Errorf("sleep calls = %v, want exactly [%s]", slept, isolationWaitWindow)
+	}
+}
+
+// NetworkUp removes the old network before recreating it, and that
+// removal is best-effort (NetworkDown ignores its own rm error). When
+// the rm half succeeds and the create half then fails, there is
+// nothing left by the old name at all -- the wait-out fallback must
+// not hand that name back as if it were still safe to reuse. This must
+// come back as an error (a lab error the caller aborts on), never a
+// network name for the next scenario to fail against at container
+// start and be wrongly recorded as a plugin FAIL (issue #3).
+func TestIsolateIPAMNetworkFailsWhenRecreateFailsAndTheOldNetworkIsGone(t *testing.T) {
+	shape := ShapeMacvlanIPAM
+	r := &fakeShapeRunner{fail: func(cmd string) bool {
+		return strings.Contains(cmd, "docker network create") || strings.Contains(cmd, "docker network inspect")
+	}}
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	if err == nil {
+		t.Fatalf("IsolateIPAMNetwork succeeded (net=%q method=%q) when the old network was actually gone", net, method)
+	}
+	if net != "" || method != "" {
+		t.Errorf("net=%q method=%q, want both empty on this error path", net, method)
+	}
+	if len(slept) != 0 {
+		t.Errorf("sleep was called %v; a lab error must not wait out the hold on a network that is not there", slept)
+	}
 }

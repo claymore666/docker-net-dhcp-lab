@@ -30,6 +30,11 @@ type Env struct {
 	// Empty means A6 has nothing to upgrade from and reports N/A.
 	PreviousPluginTag string
 	GitSHA            string
+	// SegGateway is the address the segment's DHCP server hands out as
+	// the router option, cell.source.seg_address stripped of its CIDR
+	// suffix (issue #3, A13 redesign): A13 checks the container's own
+	// default route against this, not against a hardcoded address.
+	SegGateway string
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -76,7 +81,37 @@ const (
 	NameA6  = "A6-plugin-upgrade"
 	NameA7  = "A7-plugin-killed"
 	NameA8  = "A8-fleet-burst"
+	NameA9  = "A9-stop-wait-start"
+	NameA10 = "A10-kill-restart-policy"
+	NameA11 = "A11-pause-unpause"
+	NameA12 = "A12-network-disconnect-reconnect"
+	// NameA13 runs under every shape (#3 part 2, redesigned 2026-09-27):
+	// one plugin network plus one ordinary Docker bridge network, never
+	// two plugin networks on the one segment (runA13's own doc comment).
+	NameA13 = "A13-two-networks-one-container"
+	NameA14 = "A14-short-lease-renewal"
+	NameA15 = "A15-compose-scale"
+	NameA16 = "A16-forced-remove-running"
 )
+
+// MinPoolAddresses is the most pool addresses one full A1-A16 pass under
+// one shape could hold onto, worst case (issue #3 part 2). The plugin's
+// own default is release_lease=never (docs/reference.md): nothing frees
+// a lease on its own, so every fresh MAC/client-id a scenario mints
+// keeps its address until the source's lease database is reset
+// (sourceadapter.Adapter.ResetLeases, called once before every shape).
+// Counted straight from the catalog, one fresh address for every
+// container start an event could mint in the worst case, even though
+// most of the time it reuses the same one: A1(1) + A2(2) + A3(2) +
+// A4(2) + A5(2) + A5b(2) + A6(1, persists across the upgrade) +
+// A7(1, persists across the kill) + A8(10, fleet burst) + A9(2) +
+// A10(2) + A11(1, pause/unpause mints nothing new) + A12(2) + A13(1,
+// its own second network is Docker's default IPAM, never this pool) +
+// A14(1) + A15(5, peak replica count) + A16(1) = 38. The pre-shape
+// check in cmd/labctl compares a pool's free addresses against this and
+// aborts the cell as a lab error, never as a scenario FAIL, when the
+// pool cannot cover even one shape's run.
+const MinPoolAddresses = 38
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
 // never has to duplicate that check: a scenario whose capability is
@@ -122,4 +157,12 @@ var Catalog = []Scenario{
 	{Name: NameA6, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA6},
 	{Name: NameA7, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA7},
 	{Name: NameA8, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA8},
+	{Name: NameA9, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA9},
+	{Name: NameA10, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA10},
+	{Name: NameA11, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA11},
+	{Name: NameA12, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA12},
+	{Name: NameA13, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA13},
+	{Name: NameA14, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runA14},
+	{Name: NameA15, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA15},
+	{Name: NameA16, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA16},
 }

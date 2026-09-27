@@ -1,10 +1,11 @@
 #!/bin/bash
-# The one command issue #3 part 1 asks for: bring up a cell, run every
-# group-A scenario across all three null-IPAM shapes, and leave one
-# evidence bundle behind (resolved lab.yaml, versions, a config diff
-# from stock, one capture spanning the whole run, and one verdict file
-# per scenario x shape). A FAIL is a finding about the plugin; this
-# script never retries or tunes a scenario to make one pass.
+# The one command issue #3 asks for: bring up a cell, run every group-A
+# scenario across all five shapes (the plugin's own null IPAM and its
+# own IPAM driver, each in bridge and macvlan, plus ipvlan), and leave
+# one evidence bundle behind (resolved lab.yaml, versions, a config
+# diff from stock, one capture spanning the whole run, and one verdict
+# file per scenario x shape). A FAIL is a finding about the plugin;
+# this script never retries or tunes a scenario to make one pass.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -81,10 +82,22 @@ done
 # One shape at a time, never overlapping: each labctl run tears its own
 # network down (deferred inside cmdRun) before returning, so the next
 # shape's NetworkUp never races it (issue #3 defeat list).
+#
+# Exit code 3 is labctl's own sentinel for a lab error, not a scenario
+# FAIL: the pre-shape pool check (#3) found the source's pool cannot
+# cover even this one shape's worst case. Continuing to the next shape
+# would run it against the same undersized pool, so the whole cell
+# aborts here instead.
 RUNNER_FAILED=0
-for shape in bridge macvlan ipvlan; do
+for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	echo "== scenarios: $shape =="
-	if ! go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap"; then
+	rc=0
+	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" || rc=$?
+	if [ "$rc" -eq 3 ]; then
+		echo "run-group-a: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
+		RUNNER_FAILED=1
+		break
+	elif [ "$rc" -ne 0 ]; then
 		echo "run-group-a: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2
 		RUNNER_FAILED=1
 	fi
@@ -95,8 +108,17 @@ echo "== capture: stop =="
 cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
 
 echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
+# dockerd tags a managed plugin's own stdout/stderr lines with
+# "plugin=<instance id>", never with the literal text "net-dhcp"
+# (internal/scenario/dockerhost.go's pluginJournalTagPattern, issue #3):
+# a plain `grep net-dhcp` here dropped every one of those lines, in
+# every bundle, at any log level. Match both, the same rule
+# pluginJournalLines uses, so this whole-cell dump and the per-scenario
+# captures agree on what counts as a plugin line, and so a window that
+# spans a plugin upgrade keeps the old instance's lines too, not only
+# the current one's.
 ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
-	| grep net-dhcp >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
+	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
 
 echo "== tear down cell $CELL =="
 LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK"

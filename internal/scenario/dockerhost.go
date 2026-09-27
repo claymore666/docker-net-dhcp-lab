@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,6 +109,200 @@ func waitContainerRunning(ctx context.Context, r sourceadapter.Runner, name stri
 		time.Sleep(1 * time.Second)
 	}
 	return fmt.Errorf("container %s did not report Running within 30s", name)
+}
+
+// pauseContainer freezes the container's own process tree via cgroups
+// freezer (docker pause) and confirms .State.Paused before returning
+// (issue #3, A11): a scenario that only checks the command exited
+// would miss a pause that never actually took.
+func pauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker pause %s", name)); err != nil {
+		return fmt.Errorf("docker pause %s: %w", name, err)
+	}
+	return waitContainerPaused(ctx, r, name)
+}
+
+// unpauseContainer reverses pauseContainer and confirms the container is
+// Running again, the same discipline pauseContainer applies to Paused.
+func unpauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker unpause %s", name)); err != nil {
+		return fmt.Errorf("docker unpause %s: %w", name, err)
+	}
+	return waitContainerRunning(ctx, r, name)
+}
+
+func waitContainerPaused(ctx context.Context, r sourceadapter.Runner, name string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Paused}}' %s", name))
+		if err == nil && strings.TrimSpace(out) == "true" {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s did not report Paused within 30s", name)
+}
+
+// disconnectNetwork and connectNetwork drive `docker network
+// disconnect`/`connect` against a running container (issue #3, A12):
+// docs/reference.md's own release_lease table names `docker network
+// disconnect` as one of the three events that make an endpoint leave
+// its sandbox, alongside `docker stop` and `docker rm` of a running
+// container.
+func disconnectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network disconnect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network disconnect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+func connectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network connect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network connect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+// networkContainsEndpoint reports whether net's own inspect output
+// still lists endpointID among its attached endpoints -- Docker's own
+// bookkeeping, not the plugin's (issue #3, A16/A15): the check "no
+// leftover endpoint or state" needs after a forced remove or a
+// scale-down.
+func networkContainsEndpoint(ctx context.Context, r sourceadapter.Runner, net, endpointID string) (bool, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker network inspect -f '{{json .Containers}}' %s", net))
+	if err != nil {
+		return false, fmt.Errorf("docker network inspect %s: %w", net, err)
+	}
+	return strings.Contains(out, endpointID), nil
+}
+
+// containerStartedAt and waitContainerRestarted let A10 confirm a
+// restart-policy recovery actually happened -- a fresh StartedAt, not
+// just Running still (or again) true, which a race right after `docker
+// kill` could otherwise read as "never went down" (issue #3).
+func containerStartedAt(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.StartedAt}}' %s", name))
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s StartedAt: %w", name, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func waitContainerRestarted(ctx context.Context, r sourceadapter.Runner, name, beforeStartedAt string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' %s", name))
+		if err == nil {
+			if fields := strings.Fields(out); len(fields) == 2 && fields[0] == "true" && fields[1] != beforeStartedAt {
+				return nil
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s was not confirmed restarted (Running, with a new StartedAt) within %s", name, timeout)
+}
+
+// crashContainer simulates a real crash by sending SIGKILL to the
+// container's own main process directly from the host, bypassing `docker
+// kill` (issue #3, A10, measured against a real cell 2026-09-26/27):
+// `docker kill` is itself a manual-stop request as far as dockerd's own
+// restart-manager is concerned, so a container with an `unless-stopped`
+// restart policy is never restarted after one -- confirmed against a real
+// docker host, whose journal logged "stopping restart-manager" and no
+// restart attempt at all right after the call, which is why A10 read as a
+// FAIL that never was one. A signal sent straight to the process leaves
+// the daemon with no such manual-stop intent to record, so the
+// restart-manager runs exactly as it would for a real unexpected exit.
+func crashContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Pid}}' %s", name))
+	if err != nil {
+		return fmt.Errorf("docker inspect %s Pid: %w", name, err)
+	}
+	pid := strings.TrimSpace(out)
+	if pid == "" || pid == "0" {
+		return fmt.Errorf("container %s has no live main process to crash (Pid=%q)", name, pid)
+	}
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo kill -9 %s", pid)); err != nil {
+		return fmt.Errorf("kill -9 %s (container %s): %w", pid, name, err)
+	}
+	return nil
+}
+
+// inspectContainerNetwork is inspectContainer naming the network
+// explicitly (issue #3, A13): inspectField's range template
+// concatenates every attached network's field into one string, which
+// is silently wrong the moment a container joins a second network, so
+// a multi-network container's per-network mac/address/endpoint id needs
+// this indexed form instead.
+func inspectContainerNetwork(ctx context.Context, r sourceadapter.Runner, shape Shape, name, netName string) (mac, addr, endpointID string, err error) {
+	get := func(field string) (string, error) {
+		out, err := r.Run(ctx, fmt.Sprintf(
+			`sudo docker inspect -f '{{with index .NetworkSettings.Networks %q}}{{.%s}}{{end}}' %s`, netName, field, name))
+		if err != nil {
+			return "", fmt.Errorf("docker inspect %s (network %s) %s: %w", name, netName, field, err)
+		}
+		return strings.TrimSpace(out), nil
+	}
+	if mac, err = get("MacAddress"); err != nil {
+		return "", "", "", err
+	}
+	if addr, err = get("IPAddress"); err != nil {
+		return "", "", "", err
+	}
+	if endpointID, err = get("EndpointID"); err != nil {
+		return "", "", "", err
+	}
+	if addr == "" || (mac == "" && shape != ShapeIpvlan) {
+		return "", "", "", fmt.Errorf("container %s on network %s has no mac/address reported", name, netName)
+	}
+	if shape == ShapeIpvlan && endpointID == "" {
+		return "", "", "", fmt.Errorf("container %s on network %s has no endpoint id reported, needed for its ipvlan client-id", name, netName)
+	}
+	return mac, addr, endpointID, nil
+}
+
+// containerDefaultGateway reads the container's own kernel routing
+// table via /proc/net/route rather than assuming the throwaway image
+// ships an `ip` binary (issue #3, A13 redesign): the default route is
+// the row whose Destination is 00000000, and its Gateway field is a
+// hex-encoded IPv4 address with its four bytes in reverse order.
+// Returns "" with no error when the container has no default route.
+func containerDefaultGateway(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker exec %s cat /proc/net/route", name))
+	if err != nil {
+		return "", fmt.Errorf("docker exec %s cat /proc/net/route: %w", name, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[1] != "00000000" {
+			continue
+		}
+		gw, err := hexLEToIPv4(fields[2])
+		if err != nil {
+			return "", fmt.Errorf("container %s default route gateway field %q: %w", name, fields[2], err)
+		}
+		return gw, nil
+	}
+	return "", nil
+}
+
+// hexLEToIPv4 decodes /proc/net/route's own gateway encoding: 8 hex
+// digits, byte-reversed relative to the address's normal dotted order
+// (e.g. a gateway printed elsewhere as w.x.y.z appears here as the hex
+// of z.y.x.w).
+func hexLEToIPv4(hex string) (string, error) {
+	if len(hex) != 8 {
+		return "", fmt.Errorf("want 8 hex digits, got %q", hex)
+	}
+	octets := make([]int64, 4)
+	for i := 0; i < 4; i++ {
+		v, err := strconv.ParseInt(hex[i*2:i*2+2], 16, 32)
+		if err != nil {
+			return "", fmt.Errorf("byte %d: %w", i, err)
+		}
+		octets[i] = v
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", octets[3], octets[2], octets[1], octets[0]), nil
 }
 
 func waitDockerBack(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) error {
@@ -341,25 +537,119 @@ func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, 
 	}
 }
 
+// pluginJournalTagPattern matches dockerd's own wrapper tag for a
+// managed plugin's stdout/stderr line, "plugin=<64-hex instance id>"
+// (issue #3, measured 2026-09-27 against a live cell at LOG_LEVEL=trace:
+// the real /IpamDriver.RequestAddress access line carries only this
+// tag, no literal "net-dhcp" substring at all). Matched generically, by
+// shape rather than by resolving one specific instance id: a whole-cell
+// dump's own window can span a plugin upgrade (A6), where dockerd keeps
+// tagging the daemon's journal with the OLD instance's id for lines it
+// logged before the swap -- a filter pinned to only the
+// currently-installed id would still lose those earlier lines. The
+// docker host under test never runs a second managed plugin, so this
+// generic tag alone is unambiguous here; it is also exactly the
+// reproduction check a live comparison uses (`journalctl -u docker |
+// grep -c plugin=`), so a bundle's line count matches that count
+// directly.
+var pluginJournalTagPattern = regexp.MustCompile(`plugin=[0-9a-f]+`)
+
+// pluginJournalLines returns the docker journal lines from the last
+// `since` that carry this plugin's own tag or the plain "net-dhcp"
+// substring (true for this plugin's own application log lines that
+// mention a path under /var/lib/net-dhcp). Every capture in this file
+// used to filter on the substring alone, so none of them ever kept an
+// RPC access line, at any log level, and a whole cell's worth of these
+// lines is what scripts/run-group-a.sh writes out as
+// "<cell>-plugin-log.txt" -- so this one function is also what that
+// dump's own grep step needs to match (issue #3).
+func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since string) ([]string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo journalctl -u docker --since '%s'", since))
+	if err != nil {
+		return nil, fmt.Errorf("journalctl -u docker: %w", err)
+	}
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "net-dhcp") || pluginJournalTagPattern.MatchString(line) {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
+}
+
 // CapturePluginLog writes the docker daemon's own journal, filtered to
 // this plugin's lines, to path -- the same evidence run-group-a.sh
 // already collects at the end of a cell's run, but callable directly so
 // a WaitPluginReady timeout can attach it to the BLOCKED cell before any
 // scenario runs (issue #3).
 func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) error {
-	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
+	lines, err := pluginJournalLines(ctx, r, "10 minutes ago")
 	if err != nil {
-		return fmt.Errorf("journalctl -u docker: %w", err)
+		return err
 	}
 	var b strings.Builder
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "net-dhcp") {
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		b.WriteString("# no plugin lines in the last 10 minutes of the docker journal\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// capturePluginLogAroundFirstRequestAddress writes the plugin's own
+// journal lines from the last 10 minutes to path, sliced to a
+// fixed window of context lines around the first line mentioning
+// RequestAddress. It is A5b's evidence capture (#3): a raw, mechanical
+// slice, never a judgement about what those lines show -- a
+// bridge-ipam run's first lease going out under a different client-id
+// than the fixed MAC is left for whoever reads the evidence, not this
+// capture to characterise. At the plugin's default LOG_LEVEL (info) the
+// access line this looks for is not emitted (it's a Trace call, see
+// pkg/util/http.go's WriteAccessLog); the placeholder says so instead of
+// leaving an unexplained miss. A trace-level rerun is a separate pass,
+// and needs pluginJournalLines's own tag match to find that access line
+// at all -- a plain "net-dhcp" substring match alone never does (see its
+// doc comment; measured 2026-09-27 against a live cell).
+func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
+	netDHCP, err := pluginJournalLines(ctx, r, "10 minutes ago")
+	if err != nil {
+		return err
+	}
+	const contextLines = 10
+	firstMatch := -1
+	for i, line := range netDHCP {
+		if strings.Contains(line, "RequestAddress") {
+			firstMatch = i
+			break
+		}
+	}
+	var b strings.Builder
+	if firstMatch == -1 {
+		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's plugin lines\n")
+		b.WriteString("# this is expected at the plugin's default LOG_LEVEL (info): the /IpamDriver.RequestAddress\n")
+		b.WriteString("# access line is only emitted at trace (pkg/util/http.go's WriteAccessLog is a Tracef call),\n")
+		b.WriteString("# and a clean lease grant otherwise logs nothing at info (docs/reference.md). Raising\n")
+		b.WriteString("# LOG_LEVEL to trace (docker plugin disable/set/enable) reproduces this evidence; that is\n")
+		b.WriteString("# a separate, disruptive pass, not this capture. If this file was captured during such a\n")
+		b.WriteString("# trace-level pass and still shows this placeholder, do not read that as the LOG_LEVEL\n")
+		b.WriteString("# explanation applying -- confirm with an independent live journal read before treating\n")
+		b.WriteString("# an absence here as a genuine finding.\n")
+	} else {
+		start := firstMatch - contextLines
+		if start < 0 {
+			start = 0
+		}
+		end := firstMatch + contextLines + 1
+		if end > len(netDHCP) {
+			end = len(netDHCP)
+		}
+		fmt.Fprintf(&b, "# plugin journal lines %d..%d of %d, centred on the first RequestAddress line (index %d)\n", start, end-1, len(netDHCP), firstMatch)
+		for _, line := range netDHCP[start:end] {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
-	}
-	if b.Len() == 0 {
-		b.WriteString("# no net-dhcp lines in the last 10 minutes of the docker journal\n")
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

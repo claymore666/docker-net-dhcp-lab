@@ -32,14 +32,22 @@ const (
 // an N/A carrying any, since a scenario that never ran has nothing to
 // point at but its own reason.
 type Verdict struct {
-	Scenario  string
-	Cell      string
-	Shape     Shape
-	Result    Result
-	Reason    string
-	Evidence  map[string]string
-	GitSHA    string
-	Timestamp time.Time
+	Scenario string
+	Cell     string
+	Shape    Shape
+	Result   Result
+	Reason   string
+	Evidence map[string]string
+	GitSHA   string
+	// IsolationMethod is which of IsolateIPAMNetwork's two paths ran
+	// right before this scenario, for the IPAM shapes only ("network
+	// recreated between scenarios" or the wait-out fallback's own
+	// message). Empty for a scenario that ran with no isolation step
+	// before it (the shape's first scenario, or a null-IPAM shape).
+	// Carried here, not only in isolation.log, so a verdict read on its
+	// own says how the network it ran against was isolated (issue #3).
+	IsolationMethod string
+	Timestamp       time.Time
 }
 
 // FileName is deterministic per scenario x cell x shape (issue #3): a
@@ -78,6 +86,9 @@ func Write(dir string, v Verdict) error {
 	fmt.Fprintf(&b, "result: %s\n", v.Result)
 	fmt.Fprintf(&b, "reason: %s\n", v.Reason)
 	fmt.Fprintf(&b, "git_sha: %s\n", v.GitSHA)
+	if v.IsolationMethod != "" {
+		fmt.Fprintf(&b, "isolation: %s\n", v.IsolationMethod)
+	}
 	fmt.Fprintf(&b, "timestamp: %s\n", v.Timestamp.UTC().Format(time.RFC3339))
 	labels := make([]string, 0, len(v.Evidence))
 	for label := range v.Evidence {

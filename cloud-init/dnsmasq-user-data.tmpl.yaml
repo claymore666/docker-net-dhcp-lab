@@ -27,6 +27,7 @@ runcmd:
     except-interface=eth0
     dhcp-authoritative
     dhcp-range=__POOL_START__,__POOL_END__,12h
+    dhcp-option=3,__SEG_GATEWAY__
     conf-dir=/etc/dnsmasq.d/,*.conf
     DNSMASQEOF
   - systemctl enable --now dnsmasq

@@ -18,17 +18,26 @@ ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\
 
 # Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
 # markers (e.g. exchange-1), role words that name how this project is
-# worked on (lead, coordinator, maintainer, reviewer), a private record
-# a public reader cannot open (handover) or the instruction it recorded
-# (directive), and a review finding's own number never belong in a
+# worked on (lead, coordinator, maintainer, reviewer), a citation to an
+# internal decision a public reader cannot resolve (ruling), a private
+# record a public reader cannot open (handover) or the instruction it
+# recorded (directive), a review finding's own number, a review round
+# label (review r1, review r2, ...) and the bare "the review" stand-in
+# for the process itself ("the review's own ...") never belong in a
 # public tracked file; caught by shape, so no real tag or role word
 # appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|finding [0-9]+|handover|directive)\b'
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|ruling|finding [0-9]+|handover|directive|review[[:space:]]+r[0-9]+|the[[:space:]]+review)\b'
 # A review verdict word is all-caps only in real use; the ordinary
 # English verb a comment might use ("this will hold", "make it clear")
 # is lowercase and must stay clean, so this one is matched
 # case-sensitively instead of joining PROCESS_RE above.
 VERDICT_RE='\b(HOLD|CLEAR)\b'
+# A review finding's short label ("F2") is the same citation "finding
+# [0-9]+" above catches spelled out, but only in its real, all-caps
+# shape: `cut -d: -f1`/`awk -F2` are ordinary, always-lowercase flag
+# syntax that must stay clean, so this is matched case-sensitively,
+# like VERDICT_RE, never folded into the case-insensitive PROCESS_RE.
+FINDING_CITE_RE='\bF[0-9]+\b'
 # A `.claude/...` path is never openable by a public reader; matched as
 # a plain fixed string, not a regex, so it needs no escaping and cannot
 # itself be misread as a pattern.
@@ -38,8 +47,9 @@ fail=0
 while IFS= read -r -d '' f; do
 	case "$f" in
 	*/.git/*) continue ;;
-	scripts/hygiene-check.sh) continue ;;      # its own regex literals look like addresses but are not
-	scripts/hygiene-check-test.sh) continue ;; # deliberately carries disallowed-looking fixtures, never real
+	scripts/hygiene-check.sh) continue ;;             # its own regex literals look like addresses but are not
+	scripts/hygiene-check-test.sh) continue ;;        # deliberately carries disallowed-looking fixtures, never real
+	scripts/commit-message-check-test.sh) continue ;; # same shape: fixtures for a throwaway repo, never real
 	esac
 	# A _test.go fixture legitimately carries made-up private addresses
 	# (a TempDir source, never shipped or run anywhere real), so it
@@ -83,7 +93,7 @@ while IFS= read -r -d '' f; do
 				continue
 			fi
 		fi
-		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qF "$CLAUDE_PATH" <<<"$line"; then
+		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qE "$FINDING_CITE_RE" <<<"$line" || grep -qiF "$CLAUDE_PATH" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi

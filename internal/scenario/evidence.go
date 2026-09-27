@@ -128,6 +128,23 @@ func lookupLease(ctx context.Context, a sourceadapter.Adapter, shape Shape, mac,
 	return l, leases, ok, nil
 }
 
+// lookupLeaseByClientID snapshots the source's table to path and
+// resolves the lease by an already-known client-id, never deriving one
+// (issue #3 part 2, A2's IPAM-shape fix): in the plugin's own IPAM
+// driver mode Docker mints a fresh MAC on every restart, but the plugin
+// re-sends the previous client identifier from the endpoint's own lease
+// record (docs/reference.md "Restart stability (MAC and IP)"), so the
+// row a restarted container now owns is found by that identifier, never
+// by the new MAC docker inspect reports after the restart.
+func lookupLeaseByClientID(ctx context.Context, a sourceadapter.Adapter, clientID, snapshotPath string) (sourceadapter.Lease, []sourceadapter.Lease, bool, error) {
+	leases, err := writeLeaseSnapshot(ctx, a, snapshotPath)
+	if err != nil {
+		return sourceadapter.Lease{}, nil, false, err
+	}
+	l, ok := findLeaseByClientID(leases, clientID)
+	return l, leases, ok, nil
+}
+
 // reachabilityWindow bounds reachableWithRetry: a single ping taken
 // right after a lease is confirmed can race the container's network
 // attach, since the network join call can return before the attach

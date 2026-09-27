@@ -2,6 +2,7 @@ package sourceadapter
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -374,7 +375,7 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 // Preservation: every adapter's declared capabilities are a fixed, known
 // set -- a change here is a deliberate claim, not an accident.
 func TestDeclaredCapabilities(t *testing.T) {
-	want := []Capability{CapV4, CapReserveMAC, CapRestart}
+	want := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 	for name, caps := range map[string][]Capability{
 		"kea":      (&KeaAdapter{}).Capabilities(),
 		"isc-dhcp": (&ISCDHCPAdapter{}).Capabilities(),
@@ -427,6 +428,192 @@ func TestSystemctlActionsUseFixedServiceNames(t *testing.T) {
 			if len(r.calls) != 1 || !strings.Contains(r.calls[0], op.verb+" "+c.svc) {
 				t.Fatalf("%s %s: want a call containing %q, got %v", c.name, op.name, op.verb+" "+c.svc, r.calls)
 			}
+		}
+	}
+}
+
+func TestShortenLeaseTimeRejectsNonPositiveSeconds(t *testing.T) {
+	for name, a := range map[string]Adapter{
+		"kea":      &KeaAdapter{Runner: &fakeRunner{}},
+		"isc-dhcp": &ISCDHCPAdapter{Runner: &fakeRunner{}},
+		"dnsmasq":  &DnsmasqAdapter{Runner: &fakeRunner{}},
+	} {
+		for _, bad := range []int{0, -1} {
+			if _, err := a.ShortenLeaseTime(context.Background(), bad); err == nil {
+				t.Errorf("%s: ShortenLeaseTime(%d) was accepted, want rejected", name, bad)
+			}
+		}
+	}
+}
+
+func TestShortenLeaseTimeFailsWhenPatternMissing(t *testing.T) {
+	cases := []struct {
+		name string
+		a    Adapter
+		r    *fakeRunner
+	}{
+		{"kea", &KeaAdapter{}, &fakeRunner{reply: "{\"Dhcp4\": {}}"}},
+		{"isc-dhcp", &ISCDHCPAdapter{}, &fakeRunner{reply: "subnet 10.0.0.0 netmask 255.255.255.0 {}"}},
+		{"dnsmasq", &DnsmasqAdapter{}, &fakeRunner{reply: "port=0\n"}},
+	}
+	for _, c := range cases {
+		switch v := c.a.(type) {
+		case *KeaAdapter:
+			v.Runner = c.r
+		case *ISCDHCPAdapter:
+			v.Runner = c.r
+		case *DnsmasqAdapter:
+			v.Runner = c.r
+		}
+		if _, err := c.a.ShortenLeaseTime(context.Background(), 40); err == nil {
+			t.Errorf("%s: ShortenLeaseTime found nothing to substitute yet was accepted", c.name)
+		}
+		if len(c.r.calls) != 1 {
+			t.Errorf("%s: want exactly one call (the read) before refusing, got %d", c.name, len(c.r.calls))
+		}
+	}
+}
+
+// TestShortenLeaseTimeSubstitutesAndRestores drives each adapter's real
+// ShortenLeaseTime against a config shaped like this cell's own
+// generated one (never the packaged .stock default -- issue #3, A14):
+// the short value must land in the write, a restart must follow, and
+// the returned restore closure must write back byte-for-byte what the
+// read call saw, including a reservation ReserveMAC could already have
+// added, then restart again.
+func TestShortenLeaseTimeSubstitutesAndRestores(t *testing.T) {
+	cases := []struct {
+		name       string
+		makeA      func(r Runner) Adapter
+		orig       string
+		wantShort  string
+		configPath string
+		svc        string
+	}{
+		{
+			name:       "dnsmasq",
+			makeA:      func(r Runner) Adapter { return &DnsmasqAdapter{Runner: r} },
+			orig:       "port=0\ndhcp-range=10.200.1.100,10.200.1.150,12h\ndhcp-host=aa:bb:cc:dd:ee:ff,10.200.1.100\n",
+			wantShort:  "dhcp-range=10.200.1.100,10.200.1.150,40",
+			configPath: "/etc/dnsmasq.conf",
+			svc:        "dnsmasq",
+		},
+		{
+			name:  "kea",
+			makeA: func(r Runner) Adapter { return &KeaAdapter{Runner: r} },
+			orig: `{
+"Dhcp4": {
+  "valid-lifetime": 3600,
+  "subnet4": [ { "id": 1 } ]
+}
+}
+`,
+			wantShort:  `"valid-lifetime": 40,`,
+			configPath: "/etc/kea/kea-dhcp4.conf",
+			svc:        "kea-dhcp4-server",
+		},
+		{
+			name:       "isc-dhcp",
+			makeA:      func(r Runner) Adapter { return &ISCDHCPAdapter{Runner: r} },
+			orig:       "default-lease-time 600;\nmax-lease-time 7200;\ninclude \"/etc/dhcp/lab-reservations.conf\";\n",
+			wantShort:  "default-lease-time 40;",
+			configPath: "/etc/dhcp/dhcpd.conf",
+			svc:        "isc-dhcp-server",
+		},
+	}
+	for _, c := range cases {
+		r := &fakeRunner{reply: c.orig}
+		a := c.makeA(r)
+
+		restore, err := a.ShortenLeaseTime(context.Background(), 40)
+		if err != nil {
+			t.Fatalf("%s: ShortenLeaseTime: %v", c.name, err)
+		}
+		if len(r.calls) != 3 {
+			t.Fatalf("%s: want 3 calls (read, write, restart), got %d: %v", c.name, len(r.calls), r.calls)
+		}
+		if !strings.Contains(r.calls[0], "cat "+c.configPath) {
+			t.Errorf("%s: call 0 = %q, want a read of %s", c.name, r.calls[0], c.configPath)
+		}
+		if !strings.Contains(r.calls[1], c.configPath) || !strings.Contains(r.calls[1], c.wantShort) {
+			t.Errorf("%s: write call = %q, want it to target %s and contain %q", c.name, r.calls[1], c.configPath, c.wantShort)
+		}
+		if !strings.Contains(r.calls[2], "restart "+c.svc) {
+			t.Errorf("%s: call 2 = %q, want a restart of %s", c.name, r.calls[2], c.svc)
+		}
+
+		r.calls = nil
+		if err := restore(context.Background()); err != nil {
+			t.Fatalf("%s: restore: %v", c.name, err)
+		}
+		if len(r.calls) != 2 {
+			t.Fatalf("%s: restore: want 2 calls (write, restart), got %d: %v", c.name, len(r.calls), r.calls)
+		}
+		if !strings.Contains(r.calls[0], c.configPath) || !strings.Contains(r.calls[0], c.orig) {
+			t.Errorf("%s: restore write = %q, want it to write the original config back byte-for-byte", c.name, r.calls[0])
+		}
+		if !strings.Contains(r.calls[1], "restart "+c.svc) {
+			t.Errorf("%s: restore call 1 = %q, want a restart of %s", c.name, r.calls[1], c.svc)
+		}
+	}
+}
+
+// TestResetLeasesStopsTruncatesAndStarts drives each adapter's real
+// ResetLeases (issue #3 part 2): one chained remote command that stops
+// the service, truncates its own lease file, and starts the service
+// again, in that order, so nothing else can read a half-cleared table
+// in between.
+func TestResetLeasesStopsTruncatesAndStarts(t *testing.T) {
+	cases := []struct {
+		name string
+		a    Adapter
+		svc  string
+		file string
+	}{
+		{"kea", &KeaAdapter{}, "kea-dhcp4-server", keaLeaseFile},
+		{"isc-dhcp", &ISCDHCPAdapter{}, "isc-dhcp-server", iscLeaseFile},
+		{"dnsmasq", &DnsmasqAdapter{}, "dnsmasq", dnsmasqLeaseFile},
+	}
+	for _, c := range cases {
+		r := &fakeRunner{}
+		switch v := c.a.(type) {
+		case *KeaAdapter:
+			v.Runner = r
+		case *ISCDHCPAdapter:
+			v.Runner = r
+		case *DnsmasqAdapter:
+			v.Runner = r
+		}
+		if err := c.a.ResetLeases(context.Background()); err != nil {
+			t.Fatalf("%s: ResetLeases: %v", c.name, err)
+		}
+		if len(r.calls) != 1 {
+			t.Fatalf("%s: want 1 chained call, got %d: %v", c.name, len(r.calls), r.calls)
+		}
+		call := r.calls[0]
+		stopAt := strings.Index(call, "stop "+c.svc)
+		truncAt := strings.Index(call, "truncate -s 0 "+c.file)
+		startAt := strings.Index(call, "start "+c.svc)
+		if stopAt < 0 || truncAt < 0 || startAt < 0 {
+			t.Fatalf("%s: call = %q, want it to stop %s, truncate %s and start %s", c.name, call, c.svc, c.file, c.svc)
+		}
+		if !(stopAt < truncAt && truncAt < startAt) {
+			t.Fatalf("%s: call = %q, want stop before truncate before start", c.name, call)
+		}
+	}
+}
+
+// TestResetLeasesPropagatesRunnerError: a failing remote command must
+// surface as an error, never a silent no-op that leaves the caller
+// believing the pool is now empty when it is not.
+func TestResetLeasesPropagatesRunnerError(t *testing.T) {
+	for name, a := range map[string]Adapter{
+		"kea":      &KeaAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+		"isc-dhcp": &ISCDHCPAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+		"dnsmasq":  &DnsmasqAdapter{Runner: &fakeRunner{err: errors.New("boom")}},
+	} {
+		if err := a.ResetLeases(context.Background()); err == nil {
+			t.Errorf("%s: ResetLeases with a failing runner was accepted, want an error", name)
 		}
 	}
 }

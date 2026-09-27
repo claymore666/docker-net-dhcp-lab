@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"regexp"
 	"strings"
 )
 
@@ -22,6 +23,11 @@ const (
 	CapV4         Capability = "v4"
 	CapReserveMAC Capability = "reserve-mac"
 	CapRestart    Capability = "restart"
+	// CapShortLease declares ShortenLeaseTime: a source that can run
+	// with a short-lived lease for one scenario, then be restored to
+	// its stock lease time (issue #3, A14). A declared capability is a
+	// claim until measured, the same as every other Capability here.
+	CapShortLease Capability = "short-lease"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -67,6 +73,23 @@ type Adapter interface {
 	// needs proof the container can still be reached, not only that the
 	// source's lease table still lists it.
 	Reachable(ctx context.Context, addr string) error
+	// ShortenLeaseTime installs a short-lived-lease config over the
+	// source's own stock config and restarts it, so a scenario can run
+	// past a lease's renewal point in bounded wall time (issue #3,
+	// A14). The returned restore func puts the stock config straight
+	// back and restarts again; a caller that never gets a restore func
+	// (a non-nil error) has made no change to restore. Scoped to A14
+	// alone: every other scenario's timing assumes the stock lease
+	// time, never this one's.
+	ShortenLeaseTime(ctx context.Context, seconds int) (restore func(ctx context.Context) error, err error)
+	// ResetLeases stops the source, truncates its lease file to zero
+	// bytes, and starts it again (issue #3 part 2). The plugin's own
+	// default is release_lease=never (docs/reference.md), so nothing
+	// else ever frees a lease between shapes: five shapes of fresh
+	// MACs/client-ids on the one small pool this lab uses run it out
+	// unless the runner resets the source before every shape, which is
+	// what this is for.
+	ResetLeases(ctx context.Context) error
 }
 
 // Runner executes one command on the source VM's own management
@@ -117,6 +140,66 @@ func reachable(ctx context.Context, r Runner, addr string) error {
 	}
 	if _, err := r.Run(ctx, "ping -c1 -W2 "+ip); err != nil {
 		return fmt.Errorf("ping %s: %w", ip, err)
+	}
+	return nil
+}
+
+// writeRemoteConfig overwrites path on r with content via a single
+// heredoc, the same one-command idiom internal/scenario's own
+// writeRemoteFile already uses -- no shell metacharacter in content is
+// ever interpreted, since content here is always a config file just
+// read back from this same host, never caller-supplied text.
+func writeRemoteConfig(ctx context.Context, r Runner, path, content string) error {
+	cmd := fmt.Sprintf("sudo tee %s >/dev/null <<'LABEOF'\n%sLABEOF\n", path, content)
+	_, err := r.Run(ctx, cmd)
+	return err
+}
+
+// shortenLeaseTimeViaSubstitution is every adapter's ShortenLeaseTime
+// body (issue #3, A14): capture the source's own currently RUNNING
+// config, apply re/repl once, write it back and restart, and hand the
+// caller a restore closure that puts the exact bytes it captured back
+// and restarts again -- so a reservation ReserveMAC already made before
+// this call survives the round trip untouched, and a re-run never drifts
+// further from the running config than one lease-time field.
+func shortenLeaseTimeViaSubstitution(ctx context.Context, r Runner, path string, re *regexp.Regexp, repl string, restart func(context.Context) error, label string) (func(context.Context) error, error) {
+	orig, err := r.Run(ctx, "sudo cat "+path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: read %s before shortening lease time: %w", label, path, err)
+	}
+	short := re.ReplaceAllString(orig, repl)
+	if short == orig {
+		return nil, fmt.Errorf("%s: lease-time pattern not found in the running config at %s; refusing to shorten blindly", label, path)
+	}
+	if err := writeRemoteConfig(ctx, r, path, short); err != nil {
+		return nil, fmt.Errorf("%s: write shortened lease time to %s: %w", label, path, err)
+	}
+	if err := restart(ctx); err != nil {
+		return nil, fmt.Errorf("%s: restart after shortening lease time: %w", label, err)
+	}
+	restore := func(ctx context.Context) error {
+		if err := writeRemoteConfig(ctx, r, path, orig); err != nil {
+			return fmt.Errorf("%s: restore original config to %s: %w", label, path, err)
+		}
+		return restart(ctx)
+	}
+	return restore, nil
+}
+
+// resetLeasesViaTruncate stops the service, truncates leaseFile to zero
+// bytes, and starts the service again, in one chained remote command
+// (issue #3 part 2) -- the same single-command idiom ReserveMAC's own
+// write-then-restart already uses on each adapter. GNU truncate creates
+// a missing file rather than erroring on one (coreutils truncate(1)),
+// so this works whether or not the source has ever written the file
+// yet. If the truncate or the start fails, the chain stops there and
+// the error names which step failed; the caller treats it as an
+// infrastructure error, the same as any other failed Restart/Stop/
+// Start.
+func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile, service, label string) error {
+	cmd := fmt.Sprintf("sudo systemctl stop %s && sudo truncate -s 0 %s && sudo systemctl start %s", service, leaseFile, service)
+	if _, err := r.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("%s: reset leases (stop %s, truncate %s, start %s): %w", label, service, leaseFile, service, err)
 	}
 	return nil
 }

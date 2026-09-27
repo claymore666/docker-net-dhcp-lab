@@ -285,6 +285,9 @@ fi
 echo "== hygiene fixture tests =="
 ./scripts/hygiene-check-test.sh
 
+echo "== commit-message check fixture tests =="
+./scripts/commit-message-check-test.sh
+
 echo "== no AI attribution =="
 if git rev-parse --verify origin/dev >/dev/null 2>&1; then
 	range="origin/dev..HEAD"
@@ -299,15 +302,12 @@ fi
 
 echo "== no process/role words in commit messages =="
 # Same range as the AI-attribution scan above: how this project is
-# worked on (who staffs it, work-tracking tags, review rounds) never
-# belongs in a commit that ships. Subjects and bodies only -- author/
-# committer identity is real and is not in scope here.
-processy=$(git log "$range" --format='%B' 2>/dev/null | grep -inE '\b(lead|coordinator|maintainer|reviewer|lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+)\b' || true) # hygiene: pattern literal, not prose
-if [ -n "$processy" ]; then
-	echo "verify.sh: process/role word found in a commit message:" >&2
-	echo "$processy" >&2
-	exit 1
-fi
+# worked on (who staffs it, work-tracking tags, review rounds, a
+# review finding's own number) never belongs in a commit that ships.
+# Pulled into its own script so its catches can be fixture-tested
+# (commit-message-check-test.sh below), the same split hygiene-check.sh
+# already has for tracked files.
+./scripts/commit-message-check.sh "$range"
 
 echo "== source daemons bind eth1 only =="
 ./scripts/source-bind-check.sh

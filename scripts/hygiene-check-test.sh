@@ -74,10 +74,17 @@ run_case "role word: maintainer" \
 	$'note: the maintainer approved it\n' fail || fail=1
 run_case "role word: reviewer" \
 	$'note: the reviewer held it\n' fail || fail=1
+# A citation to an internal decision a public reader cannot resolve
+# ("ruling item N") is the same dead-reference shape a role word is,
+# and must be caught the same way.
+run_case "internal citation: ruling" \
+	$'note: fixed per ruling item 3\n' fail || fail=1
 # A word that merely contains a role word as a substring must stay clean
 # (word-boundary check, not a bare substring match).
 run_case "substring, not a role word" \
 	$'note: a leading indent, a leaderboard entry\n' ok || fail=1
+run_case "substring, not the ruling word" \
+	$'note: overruling a previous decision\n' ok || fail=1
 # A capitalised role word must be caught too -- the reviewer's own case.
 run_case "role word, capitalised" \
 	$'Lead and Reviewer agreed this in round 2.\n' fail || fail=1
@@ -133,6 +140,11 @@ run_case "substring, not the directive word" \
 # caught as a fixed string, regardless of what precedes or follows it.
 run_case ".claude path" \
 	$'note: see .claude/tracks/lab.md for background\n' fail || fail=1
+# The same path, differently cased, is the same private path and must be
+# caught too -- a plain case-sensitive fixed-string match let a
+# capitalised or all-caps rendering of the path through uncaught.
+run_case ".claude path, different case" \
+	$'note: see .CLAUDE/tracks/lab.md for background\n' fail || fail=1
 # A _test.go fixture legitimately carries a made-up private address for
 # its own synthetic data and must still pass -- only the address check
 # keeps skipping test files.
@@ -146,8 +158,43 @@ run_case "test file, role word" \
 	$'// as the lead noted, this fixture is synthetic\n' fail sample_test.go || fail=1
 run_case "test file, handover pointer" \
 	$'// (.claude/handover/some-file.md)\n' fail sample_test.go || fail=1
+# commit-message-check-test.sh is the same shape of file as
+# hygiene-check-test.sh itself: a fixture suite that deliberately
+# carries disallowed-looking strings inside a throwaway git repo it
+# builds at run time, never a real commit here. It needs the same
+# blanket exemption hygiene-check.sh already gives its own fixture
+# file, or its own fixtures trip this check just by existing.
+run_case "commit-message-check-test.sh, role word, exempt" \
+	$'run_case "x" "fix: apply the reviewer note" "" fail\n' ok scripts/commit-message-check-test.sh || fail=1
+# A review-round label ("review r1") must be caught even with no other
+# marker on the line -- the shape a review finding's fix comment used
+# to cite itself with (issue #3).
+run_case "review-round label" \
+	$'// found gone (issue #3, review r1)\n' fail || fail=1
+# The bare "the review" stand-in for the process itself must be caught
+# too, the same leftover shape ("the review's own F1 requirement").
+run_case "the review, bare phrase" \
+	$'// that is the review'"'"'s own requirement\n' fail || fail=1
+# A finding cited by its short label ("F2"), all-caps, must be caught
+# even alone on the line, with no other marker present.
+run_case "finding citation, short label" \
+	$'// pool (F2, issue #3)\n' fail || fail=1
+# The ordinary, always-lowercase shell flag shape this codebase itself
+# uses (cut -d: -fN, the same idiom verify.sh and demo-source-cell.sh
+# run live) must stay clean -- only the all-caps finding label is
+# process detail, never a field-selector flag.
+run_case "cut field flag, not a finding label" \
+	$'line=$(grep -n x f | cut -d: -f1)\n' ok || fail=1
+run_case "cut field flag 2, not a finding label" \
+	$'field=$(cut -d: -f2 <<<"$x")\n' ok || fail=1
+# A word that merely contains an uppercase F immediately after a
+# non-word character but with no digit run long enough to look like a
+# citation stays clean too (word-boundary + digit-run check, not a bare
+# substring match) -- an uppercase hex/flag shape, not a finding label.
+run_case "uppercase F, no digit, not a finding label" \
+	$'note: use -F as the field separator\n' ok || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 31 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 41 cases behaved as expected"

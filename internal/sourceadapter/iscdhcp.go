@@ -18,11 +18,15 @@ type ISCDHCPAdapter struct {
 }
 
 func (a *ISCDHCPAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
 }
 
+// iscLeaseFile is the on-disk lease table this adapter reads directly
+// (Leases()) and is the file ResetLeases truncates (issue #3 part 2).
+const iscLeaseFile = "/var/lib/dhcp/dhcpd.leases"
+
 func (a *ISCDHCPAdapter) Leases(ctx context.Context) ([]Lease, error) {
-	out, err := a.Runner.Run(ctx, "sudo cat /var/lib/dhcp/dhcpd.leases")
+	out, err := a.Runner.Run(ctx, "sudo cat "+iscLeaseFile)
 	if err != nil {
 		return nil, fmt.Errorf("isc-dhcp: read dhcpd.leases: %w", err)
 	}
@@ -36,6 +40,9 @@ var (
 	iscHostRE       = regexp.MustCompile(`client-hostname\s+"([^"]*)";`)
 	iscStateRE      = regexp.MustCompile(`binding state\s+(\w+);`)
 	iscUIDRE        = regexp.MustCompile(`(?s)uid\s+"(.*?)";`)
+	// iscDefaultLeaseTimeRE matches dhcpd.conf's own default-lease-time
+	// setting (ShortenLeaseTime, #3, A14).
+	iscDefaultLeaseTimeRE = regexp.MustCompile(`default-lease-time\s+[0-9]+;`)
 )
 
 // decodeISCQuotedString turns dhcpd.leases' own C-style quoting for a
@@ -152,9 +159,37 @@ func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
 }
 
+// ResetLeases stops isc-dhcp-server, truncates iscLeaseFile, and starts
+// it again (issue #3 part 2).
+func (a *ISCDHCPAdapter) ResetLeases(ctx context.Context) error {
+	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, "isc-dhcp-server", "isc-dhcp")
+}
+
 func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {
 	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" isc-dhcp-server"); err != nil {
 		return fmt.Errorf("isc-dhcp: systemctl %s: %w", action, err)
 	}
 	return nil
+}
+
+// ShortenLeaseTime rewrites the RUNNING config's default-lease-time and
+// restarts (issue #3, A14). It captures /etc/dhcp/dhcpd.conf as it
+// stands right now, never /root/lab-stock-config/dhcpd.conf.stock: that
+// file is the package's own pre-install default, captured before this
+// cell's own subnet/pool/lab-reservations.conf include ever got written
+// over it, so restoring from it would drop this cell's whole working
+// config. max-lease-time is left untouched: it only caps a lease a
+// client explicitly requests a longer term for, and this scenario's
+// bare client takes whatever default-lease-time hands it, the same
+// RFC 2131 T1-at-roughly-half-the-lease fallback dnsmasq and Kea both
+// rely on here too, since dhcpd sends no explicit T1/T2 of its own
+// either.
+func (a *ISCDHCPAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(context.Context) error, error) {
+	if seconds <= 0 {
+		return nil, fmt.Errorf("isc-dhcp: lease time must be positive, got %d", seconds)
+	}
+	repl := fmt.Sprintf(`default-lease-time %d;`, seconds)
+	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
+		iscDefaultLeaseTimeRE, repl,
+		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 }
