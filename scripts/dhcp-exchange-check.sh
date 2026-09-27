@@ -62,3 +62,31 @@ dhcp_exchange_reason() {
 	fi
 	echo "$out"
 }
+
+# dhcp_exchange_mac_seen prints 1 if any packet in the capture carries
+# the given mac as its Client-Ethernet-Address, 0 otherwise (issue #8):
+# dhcp_exchange_reason's "no single xid ties ..." text covers both a
+# mac that appears but never completes the four messages and a mac
+# that never appears at all -- a resumed run's capture only covers the
+# shapes being re-run, so a deferred check's mac from an earlier run
+# can fall in the second case. The caller must have already confirmed
+# the capture itself is readable (dhcp_exchange_reason's own rc).
+dhcp_exchange_mac_seen() {
+	local pcap=$1 mac=$2 outfile
+	outfile=$(mktemp)
+	set +e
+	tcpdump -n -v -r "$pcap" 'udp port 67 or udp port 68' 2>/dev/null | awk -v want="$mac" '
+	/Client-Ethernet-Address/ {
+		cmac = $2
+		sub(/,$/, "", cmac)
+		if (tolower(cmac) == tolower(want)) { print 1; exit }
+	}
+	' >"$outfile"
+	set -e
+	if [ -s "$outfile" ]; then
+		echo 1
+	else
+		echo 0
+	fi
+	rm -f "$outfile"
+}

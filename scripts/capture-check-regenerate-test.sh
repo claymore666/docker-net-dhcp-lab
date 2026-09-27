@@ -15,7 +15,6 @@ trap 'rm -rf "$work"' EXIT
 
 cp "$DATA/dhcp-good.pcap" "$work/cellA.pcap"
 echo "capture check deferred to the final pcap, mac $GOOD_MAC" >"$work/cellA-bridge-A1-capture-check.txt"
-echo "capture check deferred to the final pcap, mac aa:bb:cc:dd:ee:ff" >"$work/cellA-macvlan-A14-capture-check.txt"
 
 "$REPO_ROOT/scripts/capture-check-regenerate.sh" cellA "$work" >/dev/null
 
@@ -25,9 +24,47 @@ if [[ "$got_clean" != *"clean 4-message exchange"* ]] || [[ "$got_clean" != *"$G
 	fail=1
 fi
 
-got_other=$(cat "$work/cellA-macvlan-A14-capture-check.txt")
-if [[ "$got_other" != *"disagreement"* ]] || [[ "$got_other" == *"deferred"* ]]; then
-	echo "capture-check-regenerate-test: FAIL -- case B (mac absent from the capture): expected a disagreement, got \"$got_other\"" >&2
+# Case B: a genuine disagreement -- the mac is present in the capture,
+# but its own exchange never completes (stops after OFFER). This must
+# still read as a real disagreement, not the "absent from the replayed
+# capture" error case D below. A separate cell name so it gets its own
+# pcap, never touching cellA's.
+cp "$DATA/dhcp-stops-after-offer.pcap" "$work/cellPartial.pcap"
+echo "capture check deferred to the final pcap, mac $GOOD_MAC" >"$work/cellPartial-macvlan-A14-capture-check.txt"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellPartial "$work" >/dev/null
+
+got_disagreement=$(cat "$work/cellPartial-macvlan-A14-capture-check.txt")
+if [[ "$got_disagreement" != *"capture disagreement"* ]] || [[ "$got_disagreement" == *"deferred"* ]] || [[ "$got_disagreement" == *"capture check error"* ]]; then
+	echo "capture-check-regenerate-test: FAIL -- case B (mac present, exchange incomplete): expected a real disagreement, got \"$got_disagreement\"" >&2
+	fail=1
+fi
+
+# Case D: the deferred mac never appears in the replayed capture at
+# all (the usual cause: a resumed run's capture starts after an
+# earlier run's shapes already finished). This is an error, never a
+# disagreement -- there is nothing to disagree with.
+echo "capture check deferred to the final pcap, mac aa:bb:cc:dd:ee:ff" >"$work/cellA-macvlan-A14-capture-check.txt"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellA "$work" >/dev/null
+got_absent=$(cat "$work/cellA-macvlan-A14-capture-check.txt")
+if [[ "$got_absent" == *"disagreement"* ]] || [[ "$got_absent" == *"deferred"* ]]; then
+	echo "capture-check-regenerate-test: FAIL -- case D (mac absent from the replayed capture): expected an error, got \"$got_absent\"" >&2
+	fail=1
+fi
+if [[ "$got_absent" != *"aa:bb:cc:dd:ee:ff"* ]]; then
+	echo "capture-check-regenerate-test: FAIL -- case D (mac absent from the replayed capture): expected the mac in the error text, got \"$got_absent\"" >&2
+	fail=1
+fi
+
+# Case E: a file that already has a real verdict (from an earlier
+# regenerate, or written final by some other path) is never rewritten,
+# even when replayed against a capture that would produce a different
+# reading. Reuses case A's already-clean file.
+before=$(cat "$work/cellA-bridge-A1-capture-check.txt")
+cp "$DATA/dhcp-wrong-mac.pcap" "$work/cellA.pcap"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellA "$work" >/dev/null
+after=$(cat "$work/cellA-bridge-A1-capture-check.txt")
+if [ "$before" != "$after" ]; then
+	echo "capture-check-regenerate-test: FAIL -- case E (already-final file): rewritten, was \"$before\", now \"$after\"" >&2
 	fail=1
 fi
 

@@ -151,6 +151,23 @@ else
 	echo "verify.sh: tcpdump not installed, skipping" >&2
 fi
 
+echo "== run-group-a.sh regenerates capture checks only after the final pcap is in place (issue #8) =="
+# Exact, anchored line matches, same discipline as the preflight check
+# above: a neutered call (commented out, piped through "|| true")
+# fails this too, not only a deleted one. The ordering check is what
+# matters -- regenerate must run after capture-stop has written the
+# final, whole-cell pcap, never against a capture still in progress.
+stop_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-stop\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$WORK"[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
+regen_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-check-regenerate\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$EVIDENCE_DIR"[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
+if [ -z "$stop_line" ] || [ -z "$regen_line" ]; then
+	echo "verify.sh: run-group-a.sh does not call capture-stop.sh and capture-check-regenerate.sh as their own, unmodified commands" >&2
+	exit 1
+fi
+if [ "$regen_line" -le "$stop_line" ]; then
+	echo "verify.sh: run-group-a.sh calls capture-check-regenerate.sh (line $regen_line) before capture-stop.sh (line $stop_line)" >&2
+	exit 1
+fi
+
 echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
 ./scripts/lab-known-hosts-test.sh
 
