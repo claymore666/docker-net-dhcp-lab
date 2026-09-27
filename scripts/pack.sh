@@ -42,6 +42,20 @@ if [ ! -f "$DENYLIST" ]; then
 	echo "pack: REFUSED -- denylist file $DENYLIST does not exist" >&2
 	exit 1
 fi
+# A denylist with nothing but blank lines and comments checks nothing,
+# the same gap as no denylist at all, and is refused the same way; a
+# name line is anything left after the blank/comment skip the scan
+# loop below already applies.
+deny_names=0
+while IFS= read -r pattern || [ -n "$pattern" ]; do
+	[ -z "$pattern" ] && continue
+	case "$pattern" in '#'*) continue ;; esac
+	deny_names=$((deny_names + 1))
+done <"$DENYLIST"
+if [ "$deny_names" -eq 0 ]; then
+	echo "pack: REFUSED -- denylist file $DENYLIST names no real entries (empty or comments only)" >&2
+	exit 1
+fi
 echo "pack: checking against denylist $DENYLIST" >&2
 
 STAGE=$(mktemp -d)
@@ -52,9 +66,9 @@ cp -a "$BUNDLE_DIR" "$STAGED_BUNDLE"
 fail=0
 
 # A verdict's evidence.<label> line is written by an older run's own
-# scenario.Write as a path on the machine that ran it (fixed for new
-# runs, issue #4 fix round); normalize every such line here too, so a
-# bundle still packs clean from wherever it has since been copied to.
+# scenario.Write as a path on the machine that ran it (issue #4 fixes
+# this for new runs); normalize every such line here too, so a bundle
+# still packs clean from wherever it has since been copied to.
 # scenario.Write always puts an evidence file directly beside its
 # verdict file, so an absolute value whose base name matches a real
 # sibling of vf becomes just that base name; no such sibling is a real

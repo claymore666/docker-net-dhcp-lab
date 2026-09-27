@@ -97,6 +97,18 @@ run_case "no denylist given refuses" \
 run_case "denylist path that does not exist refuses" \
 	$'note: nothing of interest here\n' fail "$tmp/does-not-exist.txt" || fail=1
 
+# A denylist file that exists but names no real entry -- empty, or
+# comments and blank lines only -- checks nothing, the same gap as no
+# denylist at all, and must refuse the same way.
+empty_deny="$tmp/denylist-empty.txt"
+: >"$empty_deny"
+comment_deny="$tmp/denylist-comment-only.txt"
+printf '%s\n' "# only a comment" "" >"$comment_deny"
+run_case "empty denylist file refuses" \
+	$'note: nothing of interest here\n' fail "$empty_deny" || fail=1
+run_case "comment-only denylist file refuses" \
+	$'note: nothing of interest here\n' fail "$comment_deny" || fail=1
+
 # An evidence line already relative to the bundle is left alone and
 # still packs; one naming a real path elsewhere on the filesystem
 # (never inside this bundle) is a leak of the host's own layout and

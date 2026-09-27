@@ -22,11 +22,11 @@ cd "$REPO_ROOT"
 # internal decision a public reader cannot resolve (ruling), a private
 # record a public reader cannot open (handover) or the instruction it
 # recorded (directive), a review finding's own number, a review round
-# label (review r1, review r2, ...) and the bare "the review" stand-in
-# for the process itself ("the review's own ...") never belong in a
-# public tracked file; caught by shape, so no real tag or role word
-# appears here.
-PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|ruling|finding [0-9]+|handover|directive|review[[:space:]]+r[0-9]+|the[[:space:]]+review)\b'
+# label (review r1, review r2, ..., or the bare "fix round") and the
+# bare "the review" stand-in for the process itself ("the review's own
+# ...") never belong in a public tracked file; caught by shape, so no
+# real tag or role word appears here.
+PROCESS_RE='\b(lab-(impl|rev)-[a-zA-Z0-9]+|exchange-[0-9]+|lead|coordinator|maintainer|reviewer|ruling|finding [0-9]+|handover|directive|review[[:space:]]+r[0-9]+|fix[[:space:]]+round|the[[:space:]]+review)\b'
 # A review verdict word is all-caps only in real use; the ordinary
 # English verb a comment might use ("this will hold", "make it clear")
 # is lowercase and must stay clean, so this one is matched
