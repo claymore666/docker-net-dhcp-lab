@@ -317,14 +317,14 @@ func TestIsolateIPAMNetworkFallsBackToWaitingWhenRecreateFails(t *testing.T) {
 	}
 }
 
-// F2 (review r1, issue #3): NetworkUp removes the old network before
-// recreating it, and that removal is best-effort (NetworkDown ignores
-// its own rm error). When the rm half succeeds and the create half then
-// fails, there is nothing left by the old name at all -- the wait-out
-// fallback must not hand that name back as if it were still safe to
-// reuse. This must come back as an error (a lab error the caller
-// aborts on), never a network name for the next scenario to fail
-// against at container start and be wrongly recorded as a plugin FAIL.
+// NetworkUp removes the old network before recreating it, and that
+// removal is best-effort (NetworkDown ignores its own rm error). When
+// the rm half succeeds and the create half then fails, there is
+// nothing left by the old name at all -- the wait-out fallback must
+// not hand that name back as if it were still safe to reuse. This must
+// come back as an error (a lab error the caller aborts on), never a
+// network name for the next scenario to fail against at container
+// start and be wrongly recorded as a plugin FAIL (issue #3).
 func TestIsolateIPAMNetworkFailsWhenRecreateFailsAndTheOldNetworkIsGone(t *testing.T) {
 	shape := ShapeMacvlanIPAM
 	r := &fakeShapeRunner{fail: func(cmd string) bool {

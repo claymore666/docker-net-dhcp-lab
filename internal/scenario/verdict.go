@@ -45,8 +45,7 @@ type Verdict struct {
 	// message). Empty for a scenario that ran with no isolation step
 	// before it (the shape's first scenario, or a null-IPAM shape).
 	// Carried here, not only in isolation.log, so a verdict read on its
-	// own says how the network it ran against was isolated (issue #3,
-	// review r1 F2).
+	// own says how the network it ran against was isolated (issue #3).
 	IsolationMethod string
 	Timestamp       time.Time
 }

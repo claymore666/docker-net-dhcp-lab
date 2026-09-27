@@ -527,7 +527,7 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 }
 
 // The isolation method belongs in the verdict file itself, not only in
-// isolation.log (issue #3, review r1 F2): a verdict read on its own
+// isolation.log (issue #3): a verdict read on its own
 // must say how the network it ran against was isolated.
 func TestWriteRecordsIsolationMethodWhenSet(t *testing.T) {
 	dir := t.TempDir()

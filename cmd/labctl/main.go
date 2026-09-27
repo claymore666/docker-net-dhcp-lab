@@ -388,7 +388,7 @@ func cmdRun(args []string) int {
 				// this or any scenario still queued behind it, rather
 				// than letting the next one run against (and fail
 				// against) a network that IsolateIPAMNetwork itself
-				// found gone (issue #3, review r1 F2).
+				// found gone (issue #3).
 				fmt.Fprintln(os.Stderr, "labctl run: IsolateIPAMNetwork:", err)
 				return 1
 			}
@@ -404,7 +404,7 @@ func cmdRun(args []string) int {
 		v := scenario.RunOne(ctx, s, env)
 		// Recorded in the verdict itself, not only in isolation.log, so
 		// a read of one verdict file says how its network was isolated
-		// without needing the sibling log (issue #3, review r1 F2).
+		// without needing the sibling log (issue #3).
 		v.IsolationMethod = isolationMethod
 		if err := scenario.Write(evidenceDir, v); err != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)

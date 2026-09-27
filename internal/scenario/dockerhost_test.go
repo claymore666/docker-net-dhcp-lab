@@ -330,7 +330,7 @@ func TestCapturePluginLogAroundFirstRequestAddressFindsATagOnlyLine(t *testing.T
 // keeps the OLD instance's tag on lines it logged before the swap, and
 // the new instance gets its own, different tag. pluginJournalLines must
 // keep both, not only whichever id happens to be installed when the
-// capture runs -- that is the review's own F1 requirement (issue #3).
+// capture runs (issue #3).
 func TestPluginJournalLinesKeepsLinesFromEveryPluginInstanceInTheWindow(t *testing.T) {
 	const oldID = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
 	const newID = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"

@@ -393,7 +393,7 @@ const isolationWaitWindow = 80 * time.Second
 // comes back as err with net and method empty, so the caller aborts
 // this shape's run without writing a verdict for any scenario still
 // queued behind it, the same way it already does for an undersized
-// pool (review r1, F2, issue #3).
+// pool (issue #3).
 func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, sleep func(time.Duration)) (net, method string, err error) {
 	if shape != ShapeBridgeIPAM && shape != ShapeMacvlanIPAM {
 		return "", "", fmt.Errorf("isolateipamnetwork: shape %q is not an IPAM shape; the identity hold this isolates against does not exist under null-IPAM (docs/reference.md)", shape)
@@ -417,7 +417,7 @@ func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string
 
 // networkExists reports whether net is a network docker currently
 // knows about. IsolateIPAMNetwork's wait-out fallback is only safe to
-// take when this is true (issue #3, review r1 F2): a `docker network
+// take when this is true (issue #3): a `docker network
 // inspect` that fails means there is nothing left for the fallback to
 // reuse.
 func networkExists(ctx context.Context, r sourceadapter.Runner, net string) bool {
