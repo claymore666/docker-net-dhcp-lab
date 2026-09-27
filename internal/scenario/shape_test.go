@@ -316,3 +316,31 @@ func TestIsolateIPAMNetworkFallsBackToWaitingWhenRecreateFails(t *testing.T) {
 		t.Errorf("sleep calls = %v, want exactly [%s]", slept, isolationWaitWindow)
 	}
 }
+
+// F2 (review r1, issue #3): NetworkUp removes the old network before
+// recreating it, and that removal is best-effort (NetworkDown ignores
+// its own rm error). When the rm half succeeds and the create half then
+// fails, there is nothing left by the old name at all -- the wait-out
+// fallback must not hand that name back as if it were still safe to
+// reuse. This must come back as an error (a lab error the caller
+// aborts on), never a network name for the next scenario to fail
+// against at container start and be wrongly recorded as a plugin FAIL.
+func TestIsolateIPAMNetworkFailsWhenRecreateFailsAndTheOldNetworkIsGone(t *testing.T) {
+	shape := ShapeMacvlanIPAM
+	r := &fakeShapeRunner{fail: func(cmd string) bool {
+		return strings.Contains(cmd, "docker network create") || strings.Contains(cmd, "docker network inspect")
+	}}
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	if err == nil {
+		t.Fatalf("IsolateIPAMNetwork succeeded (net=%q method=%q) when the old network was actually gone", net, method)
+	}
+	if net != "" || method != "" {
+		t.Errorf("net=%q method=%q, want both empty on this error path", net, method)
+	}
+	if len(slept) != 0 {
+		t.Errorf("sleep was called %v; a lab error must not wait out the hold on a network that is not there", slept)
+	}
+}

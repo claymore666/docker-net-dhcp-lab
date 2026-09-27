@@ -378,14 +378,22 @@ func cmdRun(args []string) int {
 	}
 
 	failed := 0
+	isolationMethod := ""
 	for i, s := range scenariosToRun {
 		if isolateBetweenScenarios && i > 0 {
 			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, cellName, shape, nil)
 			if err != nil {
+				// A failed isolation is a lab error, never a scenario
+				// result: returning here writes no verdict at all for
+				// this or any scenario still queued behind it, rather
+				// than letting the next one run against (and fail
+				// against) a network that IsolateIPAMNetwork itself
+				// found gone (issue #3, review r1 F2).
 				fmt.Fprintln(os.Stderr, "labctl run: IsolateIPAMNetwork:", err)
 				return 1
 			}
 			env.Network = newNet
+			isolationMethod = method
 			line := fmt.Sprintf("%s %s: before %s: %s\n", cellName, shape, s.Name, method)
 			fmt.Print(line)
 			if _, err := isolationLog.WriteString(line); err != nil {
@@ -394,6 +402,10 @@ func cmdRun(args []string) int {
 			}
 		}
 		v := scenario.RunOne(ctx, s, env)
+		// Recorded in the verdict itself, not only in isolation.log, so
+		// a read of one verdict file says how its network was isolated
+		// without needing the sibling log (issue #3, review r1 F2).
+		v.IsolationMethod = isolationMethod
 		if err := scenario.Write(evidenceDir, v); err != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
 			return 1

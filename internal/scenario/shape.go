@@ -380,6 +380,20 @@ const isolationWaitWindow = 80 * time.Second
 // Returns the network name the caller's Env.Network should use next,
 // and which method this call actually used, to be logged so a redo
 // pass's own evidence says how each scenario pair was isolated.
+//
+// The wait-out fallback is only safe when the network it is about to
+// reuse still exists. NetworkUp always runs NetworkDown first, and
+// NetworkDown ignores its own `docker network rm` error (it has to,
+// since it also runs on a network that was never created): if the rm
+// half of that pair succeeded and a later step in NetworkUp then
+// failed, nothing is left by that name at all, and sleeping out the
+// hold before handing that name back would let the next scenario fail
+// at container start on a network that is not there -- recorded as a
+// plugin FAIL for a lab fault. That case is a lab error instead: it
+// comes back as err with net and method empty, so the caller aborts
+// this shape's run without writing a verdict for any scenario still
+// queued behind it, the same way it already does for an undersized
+// pool (review r1, F2, issue #3).
 func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, sleep func(time.Duration)) (net, method string, err error) {
 	if shape != ShapeBridgeIPAM && shape != ShapeMacvlanIPAM {
 		return "", "", fmt.Errorf("isolateipamnetwork: shape %q is not an IPAM shape; the identity hold this isolates against does not exist under null-IPAM (docs/reference.md)", shape)
@@ -391,6 +405,22 @@ func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string
 	if upErr == nil {
 		return newNet, "network recreated between scenarios", nil
 	}
+	existing := NetworkName(cell, shape)
+	if !networkExists(ctx, r, existing) {
+		return "", "", fmt.Errorf(
+			"isolateipamnetwork: network recreate failed (%w) and %s no longer exists (NetworkUp's own removal of the old network succeeded before the failing step); this is a lab error, not a scenario to run against a missing network",
+			upErr, existing)
+	}
 	sleep(isolationWaitWindow)
-	return NetworkName(cell, shape), fmt.Sprintf("network recreate failed (%v); waited %s for the identity-hold window to expire instead", upErr, isolationWaitWindow), nil
+	return existing, fmt.Sprintf("network recreate failed (%v); waited %s for the identity-hold window to expire instead", upErr, isolationWaitWindow), nil
+}
+
+// networkExists reports whether net is a network docker currently
+// knows about. IsolateIPAMNetwork's wait-out fallback is only safe to
+// take when this is true (issue #3, review r1 F2): a `docker network
+// inspect` that fails means there is nothing left for the fallback to
+// reuse.
+func networkExists(ctx context.Context, r sourceadapter.Runner, net string) bool {
+	_, err := r.Run(ctx, fmt.Sprintf("sudo docker network inspect %s >/dev/null", net))
+	return err == nil
 }

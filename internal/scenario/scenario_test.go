@@ -526,6 +526,44 @@ func TestWriteAcceptsWellFormedVerdictAndFileNameIsDeterministic(t *testing.T) {
 	}
 }
 
+// The isolation method belongs in the verdict file itself, not only in
+// isolation.log (issue #3, review r1 F2): a verdict read on its own
+// must say how the network it ran against was isolated.
+func TestWriteRecordsIsolationMethodWhenSet(t *testing.T) {
+	dir := t.TempDir()
+	v := Verdict{Scenario: NameA2, Cell: "kea", Shape: ShapeMacvlanIPAM, Result: NA,
+		Reason: "n/a", IsolationMethod: "network recreated between scenarios", Timestamp: time.Now()}
+	if err := Write(dir, v); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "isolation: network recreated between scenarios\n") {
+		t.Fatalf("verdict file does not record the isolation method: %q", got)
+	}
+}
+
+// A scenario that ran with no isolation step before it (the shape's
+// first scenario, or a null-IPAM shape) must not print an empty
+// "isolation:" line -- its absence is itself the fact.
+func TestWriteOmitsIsolationLineWhenNotSet(t *testing.T) {
+	dir := t.TempDir()
+	v := Verdict{Scenario: NameA1, Cell: "kea", Shape: ShapeBridge, Result: NA,
+		Reason: "n/a", Timestamp: time.Now()}
+	if err := Write(dir, v); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "isolation:") {
+		t.Fatalf("verdict file carries an isolation line when none was set: %q", got)
+	}
+}
+
 // ipvlan slaves share the parent NIC's MAC, so an address-only match
 // (the old rule) could attribute one container's lease to another when
 // both held the same address at different times within one snapshot's
