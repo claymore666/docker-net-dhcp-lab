@@ -12,6 +12,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxIfnameLen is IFNAMSIZ-1: the kernel's Linux network interface name
+// limit (16 bytes including a terminating NUL).
+const maxIfnameLen = 15
+
 // Every field also carries a json tag, matching the yaml name: `labctl
 // resolve` emits JSON and the provisioning shell scripts read it with jq
 // against these lowercase, snake_case paths (never the Go field names).
@@ -124,6 +128,13 @@ func (c *Config) Validate() error {
 		}
 		if cell.Segment.Bridge == "" {
 			return fmt.Errorf("cell %s: segment.bridge is required", cell.Name)
+		}
+		// IFNAMSIZ is 16 bytes including the terminating NUL, so the
+		// kernel accepts at most 15 characters; virsh's own rejection of
+		// a longer name ("not a valid ifname") only surfaces once
+		// up-cell.sh is already mid-bring-up (issue #8, measured live).
+		if len(cell.Segment.Bridge) > maxIfnameLen {
+			return fmt.Errorf("cell %s: segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", cell.Name, cell.Segment.Bridge, len(cell.Segment.Bridge), maxIfnameLen)
 		}
 		if seenBridge[cell.Segment.Bridge] {
 			return fmt.Errorf("cell %s: bridge %s reused by another cell", cell.Name, cell.Segment.Bridge)

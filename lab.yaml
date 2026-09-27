@@ -110,7 +110,7 @@ cells:
       Kea, same as the kea cell above, but the Docker host is Ubuntu
       24.04 instead of the reference Debian 13. Issue #8.
     segment:
-      bridge: lab-br-host-ubuntu2404
+      bridge: lab-br-ubu2404
       subnet: 10.200.4.0/24
     source:
       type: kea
@@ -137,7 +137,7 @@ cells:
       with docker-ce pinned to the plugin's oldest supported engine,
       20.10. Issue #8.
     segment:
-      bridge: lab-br-host-debian11-docker2010
+      bridge: lab-br-deb11d20
       subnet: 10.200.5.0/24
     source:
       type: kea

@@ -224,6 +224,27 @@ func TestRejectsUnregisteredSourceBaseImage(t *testing.T) {
 	}
 }
 
+// A bridge name over IFNAMSIZ-1 (15 characters) is accepted by the YAML
+// parser but rejected by the kernel only once up-cell.sh is already
+// mid-bring-up (issue #8, measured live: virsh's own "not a valid
+// ifname"). Validate must catch it first.
+func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: lab-br-a-name-that-is-too-long", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("a 39-character bridge name was accepted")
+	}
+}
+
+func TestAcceptsBridgeNameAtIfnameLimit(t *testing.T) {
+	fifteen := "lab-br-ref-only" // exactly 15 characters, the existing convention
+	if len(fifteen) != 15 {
+		t.Fatalf("test fixture drifted: %q is %d characters, not 15", fifteen, len(fifteen))
+	}
+	if _, err := Load(write(t, goodMin)); err != nil {
+		t.Fatalf("a 15-character bridge name was rejected: %v", err)
+	}
+}
+
 // engine_version is optional (issue #8): a cell that never sets it must
 // still load, same as before this field existed.
 func TestEngineVersionOptional(t *testing.T) {
