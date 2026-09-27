@@ -168,6 +168,20 @@ if [ "$regen_line" -le "$stop_line" ]; then
 	exit 1
 fi
 
+# regenerate reads $EVIDENCE_DIR/<cell>.pcap, which this cp line writes
+# (capture-stop.sh only writes the copy inside $WORK): ordered after
+# capture-stop.sh alone is not enough, the copy into the evidence dir
+# must itself come before the regenerate call.
+cp_line=$(grep -nE '^cp[[:space:]]+"\$WORK/observer\.pcap"[[:space:]]+"\$EVIDENCE_DIR/\$\{CELL\}\.pcap"[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+true[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
+if [ -z "$cp_line" ]; then
+	echo "verify.sh: run-group-a.sh does not copy the final pcap into the evidence dir as its own, unmodified command" >&2
+	exit 1
+fi
+if [ "$regen_line" -le "$cp_line" ]; then
+	echo "verify.sh: run-group-a.sh calls capture-check-regenerate.sh (line $regen_line) before copying the final pcap into the evidence dir (line $cp_line)" >&2
+	exit 1
+fi
+
 echo "== per-cell known_hosts survives a rebuilt VM's new host key =="
 ./scripts/lab-known-hosts-test.sh
 

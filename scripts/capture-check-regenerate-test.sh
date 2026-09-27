@@ -68,6 +68,33 @@ if [ "$before" != "$after" ]; then
 	fail=1
 fi
 
+# Case F: a file that already reads a real disagreement (not the
+# deferred marker) is left exactly as it is on replay, written directly
+# rather than produced by an earlier regenerate call, since the guard
+# must not care how the file got there. cellA.pcap is set to the clean
+# fixture first, so a mutant that only recognises the guard's clean text
+# would reprocess this file and overwrite it with a clean verdict.
+cp "$DATA/dhcp-good.pcap" "$work/cellA.pcap"
+echo "capture disagreement for mac $GOOD_MAC: an earlier, unrelated reason" >"$work/cellA-bridge-A2-capture-check.txt"
+before_disagreement=$(cat "$work/cellA-bridge-A2-capture-check.txt")
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellA "$work" >/dev/null
+after_disagreement=$(cat "$work/cellA-bridge-A2-capture-check.txt")
+if [ "$before_disagreement" != "$after_disagreement" ]; then
+	echo "capture-check-regenerate-test: FAIL -- case F (already-final disagreement file): rewritten, was \"$before_disagreement\", now \"$after_disagreement\"" >&2
+	fail=1
+fi
+
+# Case G: a file that already reads a capture error is left exactly as
+# it is on replay too, same reasoning as case F.
+echo "capture check error, mac $GOOD_MAC: this mac has no packets in the replayed capture, the capture likely postdates its exchange" >"$work/cellA-bridge-A3-capture-check.txt"
+before_error=$(cat "$work/cellA-bridge-A3-capture-check.txt")
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellA "$work" >/dev/null
+after_error=$(cat "$work/cellA-bridge-A3-capture-check.txt")
+if [ "$before_error" != "$after_error" ]; then
+	echo "capture-check-regenerate-test: FAIL -- case G (already-final error file): rewritten, was \"$before_error\", now \"$after_error\"" >&2
+	fail=1
+fi
+
 # Case C: the final pcap itself is missing -- every file must read as a
 # capture error, never a disagreement and never left as "deferred".
 work2=$(mktemp -d)
