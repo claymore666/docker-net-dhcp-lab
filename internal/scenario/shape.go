@@ -368,9 +368,10 @@ const isolationWaitWindow = 80 * time.Second
 // two-run pair it landed in was the actual cause.
 //
 // Recreating the network is the fix, not a workaround: the hold is a
-// record tied to the network Docker just removed, and "docker network
-// rm hands back what it was holding at once" (same doc), so a fresh
-// network never has a previous scenario's record to claim. Recreation
+// record tied to the network Docker just removed, and "`docker network
+// rm` hands back every address the network still holds, at once"
+// (docs/internals.md), so a fresh network never has a previous
+// scenario's record to claim. Recreation
 // is attempted first for every IPAM shape; only if it fails does this
 // fall back to sleeping out isolationWaitWindow, so a transient
 // NetworkUp error never silently reuses a network that might still be
