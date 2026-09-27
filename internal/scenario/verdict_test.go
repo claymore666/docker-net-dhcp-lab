@@ -41,8 +41,8 @@ func TestReadVerdictRoundTripsWrite(t *testing.T) {
 		got.IsolationMethod != want.IsolationMethod || !got.Timestamp.Equal(want.Timestamp) {
 		t.Fatalf("ReadVerdict round trip mismatch: got %+v, want %+v", got, want)
 	}
-	if got.Evidence["lease_after"] != evPath {
-		t.Fatalf("evidence not preserved: got %q", got.Evidence["lease_after"])
+	if got.Evidence["lease_after"] != "ev.txt" {
+		t.Fatalf("evidence not stored relative to dir: got %q", got.Evidence["lease_after"])
 	}
 }
 

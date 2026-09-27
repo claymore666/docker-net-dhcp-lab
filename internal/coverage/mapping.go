@@ -5,7 +5,7 @@ import "github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
 // Entry is one option's recorded coverage: Scenario names the
 // scenario.Name that exercises it, or, when nothing does yet, Reason
 // says why not. Exactly one of the two is ever set (Check enforces
-// this, not this file), so a reviewer of this file can tell a real gap
+// this, not this file), so a reader of this file can tell a real gap
 // from a documented one at a glance.
 type Entry struct {
 	Scenario string
@@ -13,22 +13,22 @@ type Entry struct {
 }
 
 // notCoveredOption and notCoveredSetting are the two honest reasons
-// every unmapped row below carries: group A (the only scenario group
-// that exists yet) tests plugin lifecycle events -- restart, reboot,
-// upgrade, kill, scale -- against whatever driver options and plugin
-// settings a cell's lab.yaml happens to be running with; it does not
-// yet vary a driver option or a plugin setting to test its own
+// every unmapped row below carries: the current scenario set (the only
+// one that exists yet) tests plugin lifecycle events -- restart,
+// reboot, upgrade, kill, scale -- against whatever driver options and
+// plugin settings a cell's lab.yaml happens to be running with; it does
+// not yet vary a driver option or a plugin setting to test its own
 // documented behaviour. Both strings are reused verbatim so a later
-// scenario group that starts covering one of these rows changes this
-// file's text in one place, not N places (issue #4).
+// scenario that starts covering one of these rows changes this file's
+// text in one place, not N places (issue #4).
 const (
-	notCoveredOption  = "not covered yet, planned: no group A scenario sets or varies this driver option"
-	notCoveredSetting = "not covered yet, planned: no group A scenario changes this plugin setting"
-	notCoveredIPv6    = "not covered yet, planned: group A is IPv4-only; IPv6 scenarios are a later group"
+	notCoveredOption  = "not covered yet, planned: no scenario yet sets or varies this driver option"
+	notCoveredSetting = "not covered yet, planned: no scenario yet changes this plugin setting"
+	notCoveredIPv6    = "not covered yet, planned: today's scenarios are IPv4-only; IPv6 scenarios come later"
 )
 
 // Mapping is the lab's one reviewed record of docs/reference.md's
-// option tables against what group A's scenarios actually exercise
+// option tables against what today's scenarios actually exercise
 // (issue #4). Seeded honestly from the scenarios that exist today:
 // scripts/run-group-a.sh's own network bring-up is the only place any
 // of these options is set at all (internal/scenario/shape.go's
@@ -61,10 +61,12 @@ var Mapping = map[string]Entry{
 	"network:audit_log":         {Reason: notCoveredOption},
 	"network:release_lease":     {Reason: "not covered yet, planned: every cell's networks are left at release_lease's own default (never); no scenario overrides it"},
 	"network:host_ifname":       {Reason: notCoveredOption},
+	"network:force_create":      {Reason: notCoveredOption},
+	"network:ipvlan_mode":       {Reason: notCoveredOption},
 
 	// Driver options (per-endpoint)
-	"endpoint:ip": {Reason: "not covered yet, planned: no group A scenario requests a specific address"},
-	"endpoint:com.docker.network.endpoint.ifname": {Reason: "not covered yet, planned: no group A scenario requests a specific interface name"},
+	"endpoint:ip": {Reason: "not covered yet, planned: no scenario yet requests a specific address"},
+	"endpoint:com.docker.network.endpoint.ifname": {Reason: "not covered yet, planned: no scenario yet requests a specific interface name"},
 
 	// Plugin settings
 	"setting:LOG_LEVEL":     {Reason: notCoveredSetting},

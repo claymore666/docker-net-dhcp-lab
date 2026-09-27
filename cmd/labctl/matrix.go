@@ -18,12 +18,13 @@ func cmdMatrix(args []string) int {
 	fs.SetOutput(os.Stderr)
 	root := fs.String("root", "", "bundle root every evidence link is written relative to (required)")
 	out := fs.String("out", "", "path to write the results page to (default: stdout)")
+	asset := fs.String("asset", "", "release asset name the page's relative links resolve inside (default: unnamed)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	bundleDirs := fs.Args()
 	if *root == "" || len(bundleDirs) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
+		fmt.Fprintln(os.Stderr, "usage: labctl matrix --root <bundle-root> [--out <path>] [--asset <name>] <bundle-dir> [<bundle-dir> ...]")
 		return 2
 	}
 
@@ -37,7 +38,7 @@ func cmdMatrix(args []string) int {
 		bundles = append(bundles, b)
 	}
 
-	page, err := matrix.Render(*root, bundles)
+	page, err := matrix.Render(*root, *asset, bundles)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl matrix:", err)
 		return 1

@@ -3,6 +3,7 @@ package coverage
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -83,6 +84,29 @@ func TestParseOptionsFindsEveryTableRowOnceEach(t *testing.T) {
 func TestParseOptionsFailsOnNoKnownHeadings(t *testing.T) {
 	if _, err := ParseOptions("# Reference\n\nnothing recognisable here\n"); err == nil {
 		t.Fatal("expected an error when no known heading is present, got nil")
+	}
+}
+
+// TestParseOptionsFailsWhenOneHeadingIsRenamed is the B6 guard: one
+// table's heading changing under it (docs/reference.md renaming a
+// section) must fail ParseOptions outright, never just drop that
+// table's options from the count as though nothing were missing.
+func TestParseOptionsFailsWhenOneHeadingIsRenamed(t *testing.T) {
+	renamed := strings.Replace(fixtureMD, "## Plugin settings", "## Plugin configuration", 1)
+	if _, err := ParseOptions(renamed); err == nil {
+		t.Fatal("expected an error when a known heading is renamed, got nil")
+	}
+}
+
+// TestParseOptionsFailsWhenAHeaderRowGainsAColumn is B6's other shape:
+// the heading survives but its header row picks up an extra column, so
+// that table's own rows never start being captured either.
+func TestParseOptionsFailsWhenAHeaderRowGainsAColumn(t *testing.T) {
+	changed := strings.Replace(fixtureMD,
+		"| name | default | meaning |\n| ---- | ------- | ------- |",
+		"| name | default | meaning | notes |\n| ---- | ------- | ------- | ----- |", 1)
+	if _, err := ParseOptions(changed); err == nil {
+		t.Fatal("expected an error when a header row gains a column, got nil")
 	}
 }
 

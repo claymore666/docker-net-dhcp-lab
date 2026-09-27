@@ -41,10 +41,15 @@ type placed struct {
 // Render fails outright, rather than printing a raw id, the moment a
 // verdict names a scenario matrix.PlainNames does not carry -- issue
 // #4's own rule that a scenario id never reaches rendered prose
-// unmapped -- and the moment two bundles both cover the same
-// cell/shape/scenario cell, which would otherwise silently render
-// whichever one Go's map iteration happened to keep.
-func Render(root string, bundles []Bundle) (string, error) {
+// unmapped -- the moment a verdict's own Result is not one of the
+// legitimate readings scenario.Write ever produces, the moment an N/A
+// or BLOCKED verdict carries no reason, and the moment two bundles both
+// cover the same cell/shape/scenario cell, which would otherwise
+// silently render whichever one Go's map iteration happened to keep.
+// asset, when non-empty, names the release asset the page's relative
+// links resolve inside (issue #4); an empty asset leaves the existing
+// header unchanged.
+func Render(root, asset string, bundles []Bundle) (string, error) {
 	if len(bundles) == 0 {
 		return "", fmt.Errorf("render: no bundles given")
 	}
@@ -57,6 +62,16 @@ func Render(root string, bundles []Bundle) (string, error) {
 			if _, ok := PlainName(v.Scenario); !ok {
 				return "", fmt.Errorf("render: bundle %s: verdict %s names scenario %q, which matrix.PlainNames does not carry",
 					b.Dir, v.FileName(), v.Scenario)
+			}
+			switch v.Result {
+			case scenario.PASS, scenario.FAIL, scenario.NA, scenario.BLOCKED:
+			default:
+				return "", fmt.Errorf("render: bundle %s: verdict %s carries result %q, not one of PASS/FAIL/N/A/BLOCKED",
+					b.Dir, v.FileName(), v.Result)
+			}
+			if (v.Result == scenario.NA || v.Result == scenario.BLOCKED) && v.Reason == "" {
+				return "", fmt.Errorf("render: bundle %s: verdict %s is %s with no reason",
+					b.Dir, v.FileName(), v.Result)
 			}
 			col := column{cell: v.Cell, shape: v.Shape}
 			cols[col] = true
@@ -81,7 +96,7 @@ func Render(root string, bundles []Bundle) (string, error) {
 	})
 
 	var out strings.Builder
-	writeHeader(&out, bundles)
+	writeHeader(&out, asset, bundles)
 
 	out.WriteString("| scenario |")
 	for _, c := range colList {
@@ -121,8 +136,11 @@ func Render(root string, bundles []Bundle) (string, error) {
 	return out.String(), nil
 }
 
-func writeHeader(out *strings.Builder, bundles []Bundle) {
+func writeHeader(out *strings.Builder, asset string, bundles []Bundle) {
 	out.WriteString("# Results\n\n")
+	if asset != "" {
+		fmt.Fprintf(out, "Links below are relative to `%s`.\n\n", asset)
+	}
 	for _, b := range bundles {
 		fmt.Fprintf(out, "- **%s**: plugin `%s`", b.Cell, b.PluginTag)
 		if b.PreviousPluginTag != "" {
@@ -143,6 +161,13 @@ func verdictLink(root, dir, fileName string) (string, error) {
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
 		return "", fmt.Errorf("render: relative path from root %s to %s: %w", root, abs, err)
+	}
+	// A link may never climb out of root or fall back to an absolute
+	// path (issue #4): either shape means --root was not actually an
+	// ancestor of this bundle, so the page would carry this machine's
+	// own layout instead of a portable, packable link.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("render: %s is not an ancestor of %s; refusing a link that would leave it", root, abs)
 	}
 	return filepath.ToSlash(rel), nil
 }

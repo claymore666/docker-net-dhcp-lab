@@ -6,8 +6,13 @@
 # own set -euo pipefail.
 
 # Everything the lab is allowed to publish: its own /16, its own ULA,
-# loopback, link-local, and the RFC 5737 / RFC 3849 documentation ranges.
-HYGIENE_ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
+# loopback, link-local, the RFC 5737 / RFC 3849 documentation ranges,
+# Docker's own default bridge range (172.16.0.0/12, ordinary container
+# addressing on any Docker host, never LAN detail) and Kea's own stock
+# sample config subnet (10.1.1.0/24, shipped as literal example values
+# in its default config file, never a real address). 192.168.0.0/16 is
+# deliberately absent: that range is LAN detail here and stays refused.
+HYGIENE_ALLOWED_RE='^(10\.200\.|10\.1\.1\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
 
 # RFC1918 and link-local candidates only; a public IP is not house detail.
 HYGIENE_ADDR_CANDIDATE_RE='\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b'

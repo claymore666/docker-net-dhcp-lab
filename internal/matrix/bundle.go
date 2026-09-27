@@ -39,7 +39,7 @@ type resolvedLab struct {
 
 // LoadBundle reads every *.verdict file directly under dir plus its
 // <cell>-resolved-lab.json, exactly what run-group-a.sh leaves behind
-// (README.md, "Run the group-A scenarios"). It never looks at dir's own
+// (README.md's scenario-runner section). It never looks at dir's own
 // path or a verdict file's name for any field: every value it returns
 // came from a verdict's own content or from resolved-lab.json (issue
 // #4).

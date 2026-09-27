@@ -75,15 +75,19 @@ var tables = []struct {
 }
 
 // ParseOptions extracts every option/setting name reference.md's three
-// tables carry, qualified by which table it came from. A heading with
-// no matching rows contributes nothing rather than failing -- if
-// docs/reference.md ever drops a whole section, the option names that
-// used to live there simply vanish from the returned list, and Check
-// reports them missing from Mapping's coverage the same way it would
-// report a single dropped row, never a parse error unrelated to
-// coverage itself.
+// tables carry, qualified by which table it came from. Each table must
+// contribute its own header row: if docs/reference.md ever drops a
+// whole section, or renames its heading, or changes its header row (a
+// column added or removed), that table's header row is never matched
+// and ParseOptions fails outright, naming the heading -- a table
+// vanishing silently just because its rows stopped counting is exactly
+// the gap this guards (issue #4). A table that legitimately has zero
+// option rows below a header row that did match is not this failure;
+// none of the three real tables is ever empty, so that case does not
+// arise in practice.
 func ParseOptions(md string) ([]string, error) {
 	var out []string
+	headerSeen := make([]bool, len(tables))
 	sc := bufio.NewScanner(strings.NewReader(md))
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	// prefix/wantHeader: set on the heading itself, live until that
@@ -94,14 +98,15 @@ func ParseOptions(md string) ([]string, error) {
 	prefix := ""
 	wantHeader := ""
 	capturing := false
+	tableIdx := -1
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), " \t\r")
-		if h, p, header := matchHeading(line); h {
-			prefix, wantHeader, capturing = p, header, false
+		if h, idx := matchHeading(line); h {
+			prefix, wantHeader, capturing, tableIdx = tables[idx].prefix, tables[idx].header, false, idx
 			continue
 		}
 		if strings.HasPrefix(line, "## ") {
-			prefix, wantHeader, capturing = "", "", false
+			prefix, wantHeader, capturing, tableIdx = "", "", false, -1
 			continue
 		}
 		if prefix == "" {
@@ -110,6 +115,7 @@ func ParseOptions(md string) ([]string, error) {
 		if !capturing {
 			if line == wantHeader {
 				capturing = true
+				headerSeen[tableIdx] = true
 			}
 			continue
 		}
@@ -128,6 +134,15 @@ func ParseOptions(md string) ([]string, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("parse options: %w", err)
 	}
+	var missing []string
+	for i, seen := range headerSeen {
+		if !seen {
+			missing = append(missing, tables[i].heading)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("parse options: found no header row under %v; the heading or its header row may have changed", missing)
+	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("parse options: found no option rows under any of the %d known heading(s); docs/reference.md's headings may have changed", len(tables))
 	}
@@ -135,12 +150,12 @@ func ParseOptions(md string) ([]string, error) {
 }
 
 // matchHeading reports whether line is exactly one of tables' own
-// headings, returning its namespace prefix and expected header row too.
-func matchHeading(line string) (bool, string, string) {
-	for _, t := range tables {
+// headings, returning its index into tables.
+func matchHeading(line string) (bool, int) {
+	for i, t := range tables {
 		if line == t.heading {
-			return true, t.prefix, t.header
+			return true, i
 		}
 	}
-	return false, "", ""
+	return false, -1
 }

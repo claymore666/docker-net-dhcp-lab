@@ -97,15 +97,19 @@ interface issue #4's results matrix reads.
 
 ## Results page
 
-`labctl matrix --root <bundle-root> [--out results/<tag>.md] <bundle-dir>
-[<bundle-dir> ...]` reads one or more evidence bundles and writes the
-results page: one row per scenario, in plain words (never a scenario id
-like `A1`), one column per cell x shape, each cell a `PASS`/`FAIL`/`N/A`
-link straight to its verdict file, written relative to `--root` so the
-same page still resolves once `--root` is a packed bundle's own
-extracted directory. A verdict `labctl matrix` cannot find for a
+`labctl matrix --root <bundle-root> [--out results/<tag>.md] [--asset
+<name>] <bundle-dir> [<bundle-dir> ...]` reads one or more evidence
+bundles and writes the results page: one row per scenario, in plain
+words (never a scenario id), one column per cell x shape, each cell a
+`PASS`/`FAIL`/`N/A`/`BLOCKED` link straight to its verdict file, written
+relative to `--root` so the same page still resolves once `--root` is a
+packed bundle's own extracted directory, and refused outright if
+`--root` is not actually an ancestor of a bundle rather than writing a
+link that leaves it. A verdict `labctl matrix` cannot find for a
 scenario x column prints `(missing)` rather than being left out of the
-table. The plain-word names live in one place,
+table. `--asset` names the release asset the page's relative links live
+in, printed once in the header; it is optional, and the header is
+unchanged without it. The plain-word names live in one place,
 `internal/matrix/names.go`.
 
 ## Coverage check
@@ -124,13 +128,22 @@ it against instead.
 
 ## Packing a bundle for release
 
-`scripts/pack.sh <bundle-dir> <out.tar.gz> [denylist-file]` turns one
+`scripts/pack.sh <bundle-dir> <out.tar.gz> <denylist-file>` turns one
 evidence bundle into a compressed tarball for a GitHub release asset
 (attaching it to a release is a separate, later step, not this
-script's). It refuses, and writes nothing, when the bundle carries a
-disallowed address (the same patterns `scripts/hygiene-check.sh` uses,
-shared via `scripts/hygiene-patterns.sh` rather than a second copy), a
-hostname in a captured `journalctl` line that is not this lab's own
-generated shape (`lab-*`), or a hit against an optional external
-denylist file (its path as a third argument, or `LAB_PACK_DENYLIST`) --
-never a name built into this repo itself.
+script's). The denylist is required, as a third argument or via
+`LAB_PACK_DENYLIST`: it is a local list of names that must not appear,
+kept outside this repo, and packing refuses outright, with no tarball
+written, if it is missing or its path names no real file, rather than
+silently skipping that check. Packing also refuses, and writes nothing,
+when the bundle carries a disallowed address (the same patterns
+`scripts/hygiene-check.sh` uses, shared via
+`scripts/hygiene-patterns.sh` rather than a second copy -- Docker's own
+default bridge range and Kea's stock example config range are both
+allowed, since neither is LAN detail), a hostname in a captured
+`journalctl` line that is not this lab's own generated shape (`lab-*`),
+or a `evidence.<label>` line in a verdict file naming a path outside the
+bundle (an older run's own machine layout, never real evidence). A
+packet capture (`.pcap`) is never text-scanned by this check; nothing in
+this repo reads one automatically today, so each is checked by hand
+before a bundle is packed.

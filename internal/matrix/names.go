@@ -8,11 +8,11 @@ package matrix
 import "github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
 
 // PlainNames is the one place a scenario.Name constant is spelled out
-// in plain words. A rendered page never shows a scenario id like
-// "A1-first-lease" in its prose (issue #4): every id appears only in
-// this table and in a verdict's own file name, so a reader of the
-// results page never has to already know the catalog's own lettering
-// to follow what a row tested.
+// in plain words. A rendered page never shows a scenario id in its
+// prose (issue #4): every id appears only in this table and in a
+// verdict's own file name, so a reader of the results page never has
+// to already know the catalog's own naming scheme to follow what a row
+// tested.
 var PlainNames = map[string]string{
 	scenario.NameA1:  "first lease",
 	scenario.NameA2:  "container restart",

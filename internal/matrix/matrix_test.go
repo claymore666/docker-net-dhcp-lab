@@ -80,7 +80,7 @@ func TestLoadBundleAndRenderBasicTable(t *testing.T) {
 		t.Fatalf("PreviousPluginTag: got %q", b.PreviousPluginTag)
 	}
 
-	page, err := Render(root, []Bundle{b})
+	page, err := Render(root, "", []Bundle{b})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRenderRejectsUnknownScenarioID(t *testing.T) {
 			{Scenario: "Z9-not-a-real-scenario", Cell: "kea", Shape: scenario.ShapeBridge, Result: scenario.FAIL, Reason: "x"},
 		},
 	}
-	if _, err := Render("root", []Bundle{b}); err == nil {
+	if _, err := Render("root", "", []Bundle{b}); err == nil {
 		t.Fatal("expected Render to reject an unmapped scenario id, got nil error")
 	}
 }
@@ -139,8 +139,78 @@ func TestRenderRejectsDuplicateCell(t *testing.T) {
 	v := scenario.Verdict{Scenario: scenario.NameA1, Cell: "kea", Shape: scenario.ShapeBridge, Result: scenario.PASS, Reason: "x", Evidence: map[string]string{"e": "irrelevant"}}
 	b1 := Bundle{Dir: "bundle-one", Cell: "kea", Verdicts: []scenario.Verdict{v}}
 	b2 := Bundle{Dir: "bundle-two", Cell: "kea", Verdicts: []scenario.Verdict{v}}
-	if _, err := Render("root", []Bundle{b1, b2}); err == nil {
+	if _, err := Render("root", "", []Bundle{b1, b2}); err == nil {
 		t.Fatal("expected Render to reject two bundles covering the same cell, got nil error")
+	}
+}
+
+// TestRenderRejectsUnrecognisedResult guards the legitimate-result rule
+// directly: a verdict carrying anything other than PASS/FAIL/N/A/BLOCKED
+// must fail Render outright rather than render it as if it were real.
+func TestRenderRejectsUnrecognisedResult(t *testing.T) {
+	b := Bundle{
+		Dir:  "irrelevant",
+		Cell: "kea",
+		Verdicts: []scenario.Verdict{
+			{Scenario: scenario.NameA1, Cell: "kea", Shape: scenario.ShapeBridge, Result: "PASSISH", Reason: "x"},
+		},
+	}
+	if _, err := Render("root", "", []Bundle{b}); err == nil {
+		t.Fatal("expected Render to reject a result other than PASS/FAIL/N/A/BLOCKED, got nil error")
+	}
+}
+
+// TestRenderRejectsNAWithEmptyReason guards the other half of the same
+// rule: a scenario that never ran must always say why, never render as
+// a bare N/A with nothing behind it.
+func TestRenderRejectsNAWithEmptyReason(t *testing.T) {
+	b := Bundle{
+		Dir:  "irrelevant",
+		Cell: "kea",
+		Verdicts: []scenario.Verdict{
+			{Scenario: scenario.NameA1, Cell: "kea", Shape: scenario.ShapeBridge, Result: scenario.NA, Reason: ""},
+		},
+	}
+	if _, err := Render("root", "", []Bundle{b}); err == nil {
+		t.Fatal("expected Render to reject an N/A verdict with an empty reason, got nil error")
+	}
+}
+
+// TestVerdictLinkRejectsNonAncestorRoot guards N4: a --root that is not
+// actually an ancestor of the bundle directory must refuse the link
+// rather than write one carrying "../" or this machine's own absolute
+// path into a page meant to be portable.
+func TestVerdictLinkRejectsNonAncestorRoot(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := verdictLink("/no/such/unrelated/root", dir, "kea-bridge-A1-first-lease.verdict"); err == nil {
+		t.Fatal("expected verdictLink to reject a root that is not an ancestor of the bundle, got nil error")
+	}
+}
+
+// TestRenderHeaderNamesAsset guards N5: passing --asset must name the
+// release asset the page's relative links live inside, in the header;
+// leaving it empty must change nothing.
+func TestRenderHeaderNamesAsset(t *testing.T) {
+	root := t.TempDir()
+	bundleDir := filepath.Join(root, "evidence-abc123-kea")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeResolvedLab(t, bundleDir, "kea", "ghcr.io/claymore666/docker-net-dhcp:v2.2.2", "")
+	writeVerdict(t, bundleDir, scenario.Verdict{
+		Scenario: scenario.NameA1, Cell: "kea", Shape: scenario.ShapeBridge,
+		Result: scenario.NA, Reason: "source does not declare capability",
+	})
+	b, err := LoadBundle(bundleDir)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	page, err := Render(root, "results-v2.2.2.tar.gz", []Bundle{b})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(page, "results-v2.2.2.tar.gz") {
+		t.Fatalf("rendered header does not name the release asset:\n%s", page)
 	}
 }
 

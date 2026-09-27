@@ -3,6 +3,7 @@ package scenario
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -96,7 +97,18 @@ func Write(dir string, v Verdict) error {
 	}
 	sort.Strings(labels)
 	for _, label := range labels {
-		fmt.Fprintf(&b, "evidence.%s: %s\n", label, v.Evidence[label])
+		// Stored relative to dir, never the absolute path Write was
+		// called with: the run's own machine layout is not evidence and
+		// must never leak into a bundle another host later reads or
+		// packs (issue #4).
+		rel, err := filepath.Rel(dir, v.Evidence[label])
+		if err != nil {
+			return fmt.Errorf("verdict %s/%s/%s: evidence %q (%s): %w", v.Cell, v.Shape, v.Scenario, label, v.Evidence[label], err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return fmt.Errorf("verdict %s/%s/%s: evidence %q (%s) is outside %s", v.Cell, v.Shape, v.Scenario, label, v.Evidence[label], dir)
+		}
+		fmt.Fprintf(&b, "evidence.%s: %s\n", label, filepath.ToSlash(rel))
 	}
 	return os.WriteFile(dir+"/"+v.FileName(), []byte(b.String()), 0o644)
 }
@@ -104,8 +116,9 @@ func Write(dir string, v Verdict) error {
 // ReadVerdict parses one file Write produced. It never looks at path's
 // own name for scenario/cell/shape (issue #4): both a shape and a
 // scenario name can carry internal hyphens of their own
-// ("bridge-ipam", "A1-first-lease"), so the only field boundary that
-// can never be ambiguous is the "key: value" line Write already wrote.
+// ("bridge-ipam", or a scenario's own multi-word name), so the only
+// field boundary that can never be ambiguous is the "key: value" line
+// Write already wrote.
 // isolation is optional, matching Write's own "only when non-empty"
 // rule; every other key is required, and an unrecognised key fails
 // loudly rather than being silently dropped, the same discipline a

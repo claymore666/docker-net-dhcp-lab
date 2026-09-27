@@ -51,6 +51,7 @@ while IFS= read -r -d '' f; do
 	scripts/hygiene-patterns.sh) continue ;;          # same reasoning, shared with pack.sh
 	scripts/hygiene-check-test.sh) continue ;;        # deliberately carries disallowed-looking fixtures, never real
 	scripts/commit-message-check-test.sh) continue ;; # same shape: fixtures for a throwaway repo, never real
+	scripts/pack-test.sh) continue ;;                 # same shape: planted addresses are fixtures, never real
 	esac
 	# A _test.go fixture legitimately carries made-up private addresses
 	# (a TempDir source, never shipped or run anywhere real), so it
