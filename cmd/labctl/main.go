@@ -49,7 +49,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage: labctl validate <lab.yaml>")
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
-	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> ")
+	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
 	os.Exit(2)
 }
 
@@ -137,6 +137,32 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 	}
 }
 
+// selectScenarios narrows catalog to the comma-separated Names in
+// filterArg, in catalog's own order (never the filter's), so a debug
+// pass over "A10-kill-restart-policy,A5b-host-reboot-fixed-mac" still
+// runs A5b before A10 (#3). An empty filterArg returns catalog
+// unchanged; an unknown name is silently dropped rather than failing
+// the run, so a typo in a manual debug invocation runs fewer scenarios
+// instead of none.
+func selectScenarios(catalog []scenario.Scenario, filterArg string) []scenario.Scenario {
+	if filterArg == "" {
+		return catalog
+	}
+	want := map[string]bool{}
+	for _, name := range strings.Split(filterArg, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			want[name] = true
+		}
+	}
+	var out []scenario.Scenario
+	for _, s := range catalog {
+		if want[s.Name] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // cmdRun is issue #3's scenario runner: one cell x one shape, every
 // scenario in scenario.Catalog, one verdict file per scenario written to
 // evidenceDir. It never touches the network or libvirt directly except
@@ -151,10 +177,20 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 // on any error path after it succeeds -- main() calls os.Exit once,
 // after this function has returned and its defer has run.
 func cmdRun(args []string) int {
-	if len(args) != 7 {
+	if len(args) != 7 && len(args) != 8 {
 		usage()
 	}
 	labYAML, repoRoot, cellName, shapeArg, workDir, evidenceDir, pcapArg := args[0], args[1], args[2], args[3], args[4], args[5], args[6]
+	// An optional 8th arg narrows scenario.Catalog to a comma-separated
+	// set of Names, for a debug-logging evidence pass over the two
+	// scenarios it names rather than the whole shape (#3). Empty or
+	// absent runs every scenario, unchanged from before this arg
+	// existed.
+	scenarioFilter := ""
+	if len(args) == 8 {
+		scenarioFilter = args[7]
+	}
+	scenariosToRun := selectScenarios(scenario.Catalog, scenarioFilter)
 
 	shape := scenario.Shape(shapeArg)
 	validShape := false
@@ -230,7 +266,7 @@ func cmdRun(args []string) int {
 			logPath = "(plugin log capture also failed: " + logErr.Error() + ")"
 		}
 		reason := fmt.Sprintf("plugin never became ready before the first scenario could start: %v; plugin log: %s", err, logPath)
-		for _, s := range scenario.Catalog {
+		for _, s := range scenariosToRun {
 			v := scenario.Verdict{
 				Scenario: s.Name, Cell: cellName, Shape: shape,
 				Result: scenario.BLOCKED, Reason: reason,
@@ -280,7 +316,7 @@ func cmdRun(args []string) int {
 	}
 	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.MinPoolAddresses); !ok {
 		reason = "pool cannot cover this shape's run: " + reason
-		for _, s := range scenario.Catalog {
+		for _, s := range scenariosToRun {
 			v := scenario.Verdict{
 				Scenario: s.Name, Cell: cellName, Shape: shape,
 				Result: scenario.BLOCKED, Reason: reason,
@@ -320,7 +356,7 @@ func cmdRun(args []string) int {
 	}
 
 	failed := 0
-	for _, s := range scenario.Catalog {
+	for _, s := range scenariosToRun {
 		v := scenario.RunOne(ctx, s, env)
 		if err := scenario.Write(evidenceDir, v); err != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
@@ -333,7 +369,7 @@ func cmdRun(args []string) int {
 	}
 	if failed > 0 {
 		fmt.Printf("labctl run: %d/%d scenarios FAILed on %s/%s; see verdicts\n",
-			failed, len(scenario.Catalog), cellName, shape)
+			failed, len(scenariosToRun), cellName, shape)
 	}
 	return 0
 }

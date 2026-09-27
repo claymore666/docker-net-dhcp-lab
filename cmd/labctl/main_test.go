@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+)
 
 // The pre-shape pool capacity check exists because the plugin's own
 // default is release_lease=never (docs/reference.md) -- nothing frees
@@ -81,5 +85,39 @@ func TestPoolHasCapacityForReasonNamesTheShortfall(t *testing.T) {
 	}
 	if reason == "" {
 		t.Fatal("want a non-empty reason describing the shortfall")
+	}
+}
+
+// selectScenarios is the debug-logging evidence pass's own filter
+// (#3): the main run always passes an empty filterArg and must see
+// every scenario, in catalog order; a named pass narrows to just the
+// scenarios it asks for, still in catalog order.
+func TestSelectScenariosEmptyFilterReturnsWholeCatalog(t *testing.T) {
+	catalog := []scenario.Scenario{{Name: "A1"}, {Name: "A2"}, {Name: "A3"}}
+	got := selectScenarios(catalog, "")
+	if len(got) != len(catalog) {
+		t.Fatalf("empty filter dropped scenarios: got %d, want %d", len(got), len(catalog))
+	}
+}
+
+func TestSelectScenariosNarrowsAndKeepsCatalogOrder(t *testing.T) {
+	catalog := []scenario.Scenario{
+		{Name: "A1"}, {Name: "A5b-host-reboot-fixed-mac"}, {Name: "A9"}, {Name: "A10-kill-restart-policy"},
+	}
+	// Named in the reverse of catalog order, on purpose.
+	got := selectScenarios(catalog, "A10-kill-restart-policy,A5b-host-reboot-fixed-mac")
+	if len(got) != 2 {
+		t.Fatalf("want 2 scenarios selected, got %d: %v", len(got), got)
+	}
+	if got[0].Name != "A5b-host-reboot-fixed-mac" || got[1].Name != "A10-kill-restart-policy" {
+		t.Fatalf("want catalog order (A5b then A10) regardless of filter order, got %v", got)
+	}
+}
+
+func TestSelectScenariosDropsUnknownNames(t *testing.T) {
+	catalog := []scenario.Scenario{{Name: "A1"}, {Name: "A2"}}
+	got := selectScenarios(catalog, "A1, A404 ,")
+	if len(got) != 1 || got[0].Name != "A1" {
+		t.Fatalf("want only the known name A1 kept, got %v", got)
 	}
 }
