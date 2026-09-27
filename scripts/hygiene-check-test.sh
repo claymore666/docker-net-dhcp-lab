@@ -166,8 +166,35 @@ run_case "test file, handover pointer" \
 # file, or its own fixtures trip this check just by existing.
 run_case "commit-message-check-test.sh, role word, exempt" \
 	$'run_case "x" "fix: apply the reviewer note" "" fail\n' ok scripts/commit-message-check-test.sh || fail=1
+# A review-round label ("review r1") must be caught even with no other
+# marker on the line -- the shape a review finding's fix comment used
+# to cite itself with (issue #3).
+run_case "review-round label" \
+	$'// found gone (issue #3, review r1)\n' fail || fail=1
+# The bare "the review" stand-in for the process itself must be caught
+# too, the same leftover shape ("the review's own F1 requirement").
+run_case "the review, bare phrase" \
+	$'// that is the review'"'"'s own requirement\n' fail || fail=1
+# A finding cited by its short label ("F2"), all-caps, must be caught
+# even alone on the line, with no other marker present.
+run_case "finding citation, short label" \
+	$'// pool (F2, issue #3)\n' fail || fail=1
+# The ordinary, always-lowercase shell flag shape this codebase itself
+# uses (cut -d: -fN, the same idiom verify.sh and demo-source-cell.sh
+# run live) must stay clean -- only the all-caps finding label is
+# process detail, never a field-selector flag.
+run_case "cut field flag, not a finding label" \
+	$'line=$(grep -n x f | cut -d: -f1)\n' ok || fail=1
+run_case "cut field flag 2, not a finding label" \
+	$'field=$(cut -d: -f2 <<<"$x")\n' ok || fail=1
+# A word that merely contains an uppercase F immediately after a
+# non-word character but with no digit run long enough to look like a
+# citation stays clean too (word-boundary + digit-run check, not a bare
+# substring match) -- an uppercase hex/flag shape, not a finding label.
+run_case "uppercase F, no digit, not a finding label" \
+	$'note: use -F as the field separator\n' ok || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 35 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 41 cases behaved as expected"
