@@ -27,7 +27,7 @@ var baseImages = map[string]BaseImage{
 		Suite:     "trixie",
 		OSVariant: "debian13",
 	},
-	// The plugin's oldest supported engine target (issue #8): an older
+	// The plugin's oldest supported engine target (issue #27): an older
 	// distro so docker-ce's own version pin below resolves against a repo
 	// that still carries it -- download.docker.com drops old package
 	// builds from a suite's newer pool once it moves on.

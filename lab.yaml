@@ -135,7 +135,7 @@ cells:
     description: >
       Kea, same as the kea cell above, but the Docker host is Debian 11
       with docker-ce pinned to the plugin's oldest supported engine,
-      20.10. Issue #8.
+      20.10. Issue #27.
     segment:
       bridge: lab-br-deb11d20
       subnet: 10.200.5.0/24

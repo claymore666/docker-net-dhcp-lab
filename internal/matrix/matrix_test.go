@@ -306,4 +306,7 @@ func TestRenderShowsHostPerColumnAndInHeader(t *testing.T) {
 	if !strings.Contains(page, "20.10.24") {
 		t.Fatalf("rendered header line does not carry the docker engine version:\n%s", page)
 	}
+	if !strings.Contains(page, "5.10.0-30-amd64") {
+		t.Fatalf("rendered header line does not carry the kernel:\n%s", page)
+	}
 }

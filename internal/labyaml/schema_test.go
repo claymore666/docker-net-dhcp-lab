@@ -235,6 +235,20 @@ func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
 	}
 }
 
+// One character over the limit is the boundary the kernel actually
+// draws (IFNAMSIZ-1 = 15): the 39-character case above only proves
+// "too long" is caught, not that the limit itself is 15 and not 16.
+func TestRejectsBridgeNameAtSixteenCharacters(t *testing.T) {
+	sixteen := "lab-br-ref-onlyx"
+	if len(sixteen) != 16 {
+		t.Fatalf("test fixture drifted: %q is %d characters, not 16", sixteen, len(sixteen))
+	}
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: "+sixteen, 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("a 16-character bridge name was accepted")
+	}
+}
+
 func TestAcceptsBridgeNameAtIfnameLimit(t *testing.T) {
 	fifteen := "lab-br-ref-only" // exactly 15 characters, the existing convention
 	if len(fifteen) != 15 {
