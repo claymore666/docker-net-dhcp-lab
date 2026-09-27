@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"time"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
@@ -344,4 +345,51 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		_, _ = r.Run(ctx, "sudo netplan apply")
 		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
+}
+
+// isolationWaitWindow is IsolateIPAMNetwork's fallback when a network
+// cannot be recreated: long enough to clear the IPAM-mode identity hold
+// docs/reference.md documents in "Restart stability (MAC and IP)" -> "In
+// IPAM mode" (a minute), with the same margin the docs give
+// release_lease=on_remove's own sweep worst case (65-80s), so a slow
+// sweep cycle can never still be inside the hold when this returns.
+const isolationWaitWindow = 80 * time.Second
+
+// IsolateIPAMNetwork breaks the plugin's IPAM-mode identity hold between
+// two scenarios that would otherwise run back to back on the same
+// network (issue #3 part 2, lab fault). Undocumented by this lab until
+// now: docs/reference.md's "Restart stability (MAC and IP)" -> "In IPAM
+// mode" section says a container that stops or is removed keeps its
+// DHCP identity and address for a minute, and "the next container that
+// starts on that network claims them: whichever container that is". Two
+// scenarios run back to back on the one network the lab reused for a
+// whole shape's run, so the second one's container was that "next
+// container" often enough to read as a flaky plugin result, when the
+// two-run pair it landed in was the actual cause.
+//
+// Recreating the network is the fix, not a workaround: the hold is a
+// record tied to the network Docker just removed, and "docker network
+// rm hands back what it was holding at once" (same doc), so a fresh
+// network never has a previous scenario's record to claim. Recreation
+// is attempted first for every IPAM shape; only if it fails does this
+// fall back to sleeping out isolationWaitWindow, so a transient
+// NetworkUp error never silently reuses a network that might still be
+// inside the hold. sleep is injectable so a test can assert the
+// fallback path runs without a real 80s wait; nil uses time.Sleep.
+// Returns the network name the caller's Env.Network should use next,
+// and which method this call actually used, to be logged so a redo
+// pass's own evidence says how each scenario pair was isolated.
+func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, sleep func(time.Duration)) (net, method string, err error) {
+	if shape != ShapeBridgeIPAM && shape != ShapeMacvlanIPAM {
+		return "", "", fmt.Errorf("isolateipamnetwork: shape %q is not an IPAM shape; the identity hold this isolates against does not exist under null-IPAM (docs/reference.md)", shape)
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	newNet, upErr := NetworkUp(ctx, r, cell, shape)
+	if upErr == nil {
+		return newNet, "network recreated between scenarios", nil
+	}
+	sleep(isolationWaitWindow)
+	return NetworkName(cell, shape), fmt.Sprintf("network recreate failed (%v); waited %s for the identity-hold window to expire instead", upErr, isolationWaitWindow), nil
 }

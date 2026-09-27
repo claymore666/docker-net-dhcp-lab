@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeShapeRunner is the same no-network fakeRunner pattern
@@ -235,5 +236,83 @@ func TestNetworkUpInternalCreatesAnOrdinaryBridgeNetwork(t *testing.T) {
 		if !sawCreate {
 			t.Errorf("%s: NetworkUpInternal never created a plain bridge network; calls: %v", shape, r.calls)
 		}
+	}
+}
+
+// IsolateIPAMNetwork must refuse a null-IPAM shape outright: the identity
+// hold it isolates against (docs/reference.md, "Restart stability (MAC
+// and IP)" -> "In IPAM mode") does not exist there, so isolating between
+// scenarios on those shapes would just be wasted network churn.
+func TestIsolateIPAMNetworkRefusesNonIPAMShapes(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
+		r := &fakeShapeRunner{}
+		if _, _, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, nil); err == nil {
+			t.Errorf("%s: IsolateIPAMNetwork succeeded on a non-IPAM shape", shape)
+		}
+	}
+}
+
+// The common case: recreation succeeds, so IsolateIPAMNetwork must
+// report "network recreated" and must never call sleep -- a redo pass
+// that always fell back to the 80s wait even when recreation worked
+// would make every IPAM-shape re-run far slower than the fix promised.
+func TestIsolateIPAMNetworkRecreatesWhenPossible(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridgeIPAM, ShapeMacvlanIPAM} {
+		r := &fakeShapeRunner{}
+		var slept []time.Duration
+		sleep := func(d time.Duration) { slept = append(slept, d) }
+
+		net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+		if err != nil {
+			t.Fatalf("%s: IsolateIPAMNetwork: %v", shape, err)
+		}
+		if net != NetworkName("kea", shape) {
+			t.Errorf("%s: net = %q, want %q", shape, net, NetworkName("kea", shape))
+		}
+		if !strings.Contains(method, "recreated") {
+			t.Errorf("%s: method = %q, want it to say the network was recreated", shape, method)
+		}
+		if len(slept) != 0 {
+			t.Errorf("%s: sleep was called %v although recreation succeeded", shape, slept)
+		}
+
+		var sawRemove, sawCreate bool
+		for _, c := range r.calls {
+			if strings.Contains(c, "docker network rm") {
+				sawRemove = true
+			}
+			if strings.Contains(c, "docker network create") {
+				sawCreate = true
+			}
+		}
+		if !sawRemove || !sawCreate {
+			t.Errorf("%s: IsolateIPAMNetwork did not both remove and create the network; calls: %v", shape, r.calls)
+		}
+	}
+}
+
+// When recreation fails, IsolateIPAMNetwork must fall back to sleeping
+// out the identity-hold window rather than silently handing back a
+// network that might still be holding a previous scenario's identity.
+func TestIsolateIPAMNetworkFallsBackToWaitingWhenRecreateFails(t *testing.T) {
+	shape := ShapeMacvlanIPAM
+	r := &fakeShapeRunner{fail: func(cmd string) bool {
+		return strings.Contains(cmd, "docker network create")
+	}}
+	var slept []time.Duration
+	sleep := func(d time.Duration) { slept = append(slept, d) }
+
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	if err != nil {
+		t.Fatalf("IsolateIPAMNetwork: %v", err)
+	}
+	if net != NetworkName("kea", shape) {
+		t.Errorf("net = %q, want %q", net, NetworkName("kea", shape))
+	}
+	if !strings.Contains(method, "waited") {
+		t.Errorf("method = %q, want it to say a wait was used", method)
+	}
+	if len(slept) != 1 || slept[0] != isolationWaitWindow {
+		t.Errorf("sleep calls = %v, want exactly [%s]", slept, isolationWaitWindow)
 	}
 }

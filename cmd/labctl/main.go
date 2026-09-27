@@ -355,8 +355,44 @@ func cmdRun(args []string) int {
 		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
 	}
 
+	// The two IPAM shapes hold a stopped container's DHCP identity for a
+	// minute and hand it to whichever container starts next on the same
+	// network (docs/reference.md, "Restart stability (MAC and IP)" -> "In
+	// IPAM mode"); sixteen scenarios run back to back on one shared
+	// network would let one scenario's container claim a previous
+	// scenario's identity, reading as a flaky plugin result when the lab's
+	// own scenario ordering was the actual cause. Isolating each scenario
+	// onto a fresh network is scoped to the two IPAM shapes only: the
+	// null-IPAM shapes carry no such hold (issue #3 part 2, lab fault, not
+	// a plugin defect).
+	isolateBetweenScenarios := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+	var isolationLog *os.File
+	if isolateBetweenScenarios {
+		f, err := os.OpenFile(filepath.Join(evidenceDir, "isolation.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "labctl run: could not open isolation.log:", err)
+			return 1
+		}
+		isolationLog = f
+		defer isolationLog.Close()
+	}
+
 	failed := 0
-	for _, s := range scenariosToRun {
+	for i, s := range scenariosToRun {
+		if isolateBetweenScenarios && i > 0 {
+			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, cellName, shape, nil)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "labctl run: IsolateIPAMNetwork:", err)
+				return 1
+			}
+			env.Network = newNet
+			line := fmt.Sprintf("%s %s: before %s: %s\n", cellName, shape, s.Name, method)
+			fmt.Print(line)
+			if _, err := isolationLog.WriteString(line); err != nil {
+				fmt.Fprintln(os.Stderr, "labctl run: could not write isolation.log:", err)
+				return 1
+			}
+		}
 		v := scenario.RunOne(ctx, s, env)
 		if err := scenario.Write(evidenceDir, v); err != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
