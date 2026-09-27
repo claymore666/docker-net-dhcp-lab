@@ -175,15 +175,29 @@ func TestWaitPluginReadyFailsAfterTimeoutWhenSocketNeverAnswers(t *testing.T) {
 	}
 }
 
-// fakeLogRunner scripts journalctl for CapturePluginLog: mixed lines, so
-// the net-dhcp-only filter (issue #3) is checked without a real docker
-// host.
+// fakeLogRunner scripts journalctl for CapturePluginLog, and optionally
+// docker plugin inspect -f {{.ID}} for pluginJournalLines's own tag
+// resolution: mixed lines, so both the plain net-dhcp-substring filter
+// and the plugin= instance-id tag match (issue #3, the 2026-09-27 fix)
+// are checked without a real docker host. pluginID unset (with idErr
+// nil) answers the inspect call with an empty id, which
+// pluginJournalTag treats as unresolved -- matching a fakeLogRunner
+// built before this field existed, so every earlier test using this type
+// keeps exercising the substring-only fallback path unchanged.
 type fakeLogRunner struct {
-	journal string
-	failErr error
+	journal  string
+	failErr  error
+	pluginID string
+	idErr    error
 }
 
 func (f *fakeLogRunner) Run(_ context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "plugin inspect") {
+		if f.idErr != nil {
+			return "", f.idErr
+		}
+		return f.pluginID, nil
+	}
 	if !strings.Contains(cmd, "journalctl") {
 		return "", fmt.Errorf("unexpected command: %s", cmd)
 	}
@@ -291,6 +305,78 @@ func TestCapturePluginLogAroundFirstRequestAddressPropagatesRunnerError(t *testi
 	path := t.TempDir() + "/first-request.log"
 	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err == nil {
 		t.Fatal("want an error when the runner fails, got nil")
+	}
+}
+
+// The regression this fix exists for (issue #3, measured 2026-09-27
+// against a live cell running at LOG_LEVEL=trace): dockerd's own wrapper
+// line for the plugin's real /IpamDriver.RequestAddress access log
+// carries no literal "net-dhcp" substring at all, only a
+// "plugin=<instance id>" tag. Before pluginJournalLines existed, this
+// line was silently dropped by every capture in this file, at any log
+// level -- this pins that the tag match alone is enough to find it.
+func TestCapturePluginLogAroundFirstRequestAddressFindsATagOnlyLine(t *testing.T) {
+	const id = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
+	journal := `Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /IpamDriver.GetCapabilities\" resSize=57 status=200" plugin=` + id + "\n" +
+		`Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /IpamDriver.RequestAddress\" resSize=42 status=200" plugin=` + id + "\n" +
+		`Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /NetworkDriver.Join\" resSize=233 status=200" plugin=` + id + "\n"
+	r := &fakeLogRunner{journal: journal, pluginID: id}
+	path := t.TempDir() + "/first-request.log"
+	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
+		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(got), "IpamDriver.RequestAddress") {
+		t.Fatalf("want the tag-only RequestAddress line kept, none of these carry a literal net-dhcp substring: %q", got)
+	}
+}
+
+// When the plugin instance id cannot be resolved (e.g. a transient
+// inspect failure), the capture must still fall back to the plain
+// net-dhcp substring match rather than failing outright or matching
+// everything.
+func TestCapturePluginLogAroundFirstRequestAddressFallsBackWhenIDUnresolved(t *testing.T) {
+	const id = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
+	journal := "Sep 27 net-dhcp: RequestAddress mac=aa:bb:cc:dd:ee:01\n" +
+		`Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + id + "\n"
+	r := &fakeLogRunner{journal: journal, idErr: fmt.Errorf("no such plugin")}
+	path := t.TempDir() + "/first-request.log"
+	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
+		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(got), "aa:bb:cc:dd:ee:01") {
+		t.Fatalf("want the net-dhcp-substring line still matched via fallback: %q", got)
+	}
+	if strings.Contains(string(got), "resSize") {
+		t.Fatalf("the tag-only line must not match when the id could not be resolved: %q", got)
+	}
+}
+
+// CapturePluginLog (the ordinary per-cell evidence run-group-a.sh
+// collects) needs the same tag match: this is the same bug that left
+// every cell's plugin-log.txt empty across the whole main run, not only
+// A5b's own capture.
+func TestCapturePluginLogFindsATagOnlyLine(t *testing.T) {
+	const id = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
+	journal := `Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + id + "\n"
+	r := &fakeLogRunner{journal: journal, pluginID: id}
+	path := t.TempDir() + "/plugin.log"
+	if err := CapturePluginLog(context.Background(), r, path); err != nil {
+		t.Fatalf("CapturePluginLog failed: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(got), "IpamDriver.RequestAddress") {
+		t.Fatalf("want the tag-only line kept: %q", got)
 	}
 }
 

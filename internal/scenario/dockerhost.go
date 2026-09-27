@@ -536,31 +536,77 @@ func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, 
 	}
 }
 
+// pluginJournalTag resolves the currently-installed plugin instance's own
+// id, so callers can match dockerd's journal lines for that exact
+// instance. The socket glob's own doc comment already notes the instance
+// id changes on every install, so this is always read fresh, never
+// cached across a capture call.
+func pluginJournalTag(ctx context.Context, r sourceadapter.Runner) (string, error) {
+	out, err := r.Run(ctx, "sudo docker plugin inspect -f '{{.ID}}' "+pluginAlias)
+	if err != nil {
+		return "", fmt.Errorf("docker plugin inspect -f {{.ID}} %s: %w", pluginAlias, err)
+	}
+	id := strings.TrimSpace(out)
+	if id == "" {
+		return "", fmt.Errorf("docker plugin inspect -f {{.ID}} %s: empty id", pluginAlias)
+	}
+	return id, nil
+}
+
+// pluginJournalLines returns the docker journal lines from the last
+// `since` that this plugin instance itself produced (issue #3, measured
+// 2026-09-27 against a live cell at LOG_LEVEL=trace): dockerd tags its
+// own wrapper line for a managed plugin's stdout/stderr with
+// "plugin=<64-hex instance id>", which contains no literal "net-dhcp"
+// substring at all -- so every capture in this file that filtered on
+// that substring alone silently kept nothing, at any LOG_LEVEL, for the
+// very RPC access lines these captures exist to find. A plain
+// "net-dhcp" substring match (true for this plugin's own application
+// log lines that mention a path under /var/lib/net-dhcp) is kept
+// alongside the tag match, and used alone when the instance id cannot be
+// resolved, so a transient inspect failure narrows a capture rather than
+// failing it outright.
+func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since string) ([]string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo journalctl -u docker --since '%s'", since))
+	if err != nil {
+		return nil, fmt.Errorf("journalctl -u docker: %w", err)
+	}
+	tag := ""
+	if id, idErr := pluginJournalTag(ctx, r); idErr == nil {
+		tag = "plugin=" + id
+	}
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "net-dhcp") || (tag != "" && strings.Contains(line, tag)) {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
+}
+
 // CapturePluginLog writes the docker daemon's own journal, filtered to
 // this plugin's lines, to path -- the same evidence run-group-a.sh
 // already collects at the end of a cell's run, but callable directly so
 // a WaitPluginReady timeout can attach it to the BLOCKED cell before any
 // scenario runs (issue #3).
 func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) error {
-	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
+	lines, err := pluginJournalLines(ctx, r, "10 minutes ago")
 	if err != nil {
-		return fmt.Errorf("journalctl -u docker: %w", err)
+		return err
 	}
 	var b strings.Builder
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "net-dhcp") {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteString("\n")
 	}
 	if b.Len() == 0 {
-		b.WriteString("# no net-dhcp lines in the last 10 minutes of the docker journal\n")
+		b.WriteString("# no plugin lines in the last 10 minutes of the docker journal\n")
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 // capturePluginLogAroundFirstRequestAddress writes the plugin's own
-// net-dhcp journal lines from the last 10 minutes to path, sliced to a
+// journal lines from the last 10 minutes to path, sliced to a
 // fixed window of context lines around the first line mentioning
 // RequestAddress. It is A5b's evidence capture (#3): a raw, mechanical
 // slice, never a judgement about what those lines show -- a
@@ -569,17 +615,14 @@ func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) 
 // capture to characterise. At the plugin's default LOG_LEVEL (info) the
 // access line this looks for is not emitted (it's a Trace call, see
 // pkg/util/http.go's WriteAccessLog); the placeholder says so instead of
-// leaving an unexplained miss. A trace-level rerun is a separate pass.
+// leaving an unexplained miss. A trace-level rerun is a separate pass,
+// and needs pluginJournalLines's own tag match to find that access line
+// at all -- a plain "net-dhcp" substring match alone never does (see its
+// doc comment; measured 2026-09-27 against a live cell).
 func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
-	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
+	netDHCP, err := pluginJournalLines(ctx, r, "10 minutes ago")
 	if err != nil {
-		return fmt.Errorf("journalctl -u docker: %w", err)
-	}
-	var netDHCP []string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "net-dhcp") {
-			netDHCP = append(netDHCP, line)
-		}
+		return err
 	}
 	const contextLines = 10
 	firstMatch := -1
@@ -591,12 +634,15 @@ func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadap
 	}
 	var b strings.Builder
 	if firstMatch == -1 {
-		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's net-dhcp lines\n")
+		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's plugin lines\n")
 		b.WriteString("# this is expected at the plugin's default LOG_LEVEL (info): the /IpamDriver.RequestAddress\n")
 		b.WriteString("# access line is only emitted at trace (pkg/util/http.go's WriteAccessLog is a Tracef call),\n")
 		b.WriteString("# and a clean lease grant otherwise logs nothing at info (docs/reference.md). Raising\n")
 		b.WriteString("# LOG_LEVEL to trace (docker plugin disable/set/enable) reproduces this evidence; that is\n")
-		b.WriteString("# a separate, disruptive pass, not this capture.\n")
+		b.WriteString("# a separate, disruptive pass, not this capture. If this file was captured during such a\n")
+		b.WriteString("# trace-level pass and still shows this placeholder, do not read that as the LOG_LEVEL\n")
+		b.WriteString("# explanation applying -- confirm with an independent live journal read before treating\n")
+		b.WriteString("# an absence here as a genuine finding.\n")
 	} else {
 		start := firstMatch - contextLines
 		if start < 0 {
@@ -606,7 +652,7 @@ func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadap
 		if end > len(netDHCP) {
 			end = len(netDHCP)
 		}
-		fmt.Fprintf(&b, "# net-dhcp journal lines %d..%d of %d, centred on the first RequestAddress line (index %d)\n", start, end-1, len(netDHCP), firstMatch)
+		fmt.Fprintf(&b, "# plugin journal lines %d..%d of %d, centred on the first RequestAddress line (index %d)\n", start, end-1, len(netDHCP), firstMatch)
 		for _, line := range netDHCP[start:end] {
 			b.WriteString(line)
 			b.WriteString("\n")
