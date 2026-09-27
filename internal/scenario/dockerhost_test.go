@@ -278,6 +278,9 @@ func TestCapturePluginLogAroundFirstRequestAddressPlaceholderWhenNoMatch(t *test
 	if !strings.Contains(string(got), "no RequestAddress line found") {
 		t.Fatalf("want the placeholder to say no RequestAddress line was found, got: %q", got)
 	}
+	if !strings.Contains(string(got), "trace") || !strings.Contains(string(got), "LOG_LEVEL") {
+		t.Fatalf("want the placeholder to explain the miss is expected at the plugin's default log level and name trace/LOG_LEVEL, got: %q", got)
+	}
 	if strings.Contains(string(got), "started") || strings.Contains(string(got), "ready") {
 		t.Fatalf("placeholder should not echo journal content it never centred on: %q", got)
 	}

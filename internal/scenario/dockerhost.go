@@ -566,7 +566,10 @@ func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) 
 // slice, never a judgement about what those lines show -- a
 // bridge-ipam run's first lease going out under a different client-id
 // than the fixed MAC is left for whoever reads the evidence, not this
-// capture to characterise.
+// capture to characterise. At the plugin's default LOG_LEVEL (info) the
+// access line this looks for is not emitted (it's a Trace call, see
+// pkg/util/http.go's WriteAccessLog); the placeholder says so instead of
+// leaving an unexplained miss. A trace-level rerun is a separate pass.
 func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
 	out, err := r.Run(ctx, "sudo journalctl -u docker --since '10 minutes ago'")
 	if err != nil {
@@ -589,6 +592,11 @@ func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadap
 	var b strings.Builder
 	if firstMatch == -1 {
 		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's net-dhcp lines\n")
+		b.WriteString("# this is expected at the plugin's default LOG_LEVEL (info): the /IpamDriver.RequestAddress\n")
+		b.WriteString("# access line is only emitted at trace (pkg/util/http.go's WriteAccessLog is a Tracef call),\n")
+		b.WriteString("# and a clean lease grant otherwise logs nothing at info (docs/reference.md). Raising\n")
+		b.WriteString("# LOG_LEVEL to trace (docker plugin disable/set/enable) reproduces this evidence; that is\n")
+		b.WriteString("# a separate, disruptive pass, not this capture.\n")
 	} else {
 		start := firstMatch - contextLines
 		if start < 0 {
