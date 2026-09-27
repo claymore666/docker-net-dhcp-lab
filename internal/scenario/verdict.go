@@ -3,6 +3,7 @@ package scenario
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -96,7 +97,76 @@ func Write(dir string, v Verdict) error {
 	}
 	sort.Strings(labels)
 	for _, label := range labels {
-		fmt.Fprintf(&b, "evidence.%s: %s\n", label, v.Evidence[label])
+		// Stored relative to dir, never the absolute path Write was
+		// called with: the run's own machine layout is not evidence and
+		// must never leak into a bundle another host later reads or
+		// packs (issue #4).
+		rel, err := filepath.Rel(dir, v.Evidence[label])
+		if err != nil {
+			return fmt.Errorf("verdict %s/%s/%s: evidence %q (%s): %w", v.Cell, v.Shape, v.Scenario, label, v.Evidence[label], err)
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return fmt.Errorf("verdict %s/%s/%s: evidence %q (%s) is outside %s", v.Cell, v.Shape, v.Scenario, label, v.Evidence[label], dir)
+		}
+		fmt.Fprintf(&b, "evidence.%s: %s\n", label, filepath.ToSlash(rel))
 	}
 	return os.WriteFile(dir+"/"+v.FileName(), []byte(b.String()), 0o644)
+}
+
+// ReadVerdict parses one file Write produced. It never looks at path's
+// own name for scenario/cell/shape (issue #4): both a shape and a
+// scenario name can carry internal hyphens of their own
+// ("bridge-ipam", or a scenario's own multi-word name), so the only
+// field boundary that can never be ambiguous is the "key: value" line
+// Write already wrote.
+// isolation is optional, matching Write's own "only when non-empty"
+// rule; every other key is required, and an unrecognised key fails
+// loudly rather than being silently dropped, the same discipline a
+// results page reading this file depends on (issue #4).
+func ReadVerdict(path string) (Verdict, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Verdict{}, fmt.Errorf("read verdict %s: %w", path, err)
+	}
+	v := Verdict{Evidence: map[string]string{}}
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		key, val, ok := strings.Cut(line, ": ")
+		if !ok {
+			return Verdict{}, fmt.Errorf("%s:%d: line %q is not a \"key: value\" pair", path, i+1, line)
+		}
+		switch {
+		case key == "scenario":
+			v.Scenario = val
+		case key == "cell":
+			v.Cell = val
+		case key == "shape":
+			v.Shape = Shape(val)
+		case key == "result":
+			v.Result = Result(val)
+		case key == "reason":
+			v.Reason = val
+		case key == "git_sha":
+			v.GitSHA = val
+		case key == "isolation":
+			v.IsolationMethod = val
+		case key == "timestamp":
+			t, err := time.Parse(time.RFC3339, val)
+			if err != nil {
+				return Verdict{}, fmt.Errorf("%s:%d: timestamp %q: %w", path, i+1, val, err)
+			}
+			v.Timestamp = t
+		case strings.HasPrefix(key, "evidence."):
+			v.Evidence[strings.TrimPrefix(key, "evidence.")] = val
+		default:
+			return Verdict{}, fmt.Errorf("%s:%d: unrecognised field %q", path, i+1, key)
+		}
+	}
+	if v.Scenario == "" || v.Cell == "" || v.Shape == "" || v.Result == "" {
+		return Verdict{}, fmt.Errorf("%s: missing one of scenario/cell/shape/result", path)
+	}
+	return v, nil
 }

@@ -40,6 +40,10 @@ func main() {
 		cmdLeases(os.Args[2:])
 	case "run":
 		os.Exit(cmdRun(os.Args[2:]))
+	case "matrix":
+		os.Exit(cmdMatrix(os.Args[2:]))
+	case "coverage":
+		os.Exit(cmdCoverage(os.Args[2:]))
 	default:
 		usage()
 	}
@@ -50,6 +54,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
+	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
+	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)")
 	os.Exit(2)
 }
 

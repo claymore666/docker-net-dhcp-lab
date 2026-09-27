@@ -285,6 +285,9 @@ fi
 echo "== hygiene fixture tests =="
 ./scripts/hygiene-check-test.sh
 
+echo "== pack fixture tests =="
+./scripts/pack-test.sh
+
 echo "== commit-message check fixture tests =="
 ./scripts/commit-message-check-test.sh
 

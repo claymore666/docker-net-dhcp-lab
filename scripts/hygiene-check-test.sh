@@ -14,6 +14,7 @@ git init -q "$fixture_repo"
 git -C "$fixture_repo" config user.email test@example.invalid
 git -C "$fixture_repo" config user.name test
 cp "$REPO_ROOT/scripts/hygiene-check.sh" "$fixture_repo/scripts/hygiene-check.sh"
+cp "$REPO_ROOT/scripts/hygiene-patterns.sh" "$fixture_repo/scripts/hygiene-patterns.sh"
 
 run_case() {
 	local desc=$1 content=$2 want=$3 file=${4:-note.txt} # want: ok | fail
@@ -52,6 +53,13 @@ run_case "lab-range address, no trailing newline" \
 	$'note: host at 10.200.1.1' ok || fail=1
 run_case "lab-range address, with trailing newline" \
 	$'note: host at 10.200.1.1\n' ok || fail=1
+# 172.16.0.0/16 is not one of Docker's default bridge pools
+# (172.17.0.0/16 through 172.31.0.0/16) and must stay refused; the
+# first pool Docker actually hands out must still pass.
+run_case "172.16.x address, not a docker default pool, refused" \
+	$'note: two networks: 172.16.0.2 plus the lease\n' fail || fail=1
+run_case "172.17.x address, a real docker default pool, packs" \
+	$'note: two networks: 172.17.0.2 plus the lease\n' ok || fail=1
 # No candidate address at all.
 run_case "no address" $'note: nothing here\n' ok || fail=1
 # A session agent name or a review-exchange marker must be caught even
@@ -171,6 +179,10 @@ run_case "commit-message-check-test.sh, role word, exempt" \
 # to cite itself with (issue #3).
 run_case "review-round label" \
 	$'// found gone (issue #3, review r1)\n' fail || fail=1
+# The bare "fix round" phrase, the shape a pack.sh comment used to
+# carry, must be caught too, with no other marker on the line.
+run_case "fix round phrase" \
+	$'// fixed for new runs, issue #4 fix round\n' fail || fail=1
 # The bare "the review" stand-in for the process itself must be caught
 # too, the same leftover shape ("the review's own F1 requirement").
 run_case "the review, bare phrase" \
@@ -197,4 +209,4 @@ run_case "uppercase F, no digit, not a finding label" \
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 41 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 44 cases behaved as expected"
