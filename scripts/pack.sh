@@ -25,7 +25,7 @@ fi
 # A lab-generated hostname always matches this shape (up-cell.sh's and
 # up-source.sh's own cloud-init local-hostname values); anything else in
 # a journalctl short-output line's hostname field ("Mon DD HH:MM:SS
-# <host> <tag>[pid]: ...", the shape run-group-a.sh captures into
+# <host> <tag>[pid]: ...", the shape run-cell.sh captures into
 # <cell>-plugin-log.txt) is a real machine name leaking into evidence.
 JOURNAL_LINE_RE='^[A-Z][a-z]{2}[[:space:]]+[0-9]{1,2}[[:space:]]+[0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]]+([^[:space:]]+)[[:space:]]'
 LAB_HOSTNAME_RE='^lab-[a-z0-9-]+$'

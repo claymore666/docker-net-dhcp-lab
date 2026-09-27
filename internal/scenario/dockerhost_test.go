@@ -351,7 +351,7 @@ func TestPluginJournalLinesKeepsLinesFromEveryPluginInstanceInTheWindow(t *testi
 	}
 }
 
-// CapturePluginLog (the ordinary per-cell evidence run-group-a.sh
+// CapturePluginLog (the ordinary per-cell evidence run-cell.sh
 // collects) needs the same tag match: this is the same bug that left
 // every cell's plugin-log.txt empty across the whole main run, not only
 // A5b's own capture.

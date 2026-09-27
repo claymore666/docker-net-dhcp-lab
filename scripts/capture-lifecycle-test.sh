@@ -3,7 +3,7 @@
 # logic (issue #3): every docker/ip/nsenter/build-bridge.sh call is
 # intercepted by a stub, never real docker or netns state. The kernel
 # operations these scripts drive (real bridge, real veth, real tcpdump)
-# are exercised live by run-group-a.sh, not here.
+# are exercised live by run-cell.sh, not here.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

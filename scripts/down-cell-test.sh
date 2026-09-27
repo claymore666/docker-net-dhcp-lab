@@ -299,7 +299,7 @@ if ! grep -qE '^virsh undefine lab-case6cell-source --nvram$' "$sudolog6"; then
 fi
 
 # Case 7: the evidence dir is inside $WORK (the exact shape
-# run-group-a.sh's old default produced, and every evidence bundle it
+# run-cell.sh's old default produced, and every evidence bundle it
 # built was destroyed by the rm -rf below before this guard existed --
 # measured live 2026-09-26). Must refuse, must not touch $WORK at all
 # (not even the pcap move), and must not print "torn down".
