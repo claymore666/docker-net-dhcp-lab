@@ -209,3 +209,51 @@ func TestSourceCellSitsBesideSourcelessCell(t *testing.T) {
 		t.Fatal("ref-only cell gained a source it never declared")
 	}
 }
+
+func TestRejectsUnregisteredDockerHostBaseImage(t *testing.T) {
+	bad := strings.Replace(goodMin, "base_image: debian-13-generic-amd64", "base_image: not-a-registered-image", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("an unregistered docker_host.base_image was accepted")
+	}
+}
+
+func TestRejectsUnregisteredSourceBaseImage(t *testing.T) {
+	bad := strings.Replace(withSource, "base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.21/24", "base_image: not-a-registered-image\n      mgmt_address: 10.200.255.21/24", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("an unregistered source.base_image was accepted")
+	}
+}
+
+// engine_version is optional (issue #8): a cell that never sets it must
+// still load, same as before this field existed.
+func TestEngineVersionOptional(t *testing.T) {
+	c, err := Load(write(t, goodMin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell, err := c.CellByName("ref-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.DockerHost.EngineVersion != "" {
+		t.Fatalf("engine_version = %q, want empty when never set", cell.DockerHost.EngineVersion)
+	}
+}
+
+func TestEngineVersionParses(t *testing.T) {
+	pinned := strings.Replace(goodMin,
+		"plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2",
+		"plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2\n      engine_version: 5:20.10.24~3-0~debian-bullseye",
+		1)
+	c, err := Load(write(t, pinned))
+	if err != nil {
+		t.Fatalf("valid engine_version rejected: %v", err)
+	}
+	cell, err := c.CellByName("ref-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.DockerHost.EngineVersion != "5:20.10.24~3-0~debian-bullseye" {
+		t.Fatalf("engine_version = %q, want the pinned value", cell.DockerHost.EngineVersion)
+	}
+}

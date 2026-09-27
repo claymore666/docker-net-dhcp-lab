@@ -57,6 +57,7 @@ echo "== versions =="
 	echo "# versions for cell $CELL, commit $GIT_SHA, captured $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "plugin_tag: $plugin_tag"
 	echo "previous_plugin_tag: ${previous_plugin_tag:-none configured}"
+	echo "docker_host distro: $(ssh_run "$mgmt_ip" ". /etc/os-release && echo \$PRETTY_NAME")"
 	echo "docker_host engine: $(ssh_run "$mgmt_ip" "sudo docker version --format '{{.Server.Version}}'")"
 	echo "docker_host kernel: $(ssh_run "$mgmt_ip" "uname -r")"
 	echo "source type: $source_type"
@@ -91,8 +92,19 @@ done
 RUNNER_FAILED=0
 for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	echo "== scenarios: $shape =="
+	# Resume support (issue #8): a scenario that already has a verdict for
+	# this cell/shape in $EVIDENCE_DIR is never re-run -- `labctl remaining`
+	# reads each verdict's own content, never a file name, and this script
+	# passes the result straight into `labctl run`'s existing
+	# scenario-filter argument, unchanged. A shape whose whole catalog is
+	# already covered is skipped outright, without bringing its network up.
+	remaining=$(go run "$REPO_ROOT/cmd/labctl" remaining "$LAB_YAML" "$CELL" "$shape" "$EVIDENCE_DIR")
+	if [ -z "$remaining" ]; then
+		echo "run-group-a: $CELL/$shape already has a verdict for every scenario in $EVIDENCE_DIR, skipping"
+		continue
+	fi
 	rc=0
-	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" || rc=$?
+	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" "$remaining" || rc=$?
 	if [ "$rc" -eq 3 ]; then
 		echo "run-group-a: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
 		RUNNER_FAILED=1

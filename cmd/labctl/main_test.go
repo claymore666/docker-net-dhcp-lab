@@ -121,3 +121,40 @@ func TestSelectScenariosDropsUnknownNames(t *testing.T) {
 		t.Fatalf("want only the known name A1 kept, got %v", got)
 	}
 }
+
+// TestRemainingScenarioNamesKeepsCatalogOrderAndDropsDone guards #8's
+// resume support: the result must exclude every name already in done
+// and keep catalog's own order, so it feeds straight back into
+// selectScenarios unchanged.
+func TestRemainingScenarioNamesKeepsCatalogOrderAndDropsDone(t *testing.T) {
+	catalog := []scenario.Scenario{
+		{Name: "A1"}, {Name: "A5b-host-reboot-fixed-mac"}, {Name: "A9"}, {Name: "A10-kill-restart-policy"},
+	}
+	done := map[string]bool{"A9": true, "A1": true}
+	got := remainingScenarioNames(catalog, done)
+	want := []string{"A5b-host-reboot-fixed-mac", "A10-kill-restart-policy"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// TestRemainingScenarioNamesEmptyDoneReturnsWholeCatalog: a fresh
+// evidence dir with no verdicts yet must not skip anything.
+func TestRemainingScenarioNamesEmptyDoneReturnsWholeCatalog(t *testing.T) {
+	catalog := []scenario.Scenario{{Name: "A1"}, {Name: "A2"}}
+	got := remainingScenarioNames(catalog, map[string]bool{})
+	if len(got) != 2 || got[0] != "A1" || got[1] != "A2" {
+		t.Fatalf("got %v, want the whole catalog in order", got)
+	}
+}
+
+// TestRemainingScenarioNamesAllDoneReturnsEmpty: once every catalog
+// scenario has a verdict, resuming this shape must be a no-op, not an
+// error and not a re-run of everything.
+func TestRemainingScenarioNamesAllDoneReturnsEmpty(t *testing.T) {
+	catalog := []scenario.Scenario{{Name: "A1"}, {Name: "A2"}}
+	got := remainingScenarioNames(catalog, map[string]bool{"A1": true, "A2": true})
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+}

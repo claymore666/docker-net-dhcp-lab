@@ -35,7 +35,10 @@ mac_from() {
 mgmt_mac=$(mac_from "${domain}-mgmt")
 seg_mac=$(mac_from "${domain}-seg")
 
-base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh")
+image_name=$(jq -r '.source_image.name' <<<"$RESOLVED")
+image_url=$(jq -r '.source_image.url' <<<"$RESOLVED")
+os_variant=$(jq -r '.source_image.os_variant' <<<"$RESOLVED")
+base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
 
 mkdir -p "$WORK"
 known_hosts="$WORK/known_hosts"
@@ -96,7 +99,7 @@ if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 		--disk path="$seed_iso",device=cdrom \
 		--network network=net-mgmt,model=virtio,mac="$mgmt_mac" \
 		--network bridge="$bridge",model=virtio,mac="$seg_mac" \
-		--os-variant debian13 \
+		--os-variant "$os_variant" \
 		--cpu host-model \
 		--boot loader="$ovmf_code",loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template="$ovmf_vars_template",nvram="$nvram" \
 		--graphics none \

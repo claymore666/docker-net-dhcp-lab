@@ -2,12 +2,16 @@
 # Populate the base image cache (issue #1). Downloads once, verifies the
 # checksum every time (including a cache hit), and never accepts a file
 # that does not match the pinned value in images/*.sha256.
+# name/url come from labctl resolve's docker_host_image/source_image
+# (issue #8, host axis): this script is the one place that turns them
+# into a cached, checksummed file, for any base image lab.yaml names, not
+# only the original debian-13 reference host.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE_DIR=/srv/lab/images
-NAME=debian-13-generic-amd64
-URL="https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2"
+NAME=${1:?usage: fetch-base-image.sh <name> <url>}
+URL=${2:?usage: fetch-base-image.sh <name> <url>}
 PINNED="$REPO_ROOT/images/$NAME.sha256"
 DEST="$CACHE_DIR/$NAME.qcow2"
 

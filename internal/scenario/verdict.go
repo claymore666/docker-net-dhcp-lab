@@ -48,7 +48,22 @@ type Verdict struct {
 	// Carried here, not only in isolation.log, so a verdict read on its
 	// own says how the network it ran against was isolated (issue #3).
 	IsolationMethod string
-	Timestamp       time.Time
+	// Host is the docker host this scenario ran against (issue #8, host
+	// axis): distro, kernel and docker engine version, read once per
+	// shape and copied onto every verdict by RunOne. Zero value (every
+	// field empty) for a verdict from before this field existed, or when
+	// the read itself failed -- a verdict never blocks on it.
+	Host      HostInfo
+	Timestamp time.Time
+}
+
+// HostInfo is the docker host's own identity, per issue #8: which
+// distro/kernel/engine a verdict ran against, so a difference between
+// two hosts running the same scenario has one recorded cause.
+type HostInfo struct {
+	Distro        string
+	Kernel        string
+	DockerVersion string
 }
 
 // FileName is deterministic per scenario x cell x shape (issue #3): a
@@ -89,6 +104,15 @@ func Write(dir string, v Verdict) error {
 	fmt.Fprintf(&b, "git_sha: %s\n", v.GitSHA)
 	if v.IsolationMethod != "" {
 		fmt.Fprintf(&b, "isolation: %s\n", v.IsolationMethod)
+	}
+	if v.Host.Distro != "" {
+		fmt.Fprintf(&b, "host.distro: %s\n", v.Host.Distro)
+	}
+	if v.Host.Kernel != "" {
+		fmt.Fprintf(&b, "host.kernel: %s\n", v.Host.Kernel)
+	}
+	if v.Host.DockerVersion != "" {
+		fmt.Fprintf(&b, "host.docker_version: %s\n", v.Host.DockerVersion)
 	}
 	fmt.Fprintf(&b, "timestamp: %s\n", v.Timestamp.UTC().Format(time.RFC3339))
 	labels := make([]string, 0, len(v.Evidence))
@@ -153,6 +177,12 @@ func ReadVerdict(path string) (Verdict, error) {
 			v.GitSHA = val
 		case key == "isolation":
 			v.IsolationMethod = val
+		case key == "host.distro":
+			v.Host.Distro = val
+		case key == "host.kernel":
+			v.Host.Kernel = val
+		case key == "host.docker_version":
+			v.Host.DockerVersion = val
 		case key == "timestamp":
 			t, err := time.Parse(time.RFC3339, val)
 			if err != nil {
