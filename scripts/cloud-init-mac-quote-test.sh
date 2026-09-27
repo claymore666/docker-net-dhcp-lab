@@ -1,14 +1,14 @@
 #!/bin/bash
-# Both netplan templates substitute a MAC address into `macaddress:`.
-# Unquoted, an all-digit octet string (a real, reproducible md5-derived
-# MAC, not a contrived one) is a valid YAML 1.1 sexagesimal integer, not
-# a string: cloud-init then waits forever for a physical device that
-# cannot exist (measured live, issue #8: "Not all expected physical
-# devices present: {41135154926}" from "52:54:00:31:55:26", both NICs
-# left unconfigured). The static check below makes the unquoted form
-# impossible to reintroduce; the dynamic one reproduces the actual
-# parse, against the exact MAC that broke, through the same YAML loader
-# family (PyYAML) cloud-init itself uses.
+# Two issue #8 facts about the rendered network-config seed file, both
+# measured live. Unquoted, an all-digit MAC octet string is a valid
+# YAML 1.1 sexagesimal integer, not a string ("Not all expected
+# physical devices present: {41135154926}" from "52:54:00:31:55:26").
+# A top-level `network:` wrapper key makes cloud-init 20.4.1 (Debian
+# 11) log "missing 'config' or 'version'" and skip applying the config
+# entirely, leaving both NICs unconfigured -- NoCloud reads this
+# file's version/ethernets keys directly, unwrapped. The checks below
+# make both regressions impossible; the dynamic one reproduces the
+# parse through PyYAML, cloud-init's own YAML loader.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
@@ -28,6 +28,17 @@ for t in "${templates[@]}"; do
 		echo "cloud-init-mac-quote-test: $t does not have two quoted macaddress placeholders (mgmt + seg)" >&2
 		fail=1
 	fi
+	wrapped=$(grep -nE '^network:[[:space:]]*$' "$t" || true)
+	if [ -n "$wrapped" ]; then
+		echo "cloud-init-mac-quote-test: $t has a top-level 'network:' wrapper key" >&2
+		echo "$wrapped" >&2
+		fail=1
+	fi
+	top_version=$(grep -cE '^version:[[:space:]]*2[[:space:]]*$' "$t" || true)
+	if [ "${top_version:-0}" -lt 1 ]; then
+		echo "cloud-init-mac-quote-test: $t does not have a top-level 'version: 2' key" >&2
+		fail=1
+	fi
 done
 [ "$fail" -eq 0 ]
 
@@ -45,13 +56,16 @@ for t in "${templates[@]}"; do
 	python3 -c "
 import sys, yaml
 cfg = yaml.safe_load(sys.stdin)
-for name, eth in cfg['network']['ethernets'].items():
+if 'network' in cfg:
+    print('top-level network wrapper key survived rendering', file=sys.stderr)
+    sys.exit(1)
+for name, eth in cfg['ethernets'].items():
     mac = eth['match']['macaddress']
     if not isinstance(mac, str):
         print(f'{name}: macaddress parsed as {type(mac).__name__} ({mac!r}), not str', file=sys.stderr)
         sys.exit(1)
 " <<<"$rendered" || {
-		echo "cloud-init-mac-quote-test: $t: rendered macaddress did not survive as a YAML string" >&2
+		echo "cloud-init-mac-quote-test: $t: rendered network-config did not survive as expected" >&2
 		exit 1
 	}
 done

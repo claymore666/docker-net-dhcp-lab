@@ -34,7 +34,7 @@ fi
 echo "== schema self-check =="
 go run ./cmd/labctl validate lab.yaml
 
-echo "== cloud-init netplan MAC values stay quoted =="
+echo "== cloud-init network-config seed file stays valid (MAC quoting, no network: wrapper) =="
 ./scripts/cloud-init-mac-quote-test.sh
 
 # unreachable_reason and its evasion detectors live in wiring-check.sh,

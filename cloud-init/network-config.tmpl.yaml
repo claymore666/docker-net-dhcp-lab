@@ -1,29 +1,27 @@
-# Two NICs, matched by MAC (quoted) and renamed to fixed names: the base
-# image's kernel cmdline does not set net.ifnames=0, so a match on
-# "eth0"/"eth1" alone never fires (issue #1). Unquoted, an all-digit MAC
-# is a valid YAML 1.1 sexagesimal integer, not a string, so cloud-init
-# waits forever for a device that cannot exist (measured live, issue #8:
-# "Not all expected physical devices present: {41135154926}", both NICs
-# left unconfigured -- the real cause behind the Ubuntu 24.04 bring-up
-# timeout). eth0 is the management NIC (NAT, static); eth1 is the
-# segment NIC, address-less: only its link state matters, it is the
-# macvlan parent for the plugin under test.
-network:
-  version: 2
-  ethernets:
-    mgmt0:
-      match:
-        macaddress: "__MGMT_MAC__"
-      set-name: eth0
-      addresses: [__MGMT_ADDR__]
-      gateway4: __MGMT_GW__
-      nameservers:
-        addresses: [__MGMT_GW__]
-    seg0:
-      match:
-        macaddress: "__SEG_MAC__"
-      set-name: eth1
-      dhcp4: false
-      dhcp6: false
-      accept-ra: false
-      link-local: []
+# Two NICs, matched by MAC and renamed to fixed names: the base image's
+# kernel cmdline lacks net.ifnames=0, so eth0/eth1 alone never match
+# (issue #1). MAC quoted: an all-digit MAC is a YAML 1.1 sexagesimal
+# integer if left bare (issue #8). No top-level `network:` key: NoCloud
+# reads this file's version/ethernets directly, and the wrapper makes
+# cloud-init log "missing 'config' or 'version'" and skip networking
+# entirely (issue #8, measured live on cloud-init 20.4.1/Debian 11).
+# eth0 = management NIC (NAT, static); eth1 = segment NIC, address-less,
+# the macvlan parent for the plugin under test.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "__MGMT_MAC__"
+    set-name: eth0
+    addresses: [__MGMT_ADDR__]
+    gateway4: __MGMT_GW__
+    nameservers:
+      addresses: [__MGMT_GW__]
+  seg0:
+    match:
+      macaddress: "__SEG_MAC__"
+    set-name: eth1
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+    link-local: []
