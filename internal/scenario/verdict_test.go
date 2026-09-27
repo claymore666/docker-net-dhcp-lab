@@ -65,6 +65,51 @@ func TestReadVerdictOmitsIsolationWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestReadVerdictRoundTripsHost guards the same discipline as the
+// isolation field, for the host axis (issue #8): all three host.* lines
+// present must come back unchanged.
+func TestReadVerdictRoundTripsHost(t *testing.T) {
+	dir := t.TempDir()
+	want := Verdict{
+		Scenario:  NameA1,
+		Cell:      "host-ubuntu2404",
+		Shape:     ShapeBridge,
+		Result:    NA,
+		Reason:    "no capability",
+		Host:      HostInfo{Distro: "Ubuntu 24.04.1 LTS", Kernel: "6.8.0-45-generic", DockerVersion: "27.3.1"},
+		Timestamp: time.Now(),
+	}
+	if err := Write(dir, want); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got, err := ReadVerdict(filepath.Join(dir, want.FileName()))
+	if err != nil {
+		t.Fatalf("ReadVerdict: %v", err)
+	}
+	if got.Host != want.Host {
+		t.Fatalf("Host round trip mismatch: got %+v, want %+v", got.Host, want.Host)
+	}
+}
+
+// TestReadVerdictOmitsHostWhenEmpty guards Write's "only when non-empty"
+// rule for the host.* lines: a verdict from before issue #8 (or one
+// whose host read failed) must read back with a zero HostInfo, never an
+// error for the missing lines.
+func TestReadVerdictOmitsHostWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	v := Verdict{Scenario: NameA1, Cell: "kea", Shape: ShapeBridge, Result: NA, Reason: "no capability", Timestamp: time.Now()}
+	if err := Write(dir, v); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got, err := ReadVerdict(filepath.Join(dir, v.FileName()))
+	if err != nil {
+		t.Fatalf("ReadVerdict: %v", err)
+	}
+	if got.Host != (HostInfo{}) {
+		t.Fatalf("expected zero HostInfo, got %+v", got.Host)
+	}
+}
+
 // TestReadVerdictRejectsUnrecognisedField is the mutant this test was
 // written to catch: a results page silently ignoring an unknown field
 // would misread a future verdict format instead of failing loudly

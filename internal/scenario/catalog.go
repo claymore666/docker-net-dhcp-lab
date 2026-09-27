@@ -35,6 +35,11 @@ type Env struct {
 	// suffix (issue #3, A13 redesign): A13 checks the container's own
 	// default route against this, not against a hardcoded address.
 	SegGateway string
+	// HostInfo is the docker host this Env's scenarios run against
+	// (issue #8): copied onto every Verdict by RunOne, once, so no
+	// scenario body has to carry it. Zero value when the read failed;
+	// never blocks a run.
+	HostInfo HostInfo
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -125,6 +130,16 @@ const MinPoolAddresses = 38
 // a cascading FAIL, when it cannot be restored," with no separate
 // before/after hooks and no change to the caller's loop.
 func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
+	// Every return path below funnels through here (#8): a verdict picks
+	// up which host it ran on regardless of which check produced it,
+	// without any of the checks below or the scenario bodies themselves
+	// having to set it.
+	v := runOneInner(ctx, s, e)
+	v.Host = e.HostInfo
+	return v
+}
+
+func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	if err := ensurePluginKnownState(ctx, e.Host); err != nil {
 		return blocked(s.Name, e.Cell, e.Shape,
 			fmt.Sprintf("plugin not in a known state before this scenario: %v", err), e.GitSHA)

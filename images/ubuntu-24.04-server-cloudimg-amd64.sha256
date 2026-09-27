@@ -1,0 +1,8 @@
+# Pinned checksum for the Ubuntu 24.04 server cloud image (issue #8, host
+# axis). Verified against Ubuntu's own SHA256SUMS at
+# https://cloud-images.ubuntu.com/releases/24.04/release/SHA256SUMS before
+# being pinned here. Update by hand when the base image is meant to move:
+# `sha256sum` the new file, cross-check it against the publisher's own SHA
+# file, then paste the line below. fetch-base-image.sh refuses any
+# download that does not match.
+6a81c37564db9b1ee84e141922625e1d7c5b389b99bb3c572e0243607d5bb4d2  ubuntu-24.04-server-cloudimg-amd64.qcow2

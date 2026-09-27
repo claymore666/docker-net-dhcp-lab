@@ -40,6 +40,8 @@ func main() {
 		cmdLeases(os.Args[2:])
 	case "run":
 		os.Exit(cmdRun(os.Args[2:]))
+	case "remaining":
+		os.Exit(cmdRemaining(os.Args[2:]))
 	case "matrix":
 		os.Exit(cmdMatrix(os.Args[2:]))
 	case "coverage":
@@ -54,6 +56,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
+	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
 	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)")
 	os.Exit(2)
@@ -114,11 +117,31 @@ func cmdResolve(args []string) {
 		fmt.Fprintln(os.Stderr, "labctl resolve:", err)
 		os.Exit(1)
 	}
+	// Resolved alongside the cell, never duplicated into lab.yaml itself
+	// (#8): up-cell.sh/up-source.sh get the base image's distro/suite/
+	// os-variant this way, from the one Go registry, instead of a second
+	// hand-kept copy of the mapping in shell.
+	dockerHostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl resolve:", err)
+		os.Exit(1)
+	}
+	var sourceImage *labyaml.BaseImage
+	if cell.Source != nil {
+		si, err := labyaml.LookupBaseImage(cell.Source.BaseImage)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "labctl resolve:", err)
+			os.Exit(1)
+		}
+		sourceImage = &si
+	}
 	out := struct {
-		Management labyaml.Management `json:"management"`
-		ULAPrefix  string             `json:"ula_prefix"`
-		Cell       *labyaml.Cell      `json:"cell"`
-	}{cfg.Management, cfg.ULAPrefix, cell}
+		Management      labyaml.Management `json:"management"`
+		ULAPrefix       string             `json:"ula_prefix"`
+		Cell            *labyaml.Cell      `json:"cell"`
+		DockerHostImage labyaml.BaseImage  `json:"docker_host_image"`
+		SourceImage     *labyaml.BaseImage `json:"source_image"`
+	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
@@ -167,6 +190,78 @@ func selectScenarios(catalog []scenario.Scenario, filterArg string) []scenario.S
 		}
 	}
 	return out
+}
+
+// remainingScenarioNames returns catalog's own names, in catalog order,
+// leaving out any name in done (#8's resume support: a re-run passes
+// this straight back into labctl run's existing scenario-filter arg, so
+// a scenario that already has a verdict in the bundle is never re-run).
+func remainingScenarioNames(catalog []scenario.Scenario, done map[string]bool) []string {
+	var out []string
+	for _, s := range catalog {
+		if !done[s.Name] {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// cmdRemaining prints the comma-separated scenario names cell/shape has
+// not yet got a verdict for in evidenceDir, reading each *.verdict
+// file's own content (never its file name, matching ReadVerdict's own
+// rule) so a resumed run-group-a.sh can pass the result straight into
+// `labctl run`'s existing scenario-filter argument. Prints an empty line
+// when every catalog scenario already has one.
+func cmdRemaining(args []string) int {
+	if len(args) != 4 {
+		usage()
+	}
+	labYAML, cellName, shapeArg, evidenceDir := args[0], args[1], args[2], args[3]
+	cfg, err := labyaml.Load(labYAML)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl remaining:", err)
+		return 1
+	}
+	if _, err := cfg.CellByName(cellName); err != nil {
+		fmt.Fprintln(os.Stderr, "labctl remaining:", err)
+		return 1
+	}
+	matches, err := filepath.Glob(filepath.Join(evidenceDir, "*.verdict"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl remaining:", err)
+		return 1
+	}
+	done := map[string]bool{}
+	for _, m := range matches {
+		v, err := scenario.ReadVerdict(m)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "labctl remaining:", err)
+			return 1
+		}
+		if v.Cell == cellName && string(v.Shape) == shapeArg {
+			done[v.Scenario] = true
+		}
+	}
+	fmt.Println(strings.Join(remainingScenarioNames(scenario.Catalog, done), ","))
+	return 0
+}
+
+// hostInfo reads the docker host's own distro, kernel and engine version
+// over host (issue #8), best-effort: a read that fails leaves the zero
+// HostInfo rather than aborting the run, since a host detail is
+// something a verdict carries, not something it depends on.
+func hostInfo(ctx context.Context, host sourceadapter.Runner) scenario.HostInfo {
+	var hi scenario.HostInfo
+	if out, err := host.Run(ctx, ". /etc/os-release && echo \"$PRETTY_NAME\""); err == nil {
+		hi.Distro = strings.TrimSpace(out)
+	}
+	if out, err := host.Run(ctx, "uname -r"); err == nil {
+		hi.Kernel = strings.TrimSpace(out)
+	}
+	if out, err := host.Run(ctx, "sudo docker version --format '{{.Server.Version}}'"); err == nil {
+		hi.DockerVersion = strings.TrimSpace(out)
+	}
+	return hi
 }
 
 // cmdRun is issue #3's scenario runner: one cell x one shape, every
@@ -259,6 +354,7 @@ func cmdRun(args []string) int {
 	}
 
 	ctx := context.Background()
+	hi := hostInfo(ctx, hostRunner)
 
 	// The readiness gate every scenario relies on (RunOne's
 	// ensurePluginKnownState) only runs starting with the first
@@ -276,7 +372,7 @@ func cmdRun(args []string) int {
 			v := scenario.Verdict{
 				Scenario: s.Name, Cell: cellName, Shape: shape,
 				Result: scenario.BLOCKED, Reason: reason,
-				GitSHA: gitSHA, Timestamp: time.Now(),
+				GitSHA: gitSHA, Timestamp: time.Now(), Host: hi,
 			}
 			if werr := scenario.Write(evidenceDir, v); werr != nil {
 				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
@@ -326,7 +422,7 @@ func cmdRun(args []string) int {
 			v := scenario.Verdict{
 				Scenario: s.Name, Cell: cellName, Shape: shape,
 				Result: scenario.BLOCKED, Reason: reason,
-				GitSHA: gitSHA, Timestamp: time.Now(),
+				GitSHA: gitSHA, Timestamp: time.Now(), Host: hi,
 			}
 			if werr := scenario.Write(evidenceDir, v); werr != nil {
 				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
@@ -359,6 +455,7 @@ func cmdRun(args []string) int {
 		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
 		GitSHA:            gitSHA,
 		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
+		HostInfo:          hi,
 	}
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a

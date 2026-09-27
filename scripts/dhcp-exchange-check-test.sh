@@ -34,10 +34,30 @@ expect_fail() {
 	fi
 }
 
+expect_err() {
+	local name=$1 pcap=$2 mac=$3 want_substr=$4 got rc=0
+	got=$(dhcp_exchange_reason "$pcap" "$mac") || rc=$?
+	if [ "$rc" -eq 0 ]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: expected a non-zero exit, got 0 (\"$got\")" >&2
+		fail=1
+	elif [[ "$got" != *"$want_substr"* ]]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: expected an error mentioning \"$want_substr\", got \"$got\"" >&2
+		fail=1
+	elif [[ "$got" == *"no single xid"* ]]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: a missing capture read as a disagreement, not a capture error" >&2
+		fail=1
+	fi
+}
+
 expect_ok "case A (real four-message exchange)" "$DATA/dhcp-good.pcap" "$MAC"
 expect_fail "case B (stops after OFFER)" "$DATA/dhcp-stops-after-offer.pcap" "$MAC" "no single xid"
 expect_fail "case C (ends in a NAK)" "$DATA/dhcp-ends-in-nak.pcap" "$MAC" "NAK"
 expect_fail "case D (exchange belongs to another MAC)" "$DATA/dhcp-wrong-mac.pcap" "$MAC" "no single xid"
+# A pcap that has not been written yet (issue #8: the whole-cell capture
+# is not on disk while a scenario runs) must read as a capture error,
+# never as a disagreement -- the two have different causes and the
+# evidence text must not conflate them.
+expect_err "case E (pcap does not exist yet)" "$DATA/does-not-exist.pcap" "$MAC" "capture unreadable"
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

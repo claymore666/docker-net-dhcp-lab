@@ -246,3 +246,67 @@ func mustFile(t *testing.T, dir, name string) string {
 	}
 	return path
 }
+
+// TestLoadBundleCapturesHostFromFirstVerdict guards issue #8's
+// permissive read: Bundle.Host comes from the first verdict carrying a
+// non-zero HostInfo, not from an exact match requirement the way
+// Cell/GitSHA already enforce.
+func TestLoadBundleCapturesHostFromFirstVerdict(t *testing.T) {
+	dir := t.TempDir()
+	writeResolvedLab(t, dir, "host-ubuntu2404", "ghcr.io/claymore666/docker-net-dhcp:v2.2.2", "")
+	writeVerdict(t, dir, scenario.Verdict{
+		Scenario: scenario.NameA1, Cell: "host-ubuntu2404", Shape: scenario.ShapeBridge,
+		Result: scenario.NA, Reason: "x",
+		Host: scenario.HostInfo{Distro: "Ubuntu 24.04.1 LTS", Kernel: "6.8.0-45-generic", DockerVersion: "27.3.1"},
+	})
+	writeVerdict(t, dir, scenario.Verdict{
+		Scenario: scenario.NameA2, Cell: "host-ubuntu2404", Shape: scenario.ShapeBridge,
+		Result: scenario.NA, Reason: "x",
+	})
+
+	b, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	if b.Host.Distro != "Ubuntu 24.04.1 LTS" || b.Host.Kernel != "6.8.0-45-generic" || b.Host.DockerVersion != "27.3.1" {
+		t.Fatalf("Bundle.Host = %+v, want the first verdict's non-zero HostInfo", b.Host)
+	}
+}
+
+// TestRenderShowsHostPerColumnAndInHeader guards deliverable 2 of issue
+// #8: the matrix renderer must show the host per column, and the
+// per-bundle summary line must carry it too.
+func TestRenderShowsHostPerColumnAndInHeader(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "evidence-host")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeResolvedLab(t, dir, "host-debian11-docker2010", "ghcr.io/claymore666/docker-net-dhcp:v2.2.2", "")
+	writeVerdict(t, dir, scenario.Verdict{
+		Scenario: scenario.NameA1, Cell: "host-debian11-docker2010", Shape: scenario.ShapeBridge,
+		Result: scenario.NA, Reason: "x",
+		Host: scenario.HostInfo{Distro: "Debian GNU/Linux 11 (bullseye)", Kernel: "5.10.0-30-amd64", DockerVersion: "20.10.24"},
+	})
+
+	b, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	page, err := Render(root, "", []Bundle{b})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(page, "Debian GNU/Linux 11 (bullseye)") {
+		t.Fatalf("rendered page does not show the host distro anywhere:\n%s", page)
+	}
+	if !strings.Contains(page, "host-debian11-docker2010 / bridge (Debian GNU/Linux 11 (bullseye))") {
+		t.Fatalf("rendered column header does not carry the host distro:\n%s", page)
+	}
+	if !strings.Contains(page, "20.10.24") {
+		t.Fatalf("rendered header line does not carry the docker engine version:\n%s", page)
+	}
+	if !strings.Contains(page, "5.10.0-30-amd64") {
+		t.Fatalf("rendered header line does not carry the kernel:\n%s", page)
+	}
+}

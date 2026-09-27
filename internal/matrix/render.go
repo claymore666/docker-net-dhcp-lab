@@ -98,9 +98,23 @@ func Render(root, asset string, bundles []Bundle) (string, error) {
 	var out strings.Builder
 	writeHeader(&out, asset, bundles)
 
+	// cellHost backs each column header's host tag (issue #8): keyed by
+	// cell rather than carried on column itself, since column is also a
+	// map key (cellKey.col) and must stay just cell+shape for that.
+	cellHost := map[string]scenario.HostInfo{}
+	for _, b := range bundles {
+		if b.Host != (scenario.HostInfo{}) {
+			cellHost[b.Cell] = b.Host
+		}
+	}
+
 	out.WriteString("| scenario |")
 	for _, c := range colList {
-		fmt.Fprintf(&out, " %s |", c.label())
+		label := c.label()
+		if h, ok := cellHost[c.cell]; ok && h.Distro != "" {
+			label = fmt.Sprintf("%s (%s)", label, h.Distro)
+		}
+		fmt.Fprintf(&out, " %s |", label)
 	}
 	out.WriteString("\n| --- |")
 	for range colList {
@@ -146,9 +160,22 @@ func writeHeader(out *strings.Builder, asset string, bundles []Bundle) {
 		if b.PreviousPluginTag != "" {
 			fmt.Fprintf(out, " (previous `%s`)", b.PreviousPluginTag)
 		}
-		fmt.Fprintf(out, ", %s, lab commit `%s`\n", b.Date.UTC().Format("2006-01-02"), b.LabCommit)
+		fmt.Fprintf(out, ", %s, lab commit `%s`", b.Date.UTC().Format("2006-01-02"), b.LabCommit)
+		if b.Host.Distro != "" || b.Host.Kernel != "" || b.Host.DockerVersion != "" {
+			fmt.Fprintf(out, ", host %s (kernel %s, docker %s)", orDash(b.Host.Distro), orDash(b.Host.Kernel), orDash(b.Host.DockerVersion))
+		}
+		out.WriteString("\n")
 	}
 	out.WriteString("\n")
+}
+
+// orDash prints a placeholder for one of writeHeader's three host
+// fields when only some of them came back from the read (#8).
+func orDash(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
 }
 
 // verdictLink is the path a cell links to, relative to root, so the

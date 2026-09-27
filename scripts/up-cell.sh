@@ -18,6 +18,12 @@ plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.docker_host.vcpus' <<<"$RESOLVED")
 mem=$(jq -r '.cell.docker_host.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.docker_host.disk_gib' <<<"$RESOLVED")
+engine_version=$(jq -r '.cell.docker_host.engine_version // empty' <<<"$RESOLVED")
+image_name=$(jq -r '.docker_host_image.name' <<<"$RESOLVED")
+image_url=$(jq -r '.docker_host_image.url' <<<"$RESOLVED")
+image_distro=$(jq -r '.docker_host_image.distro' <<<"$RESOLVED")
+image_suite=$(jq -r '.docker_host_image.suite' <<<"$RESOLVED")
+os_variant=$(jq -r '.docker_host_image.os_variant' <<<"$RESOLVED")
 domain="lab-${CELL}-dockerhost"
 
 # Deterministic per-domain MACs (OUI 52:54:00, libvirt's own range) so
@@ -39,8 +45,8 @@ echo "== segment bridge =="
 # run had already created the bridge, not because this call could.
 sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
 
-echo "== base image cache =="
-base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh")
+echo "== base image cache ($image_name) =="
+base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
 
 mkdir -p "$WORK"
 
@@ -68,6 +74,8 @@ pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 seed_dir="$WORK/seed"
 mkdir -p "$seed_dir"
 sed -e "s#__PLUGIN_TAG__#$plugin_tag#g" -e "s#__SSH_PUBKEY__#$pubkey#" \
+	-e "s#__DOCKER_APT_DISTRO__#$image_distro#g" -e "s#__DOCKER_APT_SUITE__#$image_suite#g" \
+	-e "s#__DOCKER_ENGINE_PACKAGE__#${engine_version:+=$engine_version}#g" \
 	"$REPO_ROOT/cloud-init/docker-host-user-data.tmpl.yaml" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
@@ -135,7 +143,7 @@ if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 		--disk path="$seed_iso",device=cdrom \
 		--network network=net-mgmt,model=virtio,mac="$mgmt_mac" \
 		--network bridge="$bridge",model=virtio,mac="$seg_mac" \
-		--os-variant debian13 \
+		--os-variant "$os_variant" \
 		--cpu host-model \
 		--boot loader="$ovmf_code",loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template="$ovmf_vars_template",nvram="$nvram" \
 		--graphics none \

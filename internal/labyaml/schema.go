@@ -12,6 +12,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// maxIfnameLen is IFNAMSIZ-1: the kernel's Linux network interface name
+// limit (16 bytes including a terminating NUL).
+const maxIfnameLen = 15
+
 // Every field also carries a json tag, matching the yaml name: `labctl
 // resolve` emits JSON and the provisioning shell scripts read it with jq
 // against these lowercase, snake_case paths (never the Go field names).
@@ -41,6 +45,11 @@ type DockerHost struct {
 	VCPUs             int    `yaml:"vcpus" json:"vcpus"`
 	MemoryMiB         int    `yaml:"memory_mib" json:"memory_mib"`
 	DiskGiB           int    `yaml:"disk_gib" json:"disk_gib"`
+	// EngineVersion optionally pins docker-ce to one version, e.g.
+	// "5:20.10.24~3-0~debian-bullseye" (apt's own version string) for the
+	// plugin's oldest supported engine (issue #8). Empty installs
+	// whatever the base image's distro/suite repo currently serves.
+	EngineVersion string `yaml:"engine_version" json:"engine_version"`
 }
 
 // Source is one IP source VM: a DHCP server on its cell's own segment,
@@ -120,6 +129,13 @@ func (c *Config) Validate() error {
 		if cell.Segment.Bridge == "" {
 			return fmt.Errorf("cell %s: segment.bridge is required", cell.Name)
 		}
+		// IFNAMSIZ is 16 bytes including the terminating NUL, so the
+		// kernel accepts at most 15 characters; virsh's own rejection of
+		// a longer name ("not a valid ifname") only surfaces once
+		// up-cell.sh is already mid-bring-up (issue #8, measured live).
+		if len(cell.Segment.Bridge) > maxIfnameLen {
+			return fmt.Errorf("cell %s: segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", cell.Name, cell.Segment.Bridge, len(cell.Segment.Bridge), maxIfnameLen)
+		}
 		if seenBridge[cell.Segment.Bridge] {
 			return fmt.Errorf("cell %s: bridge %s reused by another cell", cell.Name, cell.Segment.Bridge)
 		}
@@ -140,6 +156,9 @@ func (c *Config) Validate() error {
 		}
 		if cell.DockerHost.BaseImage == "" {
 			return fmt.Errorf("cell %s: docker_host.base_image is required", cell.Name)
+		}
+		if _, err := LookupBaseImage(cell.DockerHost.BaseImage); err != nil {
+			return fmt.Errorf("cell %s: docker_host.base_image: %w", cell.Name, err)
 		}
 		if cell.DockerHost.PluginTag == "" {
 			return fmt.Errorf("cell %s: docker_host.plugin_tag is required", cell.Name)
@@ -174,6 +193,9 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 	}
 	if s.BaseImage == "" {
 		return fmt.Errorf("cell %s: source.base_image is required", cellName)
+	}
+	if _, err := LookupBaseImage(s.BaseImage); err != nil {
+		return fmt.Errorf("cell %s: source.base_image: %w", cellName, err)
 	}
 	mgmtAddr, err := netip.ParsePrefix(s.MgmtAddress)
 	if err != nil {

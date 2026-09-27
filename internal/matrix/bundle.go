@@ -24,7 +24,14 @@ type Bundle struct {
 	// the lab repo's own commit the run used, not the plugin's.
 	LabCommit string
 	// Date is the latest Timestamp among this bundle's verdicts.
-	Date     time.Time
+	Date time.Time
+	// Host is the docker host this bundle's cell ran on (issue #8): the
+	// first non-zero scenario.HostInfo found among its verdicts.
+	// Deliberately permissive, unlike Cell/LabCommit above -- a verdict
+	// written before this field existed, or one whose host read failed,
+	// carries a zero HostInfo, and that alone must never fail a whole
+	// bundle's load the way a real cell or git_sha mismatch does.
+	Host     scenario.HostInfo
 	Verdicts []scenario.Verdict
 }
 
@@ -71,6 +78,9 @@ func LoadBundle(dir string) (Bundle, error) {
 		}
 		if v.Timestamp.After(b.Date) {
 			b.Date = v.Timestamp
+		}
+		if b.Host == (scenario.HostInfo{}) && v.Host != (scenario.HostInfo{}) {
+			b.Host = v.Host
 		}
 		b.Verdicts = append(b.Verdicts, v)
 	}

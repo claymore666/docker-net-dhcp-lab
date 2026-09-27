@@ -209,3 +209,86 @@ func TestSourceCellSitsBesideSourcelessCell(t *testing.T) {
 		t.Fatal("ref-only cell gained a source it never declared")
 	}
 }
+
+func TestRejectsUnregisteredDockerHostBaseImage(t *testing.T) {
+	bad := strings.Replace(goodMin, "base_image: debian-13-generic-amd64", "base_image: not-a-registered-image", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("an unregistered docker_host.base_image was accepted")
+	}
+}
+
+func TestRejectsUnregisteredSourceBaseImage(t *testing.T) {
+	bad := strings.Replace(withSource, "base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.21/24", "base_image: not-a-registered-image\n      mgmt_address: 10.200.255.21/24", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("an unregistered source.base_image was accepted")
+	}
+}
+
+// A bridge name over IFNAMSIZ-1 (15 characters) is accepted by the YAML
+// parser but rejected by the kernel only once up-cell.sh is already
+// mid-bring-up (issue #8, measured live: virsh's own "not a valid
+// ifname"). Validate must catch it first.
+func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: lab-br-a-name-that-is-too-long", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("a 39-character bridge name was accepted")
+	}
+}
+
+// One character over the limit is the boundary the kernel actually
+// draws (IFNAMSIZ-1 = 15): the 39-character case above only proves
+// "too long" is caught, not that the limit itself is 15 and not 16.
+func TestRejectsBridgeNameAtSixteenCharacters(t *testing.T) {
+	sixteen := "lab-br-ref-onlyx"
+	if len(sixteen) != 16 {
+		t.Fatalf("test fixture drifted: %q is %d characters, not 16", sixteen, len(sixteen))
+	}
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: "+sixteen, 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("a 16-character bridge name was accepted")
+	}
+}
+
+func TestAcceptsBridgeNameAtIfnameLimit(t *testing.T) {
+	fifteen := "lab-br-ref-only" // exactly 15 characters, the existing convention
+	if len(fifteen) != 15 {
+		t.Fatalf("test fixture drifted: %q is %d characters, not 15", fifteen, len(fifteen))
+	}
+	if _, err := Load(write(t, goodMin)); err != nil {
+		t.Fatalf("a 15-character bridge name was rejected: %v", err)
+	}
+}
+
+// engine_version is optional (issue #8): a cell that never sets it must
+// still load, same as before this field existed.
+func TestEngineVersionOptional(t *testing.T) {
+	c, err := Load(write(t, goodMin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell, err := c.CellByName("ref-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.DockerHost.EngineVersion != "" {
+		t.Fatalf("engine_version = %q, want empty when never set", cell.DockerHost.EngineVersion)
+	}
+}
+
+func TestEngineVersionParses(t *testing.T) {
+	pinned := strings.Replace(goodMin,
+		"plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2",
+		"plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2\n      engine_version: 5:20.10.24~3-0~debian-bullseye",
+		1)
+	c, err := Load(write(t, pinned))
+	if err != nil {
+		t.Fatalf("valid engine_version rejected: %v", err)
+	}
+	cell, err := c.CellByName("ref-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.DockerHost.EngineVersion != "5:20.10.24~3-0~debian-bullseye" {
+		t.Fatalf("engine_version = %q, want the pinned value", cell.DockerHost.EngineVersion)
+	}
+}

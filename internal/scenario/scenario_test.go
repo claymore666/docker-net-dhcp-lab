@@ -153,6 +153,26 @@ func TestRunOneRunsScenarioWhenPluginPreconditionHolds(t *testing.T) {
 	}
 }
 
+// RunOne must copy Env.HostInfo onto every verdict it returns (#8), so
+// no scenario body has to set it and no return path can skip it.
+func TestRunOneCarriesHostInfoOntoVerdict(t *testing.T) {
+	s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(_ context.Context, _ Env) Verdict {
+		return pass("probe", "dnsmasq", ShapeMacvlan, "ran", map[string]string{"x": "y"}, "sha")
+	}}
+	want := HostInfo{Distro: "Ubuntu 24.04.5 LTS", Kernel: "6.8.0-142-generic", DockerVersion: "29.8.1"}
+	e := Env{
+		Host:     &fakeRunOneHostRunner{installed: true, pgrepOK: true},
+		Source:   &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}},
+		Cell:     "dnsmasq",
+		Shape:    ShapeMacvlan,
+		HostInfo: want,
+	}
+	v := RunOne(context.Background(), s, e)
+	if v.Host != want {
+		t.Fatalf("RunOne dropped Env.HostInfo: got %+v, want %+v", v.Host, want)
+	}
+}
+
 // fakeBridgeReadyRunner answers both RunOne's plugin-precondition check
 // and its bridge-readiness gate (#3): bridgeUp controls whether the
 // three bridgeReady checks (`ip link show`, the segment NIC's master
