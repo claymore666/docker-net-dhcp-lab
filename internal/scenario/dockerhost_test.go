@@ -175,29 +175,21 @@ func TestWaitPluginReadyFailsAfterTimeoutWhenSocketNeverAnswers(t *testing.T) {
 	}
 }
 
-// fakeLogRunner scripts journalctl for CapturePluginLog, and optionally
-// docker plugin inspect -f {{.ID}} for pluginJournalLines's own tag
-// resolution: mixed lines, so both the plain net-dhcp-substring filter
-// and the plugin= instance-id tag match (issue #3, the 2026-09-27 fix)
-// are checked without a real docker host. pluginID unset (with idErr
-// nil) answers the inspect call with an empty id, which
-// pluginJournalTag treats as unresolved -- matching a fakeLogRunner
-// built before this field existed, so every earlier test using this type
-// keeps exercising the substring-only fallback path unchanged.
+// fakeLogRunner scripts journalctl for CapturePluginLog: pluginJournalLines
+// matches purely against the journal text itself (the plain
+// net-dhcp-substring filter, or the generic plugin=<id> tag pattern), so
+// this fake only ever needs to answer the journalctl call (issue #3, the
+// 2026-09-27 fix). It used to also script `docker plugin inspect -f
+// {{.ID}}` for resolving one specific instance id; that resolution step
+// is gone (pluginJournalTagPattern matches any instance's tag, not just
+// the currently-installed one), so that branch and its pluginID/idErr
+// fields were removed rather than left as dead code no test exercises.
 type fakeLogRunner struct {
-	journal  string
-	failErr  error
-	pluginID string
-	idErr    error
+	journal string
+	failErr error
 }
 
 func (f *fakeLogRunner) Run(_ context.Context, cmd string) (string, error) {
-	if strings.Contains(cmd, "plugin inspect") {
-		if f.idErr != nil {
-			return "", f.idErr
-		}
-		return f.pluginID, nil
-	}
 	if !strings.Contains(cmd, "journalctl") {
 		return "", fmt.Errorf("unexpected command: %s", cmd)
 	}
@@ -320,7 +312,7 @@ func TestCapturePluginLogAroundFirstRequestAddressFindsATagOnlyLine(t *testing.T
 	journal := `Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /IpamDriver.GetCapabilities\" resSize=57 status=200" plugin=` + id + "\n" +
 		`Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /IpamDriver.RequestAddress\" resSize=42 status=200" plugin=` + id + "\n" +
 		`Sep 27 dockerd: time="..." level=info msg="time=\"...\" level=trace msg=\"POST /NetworkDriver.Join\" resSize=233 status=200" plugin=` + id + "\n"
-	r := &fakeLogRunner{journal: journal, pluginID: id}
+	r := &fakeLogRunner{journal: journal}
 	path := t.TempDir() + "/first-request.log"
 	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
 		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
@@ -334,28 +326,28 @@ func TestCapturePluginLogAroundFirstRequestAddressFindsATagOnlyLine(t *testing.T
 	}
 }
 
-// When the plugin instance id cannot be resolved (e.g. a transient
-// inspect failure), the capture must still fall back to the plain
-// net-dhcp substring match rather than failing outright or matching
-// everything.
-func TestCapturePluginLogAroundFirstRequestAddressFallsBackWhenIDUnresolved(t *testing.T) {
-	const id = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
-	journal := "Sep 27 net-dhcp: RequestAddress mac=aa:bb:cc:dd:ee:01\n" +
-		`Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + id + "\n"
-	r := &fakeLogRunner{journal: journal, idErr: fmt.Errorf("no such plugin")}
-	path := t.TempDir() + "/first-request.log"
-	if err := capturePluginLogAroundFirstRequestAddress(context.Background(), r, path); err != nil {
-		t.Fatalf("capturePluginLogAroundFirstRequestAddress failed: %v", err)
-	}
-	got, err := os.ReadFile(path)
+// The whole-cell dump's window can span a plugin upgrade (A6): dockerd
+// keeps the OLD instance's tag on lines it logged before the swap, and
+// the new instance gets its own, different tag. pluginJournalLines must
+// keep both, not only whichever id happens to be installed when the
+// capture runs -- that is the review's own F1 requirement (issue #3).
+func TestPluginJournalLinesKeepsLinesFromEveryPluginInstanceInTheWindow(t *testing.T) {
+	const oldID = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
+	const newID = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9"
+	journal := `Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + oldID + "\n" +
+		`Sep 27 dockerd: plugin upgrade in progress` + "\n" +
+		`Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + newID + "\n"
+	r := &fakeLogRunner{journal: journal}
+	lines, err := pluginJournalLines(context.Background(), r, "2 hours ago")
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		t.Fatalf("pluginJournalLines failed: %v", err)
 	}
-	if !strings.Contains(string(got), "aa:bb:cc:dd:ee:01") {
-		t.Fatalf("want the net-dhcp-substring line still matched via fallback: %q", got)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, oldID) {
+		t.Fatalf("want the old instance's tagged line kept, got: %q", joined)
 	}
-	if strings.Contains(string(got), "resSize") {
-		t.Fatalf("the tag-only line must not match when the id could not be resolved: %q", got)
+	if !strings.Contains(joined, newID) {
+		t.Fatalf("want the new instance's tagged line kept too, got: %q", joined)
 	}
 }
 
@@ -366,7 +358,7 @@ func TestCapturePluginLogAroundFirstRequestAddressFallsBackWhenIDUnresolved(t *t
 func TestCapturePluginLogFindsATagOnlyLine(t *testing.T) {
 	const id = "57fbbb7f4ff1c5db6d8024dcc99a54ccd096cf3ae3c8cccdbd7ebeee2cfafa42"
 	journal := `Sep 27 dockerd: time="..." level=trace msg="POST /IpamDriver.RequestAddress" plugin=` + id + "\n"
-	r := &fakeLogRunner{journal: journal, pluginID: id}
+	r := &fakeLogRunner{journal: journal}
 	path := t.TempDir() + "/plugin.log"
 	if err := CapturePluginLog(context.Background(), r, path); err != nil {
 		t.Fatalf("CapturePluginLog failed: %v", err)

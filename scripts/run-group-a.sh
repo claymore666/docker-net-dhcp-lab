@@ -108,8 +108,17 @@ echo "== capture: stop =="
 cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
 
 echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
+# dockerd tags a managed plugin's own stdout/stderr lines with
+# "plugin=<instance id>", never with the literal text "net-dhcp"
+# (internal/scenario/dockerhost.go's pluginJournalTagPattern, issue #3):
+# a plain `grep net-dhcp` here dropped every one of those lines, in
+# every bundle, at any log level. Match both, the same rule
+# pluginJournalLines uses, so this whole-cell dump and the per-scenario
+# captures agree on what counts as a plugin line, and so a window that
+# spans a plugin upgrade keeps the old instance's lines too, not only
+# the current one's.
 ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
-	| grep net-dhcp >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
+	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
 
 echo "== tear down cell $CELL =="
 LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -536,48 +537,40 @@ func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, 
 	}
 }
 
-// pluginJournalTag resolves the currently-installed plugin instance's own
-// id, so callers can match dockerd's journal lines for that exact
-// instance. The socket glob's own doc comment already notes the instance
-// id changes on every install, so this is always read fresh, never
-// cached across a capture call.
-func pluginJournalTag(ctx context.Context, r sourceadapter.Runner) (string, error) {
-	out, err := r.Run(ctx, "sudo docker plugin inspect -f '{{.ID}}' "+pluginAlias)
-	if err != nil {
-		return "", fmt.Errorf("docker plugin inspect -f {{.ID}} %s: %w", pluginAlias, err)
-	}
-	id := strings.TrimSpace(out)
-	if id == "" {
-		return "", fmt.Errorf("docker plugin inspect -f {{.ID}} %s: empty id", pluginAlias)
-	}
-	return id, nil
-}
+// pluginJournalTagPattern matches dockerd's own wrapper tag for a
+// managed plugin's stdout/stderr line, "plugin=<64-hex instance id>"
+// (issue #3, measured 2026-09-27 against a live cell at LOG_LEVEL=trace:
+// the real /IpamDriver.RequestAddress access line carries only this
+// tag, no literal "net-dhcp" substring at all). Matched generically, by
+// shape rather than by resolving one specific instance id: a whole-cell
+// dump's own window can span a plugin upgrade (A6), where dockerd keeps
+// tagging the daemon's journal with the OLD instance's id for lines it
+// logged before the swap -- a filter pinned to only the
+// currently-installed id would still lose those earlier lines. The
+// docker host under test never runs a second managed plugin, so this
+// generic tag alone is unambiguous here; it is also exactly the
+// reproduction check a live comparison uses (`journalctl -u docker |
+// grep -c plugin=`), so a bundle's line count matches that count
+// directly.
+var pluginJournalTagPattern = regexp.MustCompile(`plugin=[0-9a-f]+`)
 
 // pluginJournalLines returns the docker journal lines from the last
-// `since` that this plugin instance itself produced (issue #3, measured
-// 2026-09-27 against a live cell at LOG_LEVEL=trace): dockerd tags its
-// own wrapper line for a managed plugin's stdout/stderr with
-// "plugin=<64-hex instance id>", which contains no literal "net-dhcp"
-// substring at all -- so every capture in this file that filtered on
-// that substring alone silently kept nothing, at any LOG_LEVEL, for the
-// very RPC access lines these captures exist to find. A plain
-// "net-dhcp" substring match (true for this plugin's own application
-// log lines that mention a path under /var/lib/net-dhcp) is kept
-// alongside the tag match, and used alone when the instance id cannot be
-// resolved, so a transient inspect failure narrows a capture rather than
-// failing it outright.
+// `since` that carry this plugin's own tag or the plain "net-dhcp"
+// substring (true for this plugin's own application log lines that
+// mention a path under /var/lib/net-dhcp). Every capture in this file
+// used to filter on the substring alone, so none of them ever kept an
+// RPC access line, at any log level, and a whole cell's worth of these
+// lines is what scripts/run-group-a.sh writes out as
+// "<cell>-plugin-log.txt" -- so this one function is also what that
+// dump's own grep step needs to match (issue #3).
 func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since string) ([]string, error) {
 	out, err := r.Run(ctx, fmt.Sprintf("sudo journalctl -u docker --since '%s'", since))
 	if err != nil {
 		return nil, fmt.Errorf("journalctl -u docker: %w", err)
 	}
-	tag := ""
-	if id, idErr := pluginJournalTag(ctx, r); idErr == nil {
-		tag = "plugin=" + id
-	}
 	var lines []string
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "net-dhcp") || (tag != "" && strings.Contains(line, tag)) {
+		if strings.Contains(line, "net-dhcp") || pluginJournalTagPattern.MatchString(line) {
 			lines = append(lines, line)
 		}
 	}
