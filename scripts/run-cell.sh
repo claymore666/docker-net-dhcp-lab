@@ -1,6 +1,6 @@
 #!/bin/bash
-# The one command issue #3 asks for: bring up a cell, run every group-A
-# scenario across all five shapes (the plugin's own null IPAM and its
+# The one command issue #3 asks for: bring up a cell, run every scenario
+# across all five shapes (the plugin's own null IPAM and its
 # own IPAM driver, each in bridge and macvlan, plus ipvlan), and leave
 # one evidence bundle behind (resolved lab.yaml, versions, a config
 # diff from stock, one capture spanning the whole run, and one verdict
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-CELL=${1:?usage: run-group-a.sh <cell-name> [work-dir] [evidence-dir]}
+CELL=${1:?usage: run-cell.sh <cell-name> [work-dir] [evidence-dir]}
 WORK=${2:-/srv/lab/work/$(whoami)/$CELL}
 # A sibling of $WORK, never inside it: down-cell.sh's own rm -rf at the
 # end of this script removes the whole of $WORK, and now refuses to run
@@ -23,7 +23,7 @@ LAB_YAML="${LAB_YAML:-$REPO_ROOT/lab.yaml}"
 mkdir -p "$WORK" "$EVIDENCE_DIR"
 GIT_SHA=$(cd "$REPO_ROOT" && git rev-parse HEAD)
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-echo "run-group-a: repo at $GIT_SHA, started $TS"
+echo "run-cell: repo at $GIT_SHA, started $TS"
 
 RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
 bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
@@ -36,7 +36,7 @@ plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 previous_plugin_tag=$(jq -r '.cell.docker_host.previous_plugin_tag // empty' <<<"$RESOLVED")
 
 if [ -z "$source_type" ]; then
-	echo "run-group-a: cell $CELL has no source; nothing group A can run against" >&2
+	echo "run-cell: cell $CELL has no source; nothing can run against it" >&2
 	exit 1
 fi
 
@@ -74,7 +74,7 @@ waited=0
 until [ -f "$READY" ]; do
 	waited=$((waited + 1))
 	if [ "$waited" -ge 200 ]; then
-		echo "run-group-a: FAIL -- observer did not become ready inside the 60s bound" >&2
+		echo "run-cell: FAIL -- observer did not become ready inside the 60s bound" >&2
 		exit 1
 	fi
 	sleep 0.3
@@ -100,17 +100,17 @@ for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	# already covered is skipped outright, without bringing its network up.
 	remaining=$(go run "$REPO_ROOT/cmd/labctl" remaining "$LAB_YAML" "$CELL" "$shape" "$EVIDENCE_DIR")
 	if [ -z "$remaining" ]; then
-		echo "run-group-a: $CELL/$shape already has a verdict for every scenario in $EVIDENCE_DIR, skipping"
+		echo "run-cell: $CELL/$shape already has a verdict for every scenario in $EVIDENCE_DIR, skipping"
 		continue
 	fi
 	rc=0
 	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" "$remaining" || rc=$?
 	if [ "$rc" -eq 3 ]; then
-		echo "run-group-a: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
+		echo "run-cell: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
 		RUNNER_FAILED=1
 		break
 	elif [ "$rc" -ne 0 ]; then
-		echo "run-group-a: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2
+		echo "run-cell: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2
 		RUNNER_FAILED=1
 	fi
 done
@@ -139,7 +139,7 @@ echo "== tear down cell $CELL =="
 LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK"
 
 if [ "$RUNNER_FAILED" -ne 0 ]; then
-	echo "run-group-a: FAIL -- at least one shape's labctl run hit an infrastructure error; see above" >&2
+	echo "run-cell: FAIL -- at least one shape's labctl run hit an infrastructure error; see above" >&2
 	exit 1
 fi
-echo "run-group-a: bundle written to $EVIDENCE_DIR (verdicts, capture, lease snapshots, versions, config diff, plugin log)"
+echo "run-cell: bundle written to $EVIDENCE_DIR (verdicts, capture, lease snapshots, versions, config diff, plugin log)"

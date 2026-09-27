@@ -22,7 +22,7 @@ import (
 
 // labErrorExitCode signals a lab-side abort, distinct from an ordinary
 // tool failure (1) or a clean BLOCKED-for-unready-plugin run (0):
-// run-group-a.sh's shape loop treats this one specially and aborts the
+// run-cell.sh's shape loop treats this one specially and aborts the
 // whole cell rather than trying the remaining shapes against the same
 // undersized pool (#3).
 const labErrorExitCode = 3
@@ -209,7 +209,7 @@ func remainingScenarioNames(catalog []scenario.Scenario, done map[string]bool) [
 // cmdRemaining prints the comma-separated scenario names cell/shape has
 // not yet got a verdict for in evidenceDir, reading each *.verdict
 // file's own content (never its file name, matching ReadVerdict's own
-// rule) so a resumed run-group-a.sh can pass the result straight into
+// rule) so a resumed run-cell.sh can pass the result straight into
 // `labctl run`'s existing scenario-filter argument. Prints an empty line
 // when every catalog scenario already has one.
 func cmdRemaining(args []string) int {
@@ -316,7 +316,7 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	if cell.Source == nil {
-		fmt.Fprintf(os.Stderr, "labctl run: cell %s has no source; nothing group A can run against\n", cellName)
+		fmt.Fprintf(os.Stderr, "labctl run: cell %s has no source; no scenario can run against it\n", cellName)
 		return 1
 	}
 

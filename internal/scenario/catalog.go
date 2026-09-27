@@ -159,7 +159,7 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	return s.Run(ctx, e)
 }
 
-// Catalog is group A: first lease, container restart, compose down/up,
+// Catalog is the scenario list: first lease, container restart, compose down/up,
 // daemon restart, host reboot, plugin upgrade, plugin killed, fleet
 // burst (issue #3). Groups B, C, D are later PRs, per the issue.
 var Catalog = []Scenario{

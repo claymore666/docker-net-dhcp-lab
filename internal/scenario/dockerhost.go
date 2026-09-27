@@ -560,7 +560,7 @@ var pluginJournalTagPattern = regexp.MustCompile(`plugin=[0-9a-f]+`)
 // mention a path under /var/lib/net-dhcp). Every capture in this file
 // used to filter on the substring alone, so none of them ever kept an
 // RPC access line, at any log level, and a whole cell's worth of these
-// lines is what scripts/run-group-a.sh writes out as
+// lines is what scripts/run-cell.sh writes out as
 // "<cell>-plugin-log.txt" -- so this one function is also what that
 // dump's own grep step needs to match (issue #3).
 func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since string) ([]string, error) {
@@ -578,7 +578,7 @@ func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since strin
 }
 
 // CapturePluginLog writes the docker daemon's own journal, filtered to
-// this plugin's lines, to path -- the same evidence run-group-a.sh
+// this plugin's lines, to path -- the same evidence run-cell.sh
 // already collects at the end of a cell's run, but callable directly so
 // a WaitPluginReady timeout can attach it to the BLOCKED cell before any
 // scenario runs (issue #3).

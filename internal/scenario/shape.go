@@ -14,8 +14,8 @@ import (
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
-// Shape is one of the three null-IPAM network shapes group A runs
-// against. Bridge needs a one-time host bridge on the docker host's own
+// Shape is one of the three null-IPAM network shapes the scenarios run
+// on. Bridge needs a one-time host bridge on the docker host's own
 // segment NIC (docs/bridge-mode.md); macvlan and ipvlan share -o
 // mode/parent (docs/parent-attached-modes.md) in the plugin repo.
 type Shape string

@@ -12,7 +12,7 @@ import (
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
 )
 
-// Bundle is one run-group-a.sh evidence directory: one cell, every
+// Bundle is one run-cell.sh evidence directory: one cell, every
 // shape it ran, read back through scenario.ReadVerdict rather than
 // anything a caller reconstructs from file names (issue #4).
 type Bundle struct {
@@ -45,7 +45,7 @@ type resolvedLab struct {
 }
 
 // LoadBundle reads every *.verdict file directly under dir plus its
-// <cell>-resolved-lab.json, exactly what run-group-a.sh leaves behind
+// <cell>-resolved-lab.json, exactly what run-cell.sh leaves behind
 // (README.md's scenario-runner section). It never looks at dir's own
 // path or a verdict file's name for any field: every value it returns
 // came from a verdict's own content or from resolved-lab.json (issue

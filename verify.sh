@@ -151,20 +151,20 @@ else
 	echo "verify.sh: tcpdump not installed, skipping" >&2
 fi
 
-echo "== run-group-a.sh regenerates capture checks only after the final pcap is in place (issue #8) =="
+echo "== run-cell.sh regenerates capture checks only after the final pcap is in place (issue #8) =="
 # Exact, anchored line matches, same discipline as the preflight check
 # above: a neutered call (commented out, piped through "|| true")
 # fails this too, not only a deleted one. The ordering check is what
 # matters -- regenerate must run after capture-stop has written the
 # final, whole-cell pcap, never against a capture still in progress.
-stop_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-stop\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$WORK"[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
-regen_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-check-regenerate\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$EVIDENCE_DIR"[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
+stop_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-stop\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$WORK"[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
+regen_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-check-regenerate\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$EVIDENCE_DIR"[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$stop_line" ] || [ -z "$regen_line" ]; then
-	echo "verify.sh: run-group-a.sh does not call capture-stop.sh and capture-check-regenerate.sh as their own, unmodified commands" >&2
+	echo "verify.sh: run-cell.sh does not call capture-stop.sh and capture-check-regenerate.sh as their own, unmodified commands" >&2
 	exit 1
 fi
 if [ "$regen_line" -le "$stop_line" ]; then
-	echo "verify.sh: run-group-a.sh calls capture-check-regenerate.sh (line $regen_line) before capture-stop.sh (line $stop_line)" >&2
+	echo "verify.sh: run-cell.sh calls capture-check-regenerate.sh (line $regen_line) before capture-stop.sh (line $stop_line)" >&2
 	exit 1
 fi
 
@@ -172,13 +172,13 @@ fi
 # (capture-stop.sh only writes the copy inside $WORK): ordered after
 # capture-stop.sh alone is not enough, the copy into the evidence dir
 # must itself come before the regenerate call.
-cp_line=$(grep -nE '^cp[[:space:]]+"\$WORK/observer\.pcap"[[:space:]]+"\$EVIDENCE_DIR/\$\{CELL\}\.pcap"[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+true[[:space:]]*$' scripts/run-group-a.sh | head -1 | cut -d: -f1)
+cp_line=$(grep -nE '^cp[[:space:]]+"\$WORK/observer\.pcap"[[:space:]]+"\$EVIDENCE_DIR/\$\{CELL\}\.pcap"[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+true[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$cp_line" ]; then
-	echo "verify.sh: run-group-a.sh does not copy the final pcap into the evidence dir as its own, unmodified command" >&2
+	echo "verify.sh: run-cell.sh does not copy the final pcap into the evidence dir as its own, unmodified command" >&2
 	exit 1
 fi
 if [ "$regen_line" -le "$cp_line" ]; then
-	echo "verify.sh: run-group-a.sh calls capture-check-regenerate.sh (line $regen_line) before copying the final pcap into the evidence dir (line $cp_line)" >&2
+	echo "verify.sh: run-cell.sh calls capture-check-regenerate.sh (line $regen_line) before copying the final pcap into the evidence dir (line $cp_line)" >&2
 	exit 1
 fi
 

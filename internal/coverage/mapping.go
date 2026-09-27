@@ -30,7 +30,7 @@ const (
 // Mapping is the lab's one reviewed record of docs/reference.md's
 // option tables against what today's scenarios actually exercise
 // (issue #4). Seeded honestly from the scenarios that exist today:
-// scripts/run-group-a.sh's own network bring-up is the only place any
+// scripts/run-cell.sh's own network bring-up is the only place any
 // of these options is set at all (internal/scenario/shape.go's
 // NetworkUp, `-o bridge=`/`-o mode=`/`-o parent=`), so mode/bridge/
 // parent are the only rows this file credits with a scenario. Every

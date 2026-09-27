@@ -72,7 +72,7 @@ evidence_dir="${LAB_EVIDENCE_DIR:-$(dirname "$WORK")/evidence}"
 # moved the pcaps into it -- the same class of loss the comment above
 # already names for a bare pcap, but for the whole bundle (verdicts,
 # lease snapshots, config diff, versions, plugin log). Measured live
-# 2026-09-26: run-group-a.sh's own EVIDENCE_DIR default nests it inside
+# 2026-09-26: run-cell.sh's own EVIDENCE_DIR default nests it inside
 # $WORK, and every evidence bundle from a run that hit this path was
 # gone by the time down-cell.sh printed "torn down".
 case "$evidence_dir" in
