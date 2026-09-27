@@ -14,6 +14,7 @@ git init -q "$fixture_repo"
 git -C "$fixture_repo" config user.email test@example.invalid
 git -C "$fixture_repo" config user.name test
 cp "$REPO_ROOT/scripts/hygiene-check.sh" "$fixture_repo/scripts/hygiene-check.sh"
+cp "$REPO_ROOT/scripts/hygiene-patterns.sh" "$fixture_repo/scripts/hygiene-patterns.sh"
 
 run_case() {
 	local desc=$1 content=$2 want=$3 file=${4:-note.txt} # want: ok | fail

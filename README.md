@@ -94,3 +94,43 @@ evidence.lease_after: <path>
 one `evidence.<label>: <path>` line pointing at a real, non-empty file
 in the bundle; an `N/A` carries none, only a `reason`. This is the
 interface issue #4's results matrix reads.
+
+## Results page
+
+`labctl matrix --root <bundle-root> [--out results/<tag>.md] <bundle-dir>
+[<bundle-dir> ...]` reads one or more evidence bundles and writes the
+results page: one row per scenario, in plain words (never a scenario id
+like `A1`), one column per cell x shape, each cell a `PASS`/`FAIL`/`N/A`
+link straight to its verdict file, written relative to `--root` so the
+same page still resolves once `--root` is a packed bundle's own
+extracted directory. A verdict `labctl matrix` cannot find for a
+scenario x column prints `(missing)` rather than being left out of the
+table. The plain-word names live in one place,
+`internal/matrix/names.go`.
+
+## Coverage check
+
+`labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)` reads the
+plugin repo's `docs/reference.md` at a tag (or a local file, for tests or
+a pinned copy) and checks its three option tables (driver options,
+per-endpoint options, plugin settings) against `internal/coverage/mapping.go`,
+this lab's own reviewed record of which option a scenario actually
+exercises. An option with neither a scenario nor a recorded reason
+("not covered yet, planned", for example) fails the check and is named
+in its output. It is a `labctl` subcommand, not a `verify.sh` step:
+`verify.sh` is deliberately network-free (its own header comment), and
+there is no pinned local copy of `docs/reference.md` in this repo to run
+it against instead.
+
+## Packing a bundle for release
+
+`scripts/pack.sh <bundle-dir> <out.tar.gz> [denylist-file]` turns one
+evidence bundle into a compressed tarball for a GitHub release asset
+(attaching it to a release is a separate, later step, not this
+script's). It refuses, and writes nothing, when the bundle carries a
+disallowed address (the same patterns `scripts/hygiene-check.sh` uses,
+shared via `scripts/hygiene-patterns.sh` rather than a second copy), a
+hostname in a captured `journalctl` line that is not this lab's own
+generated shape (`lab-*`), or a hit against an optional external
+denylist file (its path as a third argument, or `LAB_PACK_DENYLIST`) --
+never a name built into this repo itself.

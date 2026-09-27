@@ -12,9 +12,9 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
-# Everything the lab is allowed to publish: its own /16, its own ULA,
-# loopback, link-local, and the RFC 5737 / RFC 3849 documentation ranges.
-ALLOWED_RE='^(10\.200\.|127\.|169\.254\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200)'
+# Address patterns shared with pack.sh (issue #4): one definition of
+# "disallowed address", never a second copy to drift out of step.
+. "$REPO_ROOT/scripts/hygiene-patterns.sh"
 
 # Internal work-tracking tags (e.g. lab-impl-9, lab-rev-z), review
 # markers (e.g. exchange-1), role words that name how this project is
@@ -48,6 +48,7 @@ while IFS= read -r -d '' f; do
 	case "$f" in
 	*/.git/*) continue ;;
 	scripts/hygiene-check.sh) continue ;;             # its own regex literals look like addresses but are not
+	scripts/hygiene-patterns.sh) continue ;;          # same reasoning, shared with pack.sh
 	scripts/hygiene-check-test.sh) continue ;;        # deliberately carries disallowed-looking fixtures, never real
 	scripts/commit-message-check-test.sh) continue ;; # same shape: fixtures for a throwaway repo, never real
 	esac
@@ -68,15 +69,12 @@ while IFS= read -r -d '' f; do
 	while IFS= read -r line || [ -n "$line" ]; do
 		line_no=$((line_no + 1))
 		if [ "$skip_addr" -eq 0 ]; then
-			# RFC1918 and link-local candidates only; a public IP is not house detail.
-			matches=$(grep -oE '\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b' <<<"$line" || true)
+			matches=$(hygiene_address_disallowed "$line")
 			if [ -n "$matches" ]; then
 				while IFS= read -r m; do
 					[ -z "$m" ] && continue
-					if ! [[ "$m" =~ $ALLOWED_RE ]]; then
-						echo "hygiene: candidate at $f:$line_no" >&2
-						fail=1
-					fi
+					echo "hygiene: candidate at $f:$line_no" >&2
+					fail=1
 				done <<<"$matches"
 			fi
 		fi
