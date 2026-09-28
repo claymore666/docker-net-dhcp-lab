@@ -131,6 +131,58 @@ cells:
       memory_mib: 2048
       disk_gib: 8
 
+  - name: host-ubuntu2404-isc-dhcp
+    description: >
+      ISC dhcpd, same as the isc-dhcp cell above, but the Docker host is Ubuntu
+      24.04 instead of the reference Debian 13. Issue #8.
+    segment:
+      bridge: lab-br-u24isc
+      subnet: 10.200.6.0/24
+    source:
+      type: isc-dhcp
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.71/24
+      seg_address: 10.200.6.2/24
+      pool_start: 10.200.6.100
+      pool_end: 10.200.6.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: ubuntu-24.04-server-cloudimg-amd64
+      mgmt_address: 10.200.255.70/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: host-ubuntu2404-dnsmasq
+    description: >
+      dnsmasq, same as the dnsmasq cell above, but the Docker host is Ubuntu
+      24.04 instead of the reference Debian 13. Issue #8.
+    segment:
+      bridge: lab-br-u24dns
+      subnet: 10.200.7.0/24
+    source:
+      type: dnsmasq
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.81/24
+      seg_address: 10.200.7.2/24
+      pool_start: 10.200.7.100
+      pool_end: 10.200.7.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: ubuntu-24.04-server-cloudimg-amd64
+      mgmt_address: 10.200.255.80/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.3.0-rc1
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.3
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
   - name: host-debian11-docker2010
     description: >
       Kea, same as the kea cell above, but the Docker host is Debian 11
