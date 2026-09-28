@@ -21,27 +21,41 @@ release, with the full evidence attached to that release.
   shape against every source, then checked against the source's own
   lease table, never the plugin's report.
 
-Scenarios run today:
+## Scenario groups
 
-| Scenario | What it does |
-|---|---|
-| first lease | start a container, it gets an address from the server |
-| container restart | `docker restart`; the address stays |
-| compose down/up | `docker compose down` then `up` |
-| daemon restart | restart dockerd with containers running |
-| host reboot | reboot the Docker host |
-| host reboot, fixed MAC | the same, with a fixed `mac_address` |
-| plugin upgrade | upgrade the plugin with containers running |
-| plugin killed | kill the plugin process; it comes back, the lease holds |
-| fleet burst | start many containers at once |
-| stop, wait, start | stop, wait, start again |
-| kill under a restart policy | the container crashes, Docker restarts it |
-| pause/unpause | pause and unpause the container |
-| network disconnect/reconnect | detach from the network and attach again |
-| two networks, one container | a second, ordinary network beside the plugin one |
-| short lease renewal | a short lease that must renew in time |
-| compose scale | `docker compose up --scale` |
-| forced remove | `docker rm -f` on a running container; the endpoint goes, the lease stays (the plugin default) |
+A scenario ID such as A14 names its group and its number, and evidence
+files carry these IDs.
+
+| Group | What it covers | Scenarios | When |
+|---|---|---|---|
+| A | everyday container journeys on every shape | A1 to A16, with the fixed-MAC reboot A5b | v0.1.0, #3 |
+| B | router-side features: reservations, DNS registration, requested address, vendor class, option changes on renewal, lease release, ipvlan identity | B1 to B8 | v0.2.0, #23 |
+| C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12 | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
+| D | IPv6: DHCPv6, SLAAC, managed flag, two prefixes | D1 to D4 | v0.2.0, #23 |
+| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 | v0.3.0, #15 |
+| F | server-side support for the plugin's v2.4.0 client features | one per feature, numbered in #20 | v0.2.0, #20 (#21 FORCERENEW sender) |
+
+Group A runs today:
+
+| ID | Scenario | What it does |
+|---|---|---|
+| A1 | first lease | start a container, it gets an address from the server |
+| A2 | container restart | `docker restart`; the address stays |
+| A3 | compose down/up | `docker compose down` then `up` |
+| A4 | daemon restart | restart dockerd with containers running |
+| A5 | host reboot | reboot the Docker host |
+| A5b | host reboot, fixed MAC | the same, with a fixed `mac_address` |
+| A6 | plugin upgrade | upgrade the plugin with containers running |
+| A7 | plugin killed | kill the plugin process; it comes back, the lease holds |
+| A8 | fleet burst | start many containers at once |
+| A9 | stop, wait, start | stop, wait, start again |
+| A10 | kill under a restart policy | the container crashes, Docker restarts it |
+| A11 | pause/unpause | pause and unpause the container |
+| A12 | network disconnect/reconnect | detach from the network and attach again |
+| A13 | two networks, one container | a second, ordinary network beside the plugin one |
+| A14 | short lease renewal | a short lease that must renew in time |
+| A15 | compose scale | `docker compose up --scale` |
+| A16 | forced remove | `docker rm -f` on a running container; the endpoint goes, the lease stays (the plugin default) |
 
 ## Reading a result
 
