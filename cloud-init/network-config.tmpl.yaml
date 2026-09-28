@@ -1,0 +1,27 @@
+# Two NICs, matched by MAC and renamed to fixed names: the base image's
+# kernel cmdline lacks net.ifnames=0, so eth0/eth1 alone never match
+# (issue #1). MAC quoted: an all-digit MAC is a YAML 1.1 sexagesimal
+# integer if left bare (issue #8). No top-level `network:` key: NoCloud
+# reads this file's version/ethernets directly, and the wrapper makes
+# cloud-init log "missing 'config' or 'version'" and skip networking
+# entirely (issue #8, measured live on cloud-init 20.4.1/Debian 11).
+# eth0 = management NIC (NAT, static); eth1 = segment NIC, address-less,
+# the macvlan parent for the plugin under test.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "__MGMT_MAC__"
+    set-name: eth0
+    addresses: [__MGMT_ADDR__]
+    gateway4: __MGMT_GW__
+    nameservers:
+      addresses: [__MGMT_GW__]
+  seg0:
+    match:
+      macaddress: "__SEG_MAC__"
+    set-name: eth1
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+    link-local: []

@@ -1,0 +1,41 @@
+#cloud-config
+# Docker host (issue #1; host axis issue #8). __PLUGIN_TAG__, __MGMT_ADDR__,
+# __DOCKER_APT_DISTRO__, __DOCKER_APT_SUITE__ and __DOCKER_ENGINE_PACKAGE__
+# are substituted by scripts/up-cell.sh from lab.yaml via `labctl resolve`
+# and internal/labyaml/baseimages.go's registry.
+hostname: lab-docker-host
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+runcmd:
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/__DOCKER_APT_DISTRO__/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - >-
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]
+    https://download.docker.com/linux/__DOCKER_APT_DISTRO__ __DOCKER_APT_SUITE__ stable" >
+    /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  # __DOCKER_ENGINE_PACKAGE__ is empty (latest) or "=<apt version>" (the
+  # plugin's oldest supported engine, issue #8); applies to docker-ce and
+  # docker-ce-cli only -- containerd.io's own version numbering does not
+  # track docker-ce's, so pinning it the same way would ask apt for a
+  # build that may not exist for this suite.
+  - apt-get install -y docker-ce__DOCKER_ENGINE_PACKAGE__ docker-ce-cli__DOCKER_ENGINE_PACKAGE__ containerd.io
+  - systemctl enable --now docker
+  # The plugin mounts /var/lib/net-dhcp for its own state; docker plugin
+  # install does not create it, so without this line the plugin installs
+  # but stays disabled (measured live, issue #1: "open /var/lib/net-dhcp:
+  # no such file or directory", cloud-init's runcmd does not stop on the
+  # failure, so bootstrap-done still gets set with the plugin unusable).
+  - install -m 0755 -d /var/lib/net-dhcp
+  - docker plugin install --grant-all-permissions --alias net-dhcp-under-test __PLUGIN_TAG__
+  - touch /var/lib/cloud/lab-bootstrap-done

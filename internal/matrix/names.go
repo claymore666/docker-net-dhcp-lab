@@ -1,0 +1,53 @@
+// Package matrix renders one or more run bundles into the plain-English
+// results page issue #4 asks for. It never touches the network or
+// libvirt: every input is already on disk (labctl run's verdict files
+// and its resolved-lab.json), the same "reads evidence, never runs
+// anything" shape labctl leases already has for a source's own table.
+package matrix
+
+import "github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+
+// PlainNames is the one place a scenario.Name constant is spelled out
+// in plain words. A rendered page never shows a scenario id in its
+// prose (issue #4): every id appears only in this table and in a
+// verdict's own file name, so a reader of the results page never has
+// to already know the catalog's own naming scheme to follow what a row
+// tested.
+var PlainNames = map[string]string{
+	scenario.NameA1:  "first lease",
+	scenario.NameA2:  "container restart",
+	scenario.NameA3:  "compose down/up",
+	scenario.NameA4:  "daemon restart",
+	scenario.NameA5:  "host reboot",
+	scenario.NameA5b: "host reboot, fixed MAC",
+	scenario.NameA6:  "plugin upgrade",
+	scenario.NameA7:  "plugin killed",
+	scenario.NameA8:  "fleet burst",
+	scenario.NameA9:  "stop, wait, start",
+	scenario.NameA10: "kill under a restart policy",
+	scenario.NameA11: "pause/unpause",
+	scenario.NameA12: "network disconnect/reconnect",
+	scenario.NameA13: "two networks, one container",
+	scenario.NameA14: "short lease renewal",
+	scenario.NameA15: "compose scale",
+	scenario.NameA16: "forced remove of a running container",
+}
+
+// Order is the row order the results page renders in: scenario.Catalog's
+// own order, so a change to the catalog's ordering moves the page with
+// it instead of drifting from a second, hand-kept list.
+func Order() []string {
+	out := make([]string, 0, len(scenario.Catalog))
+	for _, s := range scenario.Catalog {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// PlainName returns id's plain-word name, and false when id is not in
+// PlainNames -- callers treat that as a hard error (issue #4: an
+// unmapped id must never fall back to being printed raw).
+func PlainName(id string) (string, bool) {
+	name, ok := PlainNames[id]
+	return name, ok
+}

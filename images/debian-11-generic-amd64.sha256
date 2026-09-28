@@ -1,0 +1,10 @@
+# Pinned checksum for the Debian 11 generic cloud image (issue #8, host
+# axis). Verified against Debian's own SHA512SUMS at
+# https://cloud.debian.org/images/cloud/bullseye/latest/SHA512SUMS before
+# being pinned here (this file stores the sha256, matching every other
+# pin in this directory; fetch-base-image.sh checks sha256 only). Update
+# by hand when the base image is meant to move: `sha256sum` the new file,
+# cross-check it against the publisher's own SHA file, then paste the
+# line below. fetch-base-image.sh refuses any download that does not
+# match.
+bbf31016b35c33ad788dee5db677dcfae304e40ea42c1a3b8e83049f47167be2  debian-11-generic-amd64.qcow2

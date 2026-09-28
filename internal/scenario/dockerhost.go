@@ -1,0 +1,721 @@
+package scenario
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
+)
+
+// runContainer starts one throwaway container on net and returns the
+// MAC/address/endpoint id the plugin reported to docker: an identifier
+// to look up in the source's own table, never evidence on its own (same
+// discipline scripts/run-source-lease-test.sh already established for
+// issue #2). It carries no restart policy, matching Docker's own
+// default.
+func runContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name string) (mac, addr, endpointID string, err error) {
+	return runContainerPolicy(ctx, r, shape, net, name, "")
+}
+
+// runContainerPolicy is runContainer with an explicit Docker restart
+// policy. A4 (daemon restart) and A5 (host reboot) need it set to
+// "unless-stopped": a container started with no restart policy is never
+// supposed to come back on its own after either event -- that is Docker's
+// own documented default, not a plugin defect, and a scenario that leaves
+// it unset is testing something no real user configured (issue #3).
+func runContainerPolicy(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, restart string) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	restartFlag := ""
+	if restart != "" {
+		restartFlag = fmt.Sprintf(" --restart %s", restart)
+	}
+	if _, err = r.Run(ctx, fmt.Sprintf("sudo docker run -d --name %s --network %s%s alpine:3.20 sleep 600", name, net, restartFlag)); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
+// inspectContainer reads back what docker actually recorded for the
+// named container and fails on anything a verdict cannot be built from.
+// ipvlan slaves legitimately report an empty MAC -- they share the
+// parent NIC's (docs/parent-attached-modes.md) -- so only shape says
+// whether an empty MAC is fatal; an empty address is fatal under every
+// shape (#3).
+func inspectContainer(ctx context.Context, r sourceadapter.Runner, shape Shape, name string) (mac, addr, endpointID string, err error) {
+	if mac, err = inspectField(ctx, r, name, "MacAddress"); err != nil {
+		return "", "", "", err
+	}
+	if addr, err = inspectField(ctx, r, name, "IPAddress"); err != nil {
+		return "", "", "", err
+	}
+	if endpointID, err = inspectField(ctx, r, name, "EndpointID"); err != nil {
+		return "", "", "", err
+	}
+	if addr == "" || (mac == "" && shape != ShapeIpvlan) {
+		return "", "", "", fmt.Errorf("container %s has no mac/address reported", name)
+	}
+	if shape == ShapeIpvlan && endpointID == "" {
+		return "", "", "", fmt.Errorf("container %s has no endpoint id reported, needed for its ipvlan client-id", name)
+	}
+	return mac, addr, endpointID, nil
+}
+
+// runContainerFixedMAC is runContainer with an explicit --mac-address,
+// for A5b: a container whose mac_address is fixed must report the same
+// MAC and address after a host reboot (#3). Not
+// meaningful under ipvlan, where
+// `--mac-address` fails outright with `invalid MAC address`
+// (docs/parent-attached-modes.md) -- callers guard that with an NA
+// before ever reaching here.
+func runContainerFixedMAC(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, restart, macAddr string) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	restartFlag := ""
+	if restart != "" {
+		restartFlag = fmt.Sprintf(" --restart %s", restart)
+	}
+	cmd := fmt.Sprintf("sudo docker run -d --name %s --network %s --mac-address %s%s alpine:3.20 sleep 600", name, net, macAddr, restartFlag)
+	if _, err = r.Run(ctx, cmd); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
+func inspectField(ctx context.Context, r sourceadapter.Runner, name, field string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf(
+		`sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.%s}}{{end}}' %s`, field, name))
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s %s: %w", name, field, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func removeContainer(ctx context.Context, r sourceadapter.Runner, name string) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+}
+
+func waitContainerRunning(ctx context.Context, r sourceadapter.Runner, name string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Running}}' %s", name))
+		if err == nil && strings.TrimSpace(out) == "true" {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s did not report Running within 30s", name)
+}
+
+// pauseContainer freezes the container's own process tree via cgroups
+// freezer (docker pause) and confirms .State.Paused before returning
+// (issue #3, A11): a scenario that only checks the command exited
+// would miss a pause that never actually took.
+func pauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker pause %s", name)); err != nil {
+		return fmt.Errorf("docker pause %s: %w", name, err)
+	}
+	return waitContainerPaused(ctx, r, name)
+}
+
+// unpauseContainer reverses pauseContainer and confirms the container is
+// Running again, the same discipline pauseContainer applies to Paused.
+func unpauseContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker unpause %s", name)); err != nil {
+		return fmt.Errorf("docker unpause %s: %w", name, err)
+	}
+	return waitContainerRunning(ctx, r, name)
+}
+
+func waitContainerPaused(ctx context.Context, r sourceadapter.Runner, name string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Paused}}' %s", name))
+		if err == nil && strings.TrimSpace(out) == "true" {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s did not report Paused within 30s", name)
+}
+
+// disconnectNetwork and connectNetwork drive `docker network
+// disconnect`/`connect` against a running container (issue #3, A12):
+// docs/reference.md's own release_lease table names `docker network
+// disconnect` as one of the three events that make an endpoint leave
+// its sandbox, alongside `docker stop` and `docker rm` of a running
+// container.
+func disconnectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network disconnect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network disconnect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+func connectNetwork(ctx context.Context, r sourceadapter.Runner, net, name string) error {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker network connect %s %s", net, name)); err != nil {
+		return fmt.Errorf("docker network connect %s %s: %w", net, name, err)
+	}
+	return nil
+}
+
+// networkContainsEndpoint reports whether net's own inspect output
+// still lists endpointID among its attached endpoints -- Docker's own
+// bookkeeping, not the plugin's (issue #3, A16/A15): the check "no
+// leftover endpoint or state" needs after a forced remove or a
+// scale-down.
+func networkContainsEndpoint(ctx context.Context, r sourceadapter.Runner, net, endpointID string) (bool, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker network inspect -f '{{json .Containers}}' %s", net))
+	if err != nil {
+		return false, fmt.Errorf("docker network inspect %s: %w", net, err)
+	}
+	return strings.Contains(out, endpointID), nil
+}
+
+// containerStartedAt and waitContainerRestarted let A10 confirm a
+// restart-policy recovery actually happened -- a fresh StartedAt, not
+// just Running still (or again) true, which a race right after `docker
+// kill` could otherwise read as "never went down" (issue #3).
+func containerStartedAt(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.StartedAt}}' %s", name))
+	if err != nil {
+		return "", fmt.Errorf("docker inspect %s StartedAt: %w", name, err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func waitContainerRestarted(ctx context.Context, r sourceadapter.Runner, name, beforeStartedAt string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' %s", name))
+		if err == nil {
+			if fields := strings.Fields(out); len(fields) == 2 && fields[0] == "true" && fields[1] != beforeStartedAt {
+				return nil
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("container %s was not confirmed restarted (Running, with a new StartedAt) within %s", name, timeout)
+}
+
+// crashContainer simulates a real crash by sending SIGKILL to the
+// container's own main process directly from the host, bypassing `docker
+// kill` (issue #3, A10, measured against a real cell 2026-09-26/27):
+// `docker kill` is itself a manual-stop request as far as dockerd's own
+// restart-manager is concerned, so a container with an `unless-stopped`
+// restart policy is never restarted after one -- confirmed against a real
+// docker host, whose journal logged "stopping restart-manager" and no
+// restart attempt at all right after the call, which is why A10 read as a
+// FAIL that never was one. A signal sent straight to the process leaves
+// the daemon with no such manual-stop intent to record, so the
+// restart-manager runs exactly as it would for a real unexpected exit.
+func crashContainer(ctx context.Context, r sourceadapter.Runner, name string) error {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker inspect -f '{{.State.Pid}}' %s", name))
+	if err != nil {
+		return fmt.Errorf("docker inspect %s Pid: %w", name, err)
+	}
+	pid := strings.TrimSpace(out)
+	if pid == "" || pid == "0" {
+		return fmt.Errorf("container %s has no live main process to crash (Pid=%q)", name, pid)
+	}
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo kill -9 %s", pid)); err != nil {
+		return fmt.Errorf("kill -9 %s (container %s): %w", pid, name, err)
+	}
+	return nil
+}
+
+// inspectContainerNetwork is inspectContainer naming the network
+// explicitly (issue #3, A13): inspectField's range template
+// concatenates every attached network's field into one string, which
+// is silently wrong the moment a container joins a second network, so
+// a multi-network container's per-network mac/address/endpoint id needs
+// this indexed form instead.
+func inspectContainerNetwork(ctx context.Context, r sourceadapter.Runner, shape Shape, name, netName string) (mac, addr, endpointID string, err error) {
+	get := func(field string) (string, error) {
+		out, err := r.Run(ctx, fmt.Sprintf(
+			`sudo docker inspect -f '{{with index .NetworkSettings.Networks %q}}{{.%s}}{{end}}' %s`, netName, field, name))
+		if err != nil {
+			return "", fmt.Errorf("docker inspect %s (network %s) %s: %w", name, netName, field, err)
+		}
+		return strings.TrimSpace(out), nil
+	}
+	if mac, err = get("MacAddress"); err != nil {
+		return "", "", "", err
+	}
+	if addr, err = get("IPAddress"); err != nil {
+		return "", "", "", err
+	}
+	if endpointID, err = get("EndpointID"); err != nil {
+		return "", "", "", err
+	}
+	if addr == "" || (mac == "" && shape != ShapeIpvlan) {
+		return "", "", "", fmt.Errorf("container %s on network %s has no mac/address reported", name, netName)
+	}
+	if shape == ShapeIpvlan && endpointID == "" {
+		return "", "", "", fmt.Errorf("container %s on network %s has no endpoint id reported, needed for its ipvlan client-id", name, netName)
+	}
+	return mac, addr, endpointID, nil
+}
+
+// containerDefaultGateway reads the container's own kernel routing
+// table via /proc/net/route rather than assuming the throwaway image
+// ships an `ip` binary (issue #3, A13 redesign): the default route is
+// the row whose Destination is 00000000, and its Gateway field is a
+// hex-encoded IPv4 address with its four bytes in reverse order.
+// Returns "" with no error when the container has no default route.
+func containerDefaultGateway(ctx context.Context, r sourceadapter.Runner, name string) (string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo docker exec %s cat /proc/net/route", name))
+	if err != nil {
+		return "", fmt.Errorf("docker exec %s cat /proc/net/route: %w", name, err)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[1] != "00000000" {
+			continue
+		}
+		gw, err := hexLEToIPv4(fields[2])
+		if err != nil {
+			return "", fmt.Errorf("container %s default route gateway field %q: %w", name, fields[2], err)
+		}
+		return gw, nil
+	}
+	return "", nil
+}
+
+// hexLEToIPv4 decodes /proc/net/route's own gateway encoding: 8 hex
+// digits, byte-reversed relative to the address's normal dotted order
+// (e.g. a gateway printed elsewhere as w.x.y.z appears here as the hex
+// of z.y.x.w).
+func hexLEToIPv4(hex string) (string, error) {
+	if len(hex) != 8 {
+		return "", fmt.Errorf("want 8 hex digits, got %q", hex)
+	}
+	octets := make([]int64, 4)
+	for i := 0; i < 4; i++ {
+		v, err := strconv.ParseInt(hex[i*2:i*2+2], 16, 32)
+		if err != nil {
+			return "", fmt.Errorf("byte %d: %w", i, err)
+		}
+		octets[i] = v
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", octets[3], octets[2], octets[1], octets[0]), nil
+}
+
+func waitDockerBack(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if _, err := r.Run(ctx, "sudo docker version >/dev/null"); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("dockerd did not come back within %s: %v", timeout, lastErr)
+}
+
+// bootID reads the kernel's own boot id, the one identifier that
+// actually distinguishes "the old boot, still shutting down" from "the
+// new boot, up for real" -- unlike a bare SSH poll, which sshd keeps
+// answering on for a beat after `systemctl reboot` is issued.
+func bootID(ctx context.Context, r sourceadapter.Runner) (string, error) {
+	out, err := r.Run(ctx, "cat /proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(out)
+	if id == "" {
+		return "", fmt.Errorf("empty boot id")
+	}
+	return id, nil
+}
+
+// waitHostRebooted replaces the old first-poll-wins waitSSHBack after a
+// live diagnostic against a real cell (issue #3, A5, 2026-09-26): a bare
+// successful SSH poll right after `systemctl reboot` is not evidence the
+// reboot happened. Measured directly: two polls landed successfully at
+// +1.05s and +2.4s after the reboot command returned, both still against
+// the OLD boot id (sshd keeps answering while the box is mid-shutdown);
+// the connection only actually dropped on the third poll, ~4.1s in. A
+// scenario that trusted the first of those polls would report the host
+// "back" while it was still going down for the real reboot over the
+// next ~59s -- exactly the shape of the cascade this fix addresses (A6
+// onward failing with connection-refused right after an A5 PASS).
+//
+// So this checks three things, in order, all bounded by wall clock:
+//  1. the kernel's own boot id changes from the one recorded before the
+//     reboot was issued (not just "SSH answers again" -- that answered a
+//     survived response, twice, from the boot that was already dying);
+//  2. a second poll against that SAME new boot id lands at least 10s
+//     after the first sighting, so a lucky single ping (or a second,
+//     unplanned reboot mid-settle) cannot pass on its own;
+//  3. `docker info` answers on the confirmed new boot.
+func waitHostRebooted(ctx context.Context, r sourceadapter.Runner, beforeBootID string, timeout time.Duration) error {
+	return waitHostRebootedTuned(ctx, r, beforeBootID, timeout, 10*time.Second, 2*time.Second)
+}
+
+// waitHostRebootedTuned is waitHostRebooted with the settle window and
+// poll interval broken out so a test can shrink both (a real 10s settle
+// window is the point of the fix, not something to skip -- shrinking it
+// is a test-speed concern only, never a way to weaken the check itself).
+func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBootID string, timeout, settle, poll time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
+	var newID string
+	for time.Now().Before(deadline) {
+		if id, err := bootID(ctx, r); err == nil && id != beforeBootID {
+			newID = id
+			break
+		}
+		time.Sleep(poll)
+	}
+	if newID == "" {
+		return fmt.Errorf("boot id never changed from %s within %s: host did not come back on a new boot", beforeBootID, timeout)
+	}
+	firstSeen := time.Now()
+
+	settled := false
+	for time.Now().Before(deadline) {
+		if time.Since(firstSeen) >= settle {
+			id, err := bootID(ctx, r)
+			if err == nil && id == newID {
+				settled = true
+				break
+			}
+			if err == nil && id != newID {
+				return fmt.Errorf("boot id changed again mid-settle (%s -> %s): a second reboot happened while waiting for %s to settle", newID, id, newID)
+			}
+		}
+		time.Sleep(poll)
+	}
+	if !settled {
+		return fmt.Errorf("boot id %s never got a second confirmation >=%s later within %s", newID, settle, timeout)
+	}
+
+	if _, err := r.Run(ctx, "sudo docker info >/dev/null"); err != nil {
+		return fmt.Errorf("boot id %s confirmed twice, but docker info did not answer: %w", newID, err)
+	}
+	return nil
+}
+
+// pluginPID finds the plugin's own process by exact name. The plugin
+// manifest asks for the host PID namespace (docs/index.md in the plugin
+// repo), so its process is visible here directly; -x matches the exact
+// name only, the same rule every process check in this repo already
+// follows -- never -f, which would match this very command's own argv.
+func pluginPID(ctx context.Context, r sourceadapter.Runner) (string, error) {
+	out, err := r.Run(ctx, "sudo pgrep -x net-dhcp")
+	if err != nil {
+		return "", fmt.Errorf("pgrep -x net-dhcp: %w", err)
+	}
+	pid := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+	if pid == "" {
+		return "", fmt.Errorf("no net-dhcp process found")
+	}
+	return pid, nil
+}
+
+// waitPluginBack polls for the plugin's process by exact name, first on
+// its own and then, only if that never happens, after one explicit
+// re-enable -- and says in its return value which one actually worked,
+// so a scenario that had to intervene reports that honestly rather than
+// reading identically to a self-heal (issue #3: never tune a scenario
+// to pass; report what happened).
+func waitPluginBack(ctx context.Context, r sourceadapter.Runner) (recoveredBy string, err error) {
+	return waitPluginBackTuned(ctx, r, 30*time.Second, 30*time.Second, 1*time.Second)
+}
+
+// waitPluginBackTuned is waitPluginBack with both bounds and the poll
+// interval broken out so a test can shrink them, the same split
+// waitHostRebooted/waitHostRebootedTuned already establishes: a real 30s
+// bound is the point of the check, not something a test should have to
+// sit through.
+func waitPluginBackTuned(ctx context.Context, r sourceadapter.Runner, selfTimeout, afterEnableTimeout, poll time.Duration) (recoveredBy string, err error) {
+	if pollPluginPIDTuned(ctx, r, selfTimeout, poll) {
+		return "self", nil
+	}
+	if _, enableErr := r.Run(ctx, "sudo docker plugin enable "+pluginAlias); enableErr != nil {
+		return "", fmt.Errorf("did not come back on its own in %s, and a manual re-enable failed: %w", selfTimeout, enableErr)
+	}
+	if pollPluginPIDTuned(ctx, r, afterEnableTimeout, poll) {
+		return "manual", nil
+	}
+	return "", fmt.Errorf("did not come back within %s on its own or %s after a manual re-enable", selfTimeout, afterEnableTimeout)
+}
+
+// ensurePluginKnownState is the single precondition every scenario runs
+// through RunOne before it starts (issue #3):
+// every scenario must start from a known plugin state -- installed,
+// enabled, its process alive. Run once before each scenario, it also is
+// the restore step after a failure and the BLOCKED-not-FAIL guard,
+// without any separate before/after hook: the plugin must be installed
+// already (this never knows which tag to install from scratch), and
+// waitPluginBack's own self-heal (a bounded wait, then one enable retry)
+// is the one restore attempt, the same logic A7 already trusts for "the
+// plugin came back after being killed."
+func ensurePluginKnownState(ctx context.Context, r sourceadapter.Runner) error {
+	return ensurePluginKnownStateTuned(ctx, r, 30*time.Second, 30*time.Second, 1*time.Second)
+}
+
+func ensurePluginKnownStateTuned(ctx context.Context, r sourceadapter.Runner, selfTimeout, afterEnableTimeout, poll time.Duration) error {
+	if _, err := installedPluginTag(ctx, r); err != nil {
+		return fmt.Errorf("plugin not installed under alias %s: %w", pluginAlias, err)
+	}
+	if _, err := waitPluginBackTuned(ctx, r, selfTimeout, afterEnableTimeout, poll); err != nil {
+		return fmt.Errorf("plugin process not confirmed running: %w", err)
+	}
+	return nil
+}
+
+func pollPluginPID(ctx context.Context, r sourceadapter.Runner, timeout time.Duration) bool {
+	return pollPluginPIDTuned(ctx, r, timeout, 1*time.Second)
+}
+
+func pollPluginPIDTuned(ctx context.Context, r sourceadapter.Runner, timeout, poll time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := pluginPID(ctx, r); err == nil {
+			return true
+		}
+		time.Sleep(poll)
+	}
+	return false
+}
+
+func installedPluginTag(ctx context.Context, r sourceadapter.Runner) (string, error) {
+	out, err := r.Run(ctx, "sudo docker plugin inspect -f '{{.PluginReference}}' "+pluginAlias)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// pluginSocketGlob is this plugin's activation-socket path. The
+// directory name is the plugin's instance ID, which changes on every
+// install, so the glob avoids depending on it.
+const pluginSocketGlob = "/run/docker/plugins/*/net-dhcp.sock"
+
+// WaitPluginReady waits for the plugin to report Enabled, then for its
+// own socket to actually answer, bounded at 60s total and logging how
+// long it took (issue #3): on a fresh kea
+// bring-up, the very first NetworkUp call failed with the socket
+// missing even though cloud-init had already reported done --
+// ensurePluginKnownState's own process check (pgrep, not the socket)
+// would not have caught this either, since the process can exist before
+// its listener does. RunOne's ensurePluginKnownState covers every
+// scenario after the first; this covers the first, which runs before
+// any scenario ever reaches RunOne.
+func WaitPluginReady(ctx context.Context, r sourceadapter.Runner) error {
+	return waitPluginReadyTuned(ctx, r, 60*time.Second, 500*time.Millisecond)
+}
+
+func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, poll time.Duration) error {
+	start := time.Now()
+	for {
+		enabled, _ := r.Run(ctx, fmt.Sprintf("sudo docker plugin inspect -f '{{.Enabled}}' %s 2>/dev/null", pluginAlias))
+		if strings.TrimSpace(enabled) == "true" {
+			if _, err := r.Run(ctx, "sudo sh -c 'ls "+pluginSocketGlob+"' >/dev/null 2>&1"); err == nil {
+				fmt.Fprintf(os.Stderr, "WaitPluginReady: %s enabled with an answering socket after %s\n",
+					pluginAlias, time.Since(start).Round(10*time.Millisecond))
+				return nil
+			}
+		}
+		elapsed := time.Since(start)
+		if elapsed >= timeout {
+			return fmt.Errorf("%s not enabled with an answering socket after %s", pluginAlias, elapsed.Round(10*time.Millisecond))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+// pluginJournalTagPattern matches dockerd's own wrapper tag for a
+// managed plugin's stdout/stderr line, "plugin=<64-hex instance id>"
+// (issue #3, measured 2026-09-27 against a live cell at LOG_LEVEL=trace:
+// the real /IpamDriver.RequestAddress access line carries only this
+// tag, no literal "net-dhcp" substring at all). Matched generically, by
+// shape rather than by resolving one specific instance id: a whole-cell
+// dump's own window can span a plugin upgrade (A6), where dockerd keeps
+// tagging the daemon's journal with the OLD instance's id for lines it
+// logged before the swap -- a filter pinned to only the
+// currently-installed id would still lose those earlier lines. The
+// docker host under test never runs a second managed plugin, so this
+// generic tag alone is unambiguous here; it is also exactly the
+// reproduction check a live comparison uses (`journalctl -u docker |
+// grep -c plugin=`), so a bundle's line count matches that count
+// directly.
+var pluginJournalTagPattern = regexp.MustCompile(`plugin=[0-9a-f]+`)
+
+// pluginJournalLines returns the docker journal lines from the last
+// `since` that carry this plugin's own tag or the plain "net-dhcp"
+// substring (true for this plugin's own application log lines that
+// mention a path under /var/lib/net-dhcp). Every capture in this file
+// used to filter on the substring alone, so none of them ever kept an
+// RPC access line, at any log level, and a whole cell's worth of these
+// lines is what scripts/run-cell.sh writes out as
+// "<cell>-plugin-log.txt" -- so this one function is also what that
+// dump's own grep step needs to match (issue #3).
+func pluginJournalLines(ctx context.Context, r sourceadapter.Runner, since string) ([]string, error) {
+	out, err := r.Run(ctx, fmt.Sprintf("sudo journalctl -u docker --since '%s'", since))
+	if err != nil {
+		return nil, fmt.Errorf("journalctl -u docker: %w", err)
+	}
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "net-dhcp") || pluginJournalTagPattern.MatchString(line) {
+			lines = append(lines, line)
+		}
+	}
+	return lines, nil
+}
+
+// CapturePluginLog writes the docker daemon's own journal, filtered to
+// this plugin's lines, to path -- the same evidence run-cell.sh
+// already collects at the end of a cell's run, but callable directly so
+// a WaitPluginReady timeout can attach it to the BLOCKED cell before any
+// scenario runs (issue #3).
+func CapturePluginLog(ctx context.Context, r sourceadapter.Runner, path string) error {
+	lines, err := pluginJournalLines(ctx, r, "10 minutes ago")
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if b.Len() == 0 {
+		b.WriteString("# no plugin lines in the last 10 minutes of the docker journal\n")
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// capturePluginLogAroundFirstRequestAddress writes the plugin's own
+// journal lines from the last 10 minutes to path, sliced to a
+// fixed window of context lines around the first line mentioning
+// RequestAddress. It is A5b's evidence capture (#3): a raw, mechanical
+// slice, never a judgement about what those lines show -- a
+// bridge-ipam run's first lease going out under a different client-id
+// than the fixed MAC is left for whoever reads the evidence, not this
+// capture to characterise. At the plugin's default LOG_LEVEL (info) the
+// access line this looks for is not emitted (it's a Trace call, see
+// pkg/util/http.go's WriteAccessLog); the placeholder says so instead of
+// leaving an unexplained miss. A trace-level rerun is a separate pass,
+// and needs pluginJournalLines's own tag match to find that access line
+// at all -- a plain "net-dhcp" substring match alone never does (see its
+// doc comment; measured 2026-09-27 against a live cell).
+func capturePluginLogAroundFirstRequestAddress(ctx context.Context, r sourceadapter.Runner, path string) error {
+	netDHCP, err := pluginJournalLines(ctx, r, "10 minutes ago")
+	if err != nil {
+		return err
+	}
+	const contextLines = 10
+	firstMatch := -1
+	for i, line := range netDHCP {
+		if strings.Contains(line, "RequestAddress") {
+			firstMatch = i
+			break
+		}
+	}
+	var b strings.Builder
+	if firstMatch == -1 {
+		b.WriteString("# no RequestAddress line found in the last 10 minutes of the docker journal's plugin lines\n")
+		b.WriteString("# this is expected at the plugin's default LOG_LEVEL (info): the /IpamDriver.RequestAddress\n")
+		b.WriteString("# access line is only emitted at trace (pkg/util/http.go's WriteAccessLog is a Tracef call),\n")
+		b.WriteString("# and a clean lease grant otherwise logs nothing at info (docs/reference.md). Raising\n")
+		b.WriteString("# LOG_LEVEL to trace (docker plugin disable/set/enable) reproduces this evidence; that is\n")
+		b.WriteString("# a separate, disruptive pass, not this capture. If this file was captured during such a\n")
+		b.WriteString("# trace-level pass and still shows this placeholder, do not read that as the LOG_LEVEL\n")
+		b.WriteString("# explanation applying -- confirm with an independent live journal read before treating\n")
+		b.WriteString("# an absence here as a genuine finding.\n")
+	} else {
+		start := firstMatch - contextLines
+		if start < 0 {
+			start = 0
+		}
+		end := firstMatch + contextLines + 1
+		if end > len(netDHCP) {
+			end = len(netDHCP)
+		}
+		fmt.Fprintf(&b, "# plugin journal lines %d..%d of %d, centred on the first RequestAddress line (index %d)\n", start, end-1, len(netDHCP), firstMatch)
+		for _, line := range netDHCP[start:end] {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// pluginSettingNames reads the settings a given, already-installed
+// plugin ref actually declares, from the plugin's own Config.Env
+// (issue #3): an older or different tag does not
+// necessarily have every setting a newer one added, and installing with
+// an unknown setting fails outright rather than ignoring it.
+func pluginSettingNames(ctx context.Context, r sourceadapter.Runner, alias string) (map[string]bool, error) {
+	out, err := r.Run(ctx, `sudo docker plugin inspect -f '{{range .Config.Env}}{{.Name}}{{"\n"}}{{end}}' `+alias)
+	if err != nil {
+		return nil, fmt.Errorf("read plugin settings for %s: %w", alias, err)
+	}
+	names := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names[line] = true
+		}
+	}
+	return names, nil
+}
+
+// installPluginChecked installs ref under alias without enabling it,
+// reads which settings that ref actually declares, sets only the wanted
+// settings that are present, then enables. It never fails on a wanted
+// setting the ref does not have -- that is expected across versions, not
+// an error -- but the caller learns which ones were skipped.
+func installPluginChecked(ctx context.Context, r sourceadapter.Runner, alias, ref string, wanted map[string]string) (skipped []string, err error) {
+	if _, err := r.Run(ctx, fmt.Sprintf("sudo docker plugin install --grant-all-permissions --alias %s %s --disable", alias, ref)); err != nil {
+		return nil, fmt.Errorf("install %s (disabled): %w", ref, err)
+	}
+	names, err := pluginSettingNames(ctx, r, alias)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range wanted {
+		if !names[k] {
+			skipped = append(skipped, k)
+			continue
+		}
+		if _, err := r.Run(ctx, fmt.Sprintf("sudo docker plugin set %s %s=%s", alias, k, v)); err != nil {
+			return skipped, fmt.Errorf("set %s=%s on %s: %w", k, v, ref, err)
+		}
+	}
+	if _, err := r.Run(ctx, "sudo docker plugin enable "+alias); err != nil {
+		return skipped, fmt.Errorf("enable %s: %w", ref, err)
+	}
+	return skipped, nil
+}
+
+// dhcpExchangeReason reuses the repo's own checker (issue #2's
+// dhcp-exchange-check.sh) so there is exactly one place that defines a
+// complete DHCP exchange, tied to one MAC via option 53 -- never a
+// second, drifting copy of that logic in Go.
+func dhcpExchangeReason(ctx context.Context, repoRoot, pcapPath, mac string) (string, error) {
+	script := repoRoot + "/scripts/dhcp-exchange-check.sh"
+	if _, err := os.Stat(script); err != nil {
+		return "", fmt.Errorf("dhcp-exchange-check.sh not found at %s: %w", script, err)
+	}
+	cmd := exec.CommandContext(ctx, "bash", "-c",
+		`. "$1"; dhcp_exchange_reason "$2" "$3"`,
+		"dhcp-exchange-check-wrapper", script, pcapPath, mac)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("dhcp_exchange_reason: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
