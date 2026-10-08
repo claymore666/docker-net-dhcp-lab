@@ -233,6 +233,25 @@ plugin/engine/kernel versions, a config diff from the source's stock
 install, one packet capture for the whole run, lease-table snapshots,
 the plugin's own log, and one verdict file per scenario and shape.
 
+`scripts/run-cells.sh [-j N] [--root DIR] [--check] <cell-name>...` runs
+several cells at once on one host and leaves one evidence bundle per cell
+under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
+and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
+`/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
+`(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1; a
+larger `-j` is accepted and reported as an overcommit. A cell that fails
+does not stop the others, and the exit code is 1 if any cell's was not 0.
+Before the first start it resolves every cell and refuses if two share a
+name, VM name, bridge, management address, observer container, observer
+veth or directory, or if any of those VMs or containers already exists on
+the host; `--check` prints that table and stops there. Before each start it
+wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
+minutes for it, and otherwise marks the cell `skipped-disk`. INT or TERM
+stops every running cell and tears it down with `down-cell.sh`. Starting
+two `run-cells.sh` at once on overlapping cells is not guarded. Render the
+results the same way as for one cell:
+`labctl matrix --root <root>/evidence <root>/evidence/<cell>...`.
+
 `labctl run <lab.yaml> <repo-root> <cell-name> <shape> <work-dir>
 <evidence-dir> <pcap-path|->` runs one shape's scenarios directly, for a
 single-shape re-run.

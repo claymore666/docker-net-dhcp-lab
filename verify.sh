@@ -140,6 +140,12 @@ echo "== lab segment firewall refusal/idempotency tests =="
 echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
 
+echo "== run-cells.sh pool, duplicate and signal tests (issue #38) =="
+./scripts/run-cells-test.sh
+
+echo "== fetch-base-image.sh download lock tests (issue #38) =="
+./scripts/fetch-base-image-test.sh
+
 echo "== capture-start/capture-stop orchestration and sudo -n tests =="
 ./scripts/capture-lifecycle-test.sh
 
