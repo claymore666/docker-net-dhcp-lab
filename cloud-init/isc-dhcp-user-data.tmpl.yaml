@@ -26,8 +26,18 @@ runcmd:
     default-lease-time 600;
     max-lease-time 7200;
     authoritative;
+    class "b5" {
+      match if option vendor-class-identifier = "lab-class-b5";
+    }
     subnet __SEG_NETWORK__ netmask __SEG_NETMASK__ {
-      range __POOL_START__ __POOL_END__;
+      pool {
+        deny members of "b5";
+        range __POOL_START__ __POOL_END__;
+      }
+      pool {
+        allow members of "b5";
+        range __CLASS_POOL_START__ __CLASS_POOL_END__;
+      }
       option routers __SEG_GATEWAY__;
     }
     include "/etc/dhcp/lab-reservations.conf";

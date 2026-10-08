@@ -26,7 +26,9 @@ runcmd:
     bind-interfaces
     except-interface=eth0
     dhcp-authoritative
-    dhcp-range=__POOL_START__,__POOL_END__,12h
+    dhcp-vendorclass=set:b5,lab-class-b5
+    dhcp-range=tag:!b5,__POOL_START__,__POOL_END__,12h
+    dhcp-range=tag:b5,__CLASS_POOL_START__,__CLASS_POOL_END__,12h
     dhcp-option=3,__SEG_GATEWAY__
     conf-dir=/etc/dnsmasq.d/,*.conf
     DNSMASQEOF
