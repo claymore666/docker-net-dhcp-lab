@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-CACHE_DIR=/srv/lab/images
+CACHE_DIR=${LAB_IMAGE_CACHE:-/srv/lab/images}
 NAME=${1:?usage: fetch-base-image.sh <name> <url>}
 URL=${2:?usage: fetch-base-image.sh <name> <url>}
 PINNED="$REPO_ROOT/images/$NAME.sha256"
@@ -17,10 +17,18 @@ DEST="$CACHE_DIR/$NAME.qcow2"
 
 mkdir -p "$CACHE_DIR"
 
+# Two cells with the same image and a cold cache share one .part (issue
+# #38): serialise the download per image and re-test inside the lock, so
+# the second cell finds the first one's finished file.
 if [ ! -f "$DEST" ]; then
-	echo "fetch-base-image: downloading $NAME"
-	curl -fsSL -o "$DEST.part" "$URL"
-	mv "$DEST.part" "$DEST"
+	exec 9>"$CACHE_DIR/$NAME.lock"
+	flock 9
+	if [ ! -f "$DEST" ]; then
+		echo "fetch-base-image: downloading $NAME"
+		curl -fsSL -o "$DEST.part" "$URL"
+		mv "$DEST.part" "$DEST"
+	fi
+	exec 9>&-
 fi
 
 sum=$(sha256sum "$DEST" | awk '{print $1}')
