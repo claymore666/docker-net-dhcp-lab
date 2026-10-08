@@ -529,6 +529,12 @@ func runB8(ctx context.Context, e Env) Verdict {
 		if !ok {
 			return fail(NameB8, e.Cell, e.Shape, fmt.Sprintf("%s: %s", c.name, leaseFailReason(e.Shape, c.mac, c.addr, c.endpointID)), ev, e.GitSHA)
 		}
+		// By client id the table row carries its own address; it must be the
+		// one the container reports, or three containers on one address
+		// would pass against three unrelated rows.
+		if l.Address != c.addr {
+			return fail(NameB8, e.Cell, e.Shape, fmt.Sprintf("%s reports %s but the table gives its client id %s", c.name, c.addr, l.Address), ev, e.GitSHA)
+		}
 		addrs[l.Address] = true
 		macs[strings.ToLower(l.MAC)] = true
 		clientIDs[l.ClientID] = true

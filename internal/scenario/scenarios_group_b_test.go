@@ -659,6 +659,25 @@ func TestRunB4FailsOnASecondLeaseForTheMACWithTheSameAddress(t *testing.T) {
 	}
 }
 
+// The table holds two rows for the fixed MAC before the remove.
+func TestRunB4FailsWhenTheTableHoldsTwoLeasesBeforeTheRemove(t *testing.T) {
+	h := newBRunner()
+	src := &bAdapter{fakeAdapter: &fakeAdapter{}}
+	e := bEnv(t, h, src, ShapeBridge)
+	mac := fixedMACForScenario(e.Cell, e.Shape, "b4")
+	h.addrFn = func(string, string) string { return "10.200.1.140" }
+	src.fn = staticLeases(
+		sourceadapter.Lease{MAC: mac, Address: "10.200.1.140"},
+		sourceadapter.Lease{MAC: mac, Address: "10.200.1.141"},
+	)
+	v := runB4(context.Background(), e)
+	needResult(t, v, FAIL)
+	if !strings.Contains(v.Reason, "before the remove") {
+		t.Errorf("reason %q", v.Reason)
+	}
+	needCleanup(t, h, "", containerName(e, NameB4))
+}
+
 func TestRunB4IsNotApplicableOnIpvlan(t *testing.T) {
 	h := newBRunner()
 	e := bEnv(t, h, &bAdapter{fakeAdapter: &fakeAdapter{}}, ShapeIpvlan)
@@ -693,6 +712,17 @@ func TestRunB5FailsFromTheMainPool(t *testing.T) {
 	if !strings.Contains(v.Reason, "rebuilt") {
 		t.Errorf("reason %q should say an old source VM needs a rebuild", v.Reason)
 	}
+	needCleanup(t, h, "b5", containerName(e, NameB5))
+}
+
+// Above the class pool's last address, still in the cell's /24.
+func TestRunB5FailsAboveTheClassPool(t *testing.T) {
+	h := newBRunner()
+	src := &bAdapter{fakeAdapter: &fakeAdapter{}}
+	e := bEnv(t, h, src, ShapeBridge)
+	h.addrFn = func(string, string) string { return "10.200.1.231" }
+	src.fn = staticLeases(sourceadapter.Lease{MAC: "aa:bb:cc:00:00:01", Address: "10.200.1.231"})
+	needResult(t, runB5(context.Background(), e), FAIL)
 	needCleanup(t, h, "b5", containerName(e, NameB5))
 }
 
@@ -978,6 +1008,31 @@ func TestRunB8FailsOnIpvlanWhenClientIDsCollide(t *testing.T) {
 		return out
 	}
 	needResult(t, runB8(context.Background(), e), FAIL)
+}
+
+// Every container reports one address while the table holds three
+// distinct rows under the three client ids.
+func TestRunB8FailsOnIpvlanWhenContainersReportOneAddress(t *testing.T) {
+	h := newBRunner()
+	h.addrFn = func(string, string) string { return "10.200.1.101" }
+	src := &bAdapter{fakeAdapter: &fakeAdapter{}}
+	e := bEnv(t, h, src, ShapeIpvlan)
+	src.fn = func(int) []sourceadapter.Lease {
+		var out []sourceadapter.Lease
+		for i, n := range b8Names(e) {
+			if _, ok := h.containers[n]; ok {
+				l := b8Lease(ShapeIpvlan, h, n)
+				l.Address = fmt.Sprintf("10.200.1.%d", 101+i)
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	v := runB8(context.Background(), e)
+	needResult(t, v, FAIL)
+	if !strings.Contains(v.Reason, "reports") {
+		t.Errorf("reason %q", v.Reason)
+	}
 }
 
 func TestRunB8FailsWhenNonIpvlanContainersShareOneMAC(t *testing.T) {
