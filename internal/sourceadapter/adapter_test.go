@@ -373,20 +373,25 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 }
 
 // Preservation: every adapter's declared capabilities are a fixed, known
-// set -- a change here is a deliberate claim, not an accident.
+// set -- a change here is a deliberate claim, not an accident. Group B
+// (#23) added four; only dnsmasq serves DNS from its own leases.
 func TestDeclaredCapabilities(t *testing.T) {
-	want := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
-	for name, caps := range map[string][]Capability{
-		"kea":      (&KeaAdapter{}).Capabilities(),
-		"isc-dhcp": (&ISCDHCPAdapter{}).Capabilities(),
-		"dnsmasq":  (&DnsmasqAdapter{}).Capabilities(),
-	} {
-		if len(caps) != len(want) {
-			t.Fatalf("%s: want %d capabilities, got %d (%v)", name, len(want), len(caps), caps)
+	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
+	cases := map[string]struct {
+		got  []Capability
+		want []Capability
+	}{
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange)},
+	}
+	for name, c := range cases {
+		if len(c.got) != len(c.want) {
+			t.Fatalf("%s: want %d capabilities, got %d (%v)", name, len(c.want), len(c.got), c.got)
 		}
-		for i := range want {
-			if caps[i] != want[i] {
-				t.Fatalf("%s: capability %d = %s, want %s", name, i, caps[i], want[i])
+		for i := range c.want {
+			if c.got[i] != c.want[i] {
+				t.Fatalf("%s: capability %d = %s, want %s", name, i, c.got[i], c.want[i])
 			}
 		}
 	}

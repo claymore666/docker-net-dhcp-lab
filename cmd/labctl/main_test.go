@@ -56,13 +56,13 @@ func TestPoolCapacityRejectsBadInput(t *testing.T) {
 }
 
 // TestPoolHasCapacityForMatchesMinPoolAddresses pins the check against
-// scenario.MinPoolAddresses's own value (38, catalog.go) rather than a
+// scenario.MinPoolAddresses's own value (catalog.go) rather than a
 // number restated here: a pool exhausted by four prior shapes' worth of
 // held leases must abort the fifth, and a fresh 101-address pool must
-// clear every shape (five shapes x 38 is exactly the case that
+// clear every shape (five shapes x the requirement is exactly the case that
 // exhausted the pool on A15/A16 before this fix, #3).
 func TestPoolHasCapacityForMatchesMinPoolAddresses(t *testing.T) {
-	const need = 38 // scenario.MinPoolAddresses
+	const need = scenario.MinPoolAddresses
 
 	if ok, reason := poolHasCapacityFor(101, 0, need); !ok {
 		t.Fatalf("a fresh 101-address pool must cover one shape's run: %s", reason)

@@ -64,6 +64,16 @@ seg_netmask=255.255.255.0
 # Fritz.Box, where the DHCP server and the LAN gateway are the same box.
 seg_addr_ip=${seg_addr%%/*}
 
+# Group B (#23): the class pool B5 serves to option 60 "lab-class-b5" is
+# a fixed host-octet band above every cell's main pool (.100-.200). The
+# same two numbers live in internal/scenario/groupb_addrs.go; a Go test
+# reads them out of this file.
+class_first_host=221
+class_last_host=230
+class_prefix=${seg_network%.*}
+class_pool_start="$class_prefix.$class_first_host"
+class_pool_end="$class_prefix.$class_last_host"
+
 tmpl="$REPO_ROOT/cloud-init/${source_type}-user-data.tmpl.yaml"
 seed_dir="$WORK/seed-source"
 mkdir -p "$seed_dir"
@@ -72,6 +82,7 @@ sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__SEG_NETMASK__#$seg_netmask#g" \
 	-e "s#__SEG_GATEWAY__#$seg_addr_ip#g" \
 	-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
+	-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
 	"$tmpl" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \

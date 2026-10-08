@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // keaValidLifetimeRE matches the config's own "valid-lifetime": N, field
@@ -24,7 +25,7 @@ type KeaAdapter struct {
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange}
 }
 
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
@@ -50,6 +51,9 @@ type keaResponse struct {
 			HWAddress string `json:"hw-address"`
 			Hostname  string `json:"hostname"`
 			ClientID  string `json:"client-id"`
+			State     int    `json:"state"`
+			CLTT      int64  `json:"cltt"`
+			ValidLft  int64  `json:"valid-lft"`
 		} `json:"leases"`
 	} `json:"arguments"`
 }
@@ -80,18 +84,45 @@ func parseKeaLeases(raw string) ([]Lease, error) {
 	}
 	leases := make([]Lease, 0, len(resp[0].Arguments.Leases))
 	for _, l := range resp[0].Arguments.Leases {
-		leases = append(leases, Lease{
+		// State 0 is "default" (active); declined, expired-reclaimed
+		// and released rows stay in the memfile until reclaimed and
+		// are not leases (B7, #23). A row that carries cltt but a zero
+		// valid-lft is a release too.
+		if l.State != 0 || (l.CLTT != 0 && l.ValidLft == 0) {
+			continue
+		}
+		lease := Lease{
 			MAC: l.HWAddress, Address: l.IPAddress, Hostname: l.Hostname,
 			ClientID: strings.ToLower(l.ClientID),
-		})
+		}
+		if l.ValidLft > 0 {
+			lease.Expires = time.Unix(l.CLTT+l.ValidLft, 0).UTC()
+		}
+		leases = append(leases, lease)
 	}
 	return leases, nil
 }
 
-// ReserveMAC appends to the reservations file Kea's config includes
-// (issue #2), then asks the running server to reload -- never a
-// restart, so leases already handed out stay live. hw/ip are guaranteed
-// clean by validateMAC/validateAddr before they ever reach this string.
+// keaReserve replaces any reservation for the same identifier and adds
+// the new one in a single jq pass over the include file, then asks the
+// running server to reload -- never a restart, so leases already handed
+// out stay live. A rerun after a half-finished run therefore never
+// leaves two rows for one identifier (#23). field and value are
+// validated by the caller (validateMAC, validateClientID); ip by
+// validateAddr.
+func (a *KeaAdapter) keaReserve(ctx context.Context, field, value, ip string) error {
+	cmd := fmt.Sprintf(
+		`sudo jq 'map(select(.["%s"] != "%s")) + [{"%s":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server`,
+		field, value, field, value, ip,
+	)
+	if _, err := a.Runner.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("kea: reserve %s %s -> %s: %w", field, value, ip, err)
+	}
+	return nil
+}
+
+// ReserveMAC reserves ip for the MAC (issue #2). hw/ip are guaranteed
+// clean by validateMAC/validateAddr before they ever reach the command.
 func (a *KeaAdapter) ReserveMAC(ctx context.Context, mac, addr string) error {
 	hw, err := validateMAC(mac)
 	if err != nil {
@@ -101,14 +132,23 @@ func (a *KeaAdapter) ReserveMAC(ctx context.Context, mac, addr string) error {
 	if err != nil {
 		return err
 	}
-	cmd := fmt.Sprintf(
-		`sudo jq '. + [{"hw-address":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server`,
-		hw, ip,
-	)
-	if _, err := a.Runner.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("kea: reserve %s -> %s: %w", hw, ip, err)
+	return a.keaReserve(ctx, "hw-address", hw, ip)
+}
+
+// ReserveClientID reserves ip for an option 61 value (B2, #23). Kea's
+// "client-id" reservation key is on its default host-reservation-
+// identifiers list and carries the whole option payload including the
+// type byte, the same shape its lease rows report.
+func (a *KeaAdapter) ReserveClientID(ctx context.Context, clientID, addr string) error {
+	id, err := validateClientID(clientID)
+	if err != nil {
+		return err
 	}
-	return nil
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return err
+	}
+	return a.keaReserve(ctx, "client-id", id, ip)
 }
 
 func (a *KeaAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
@@ -154,5 +194,23 @@ func (a *KeaAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(co
 	repl := fmt.Sprintf(`"valid-lifetime": %d,`, seconds)
 	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf",
 		keaValidLifetimeRE, repl,
+		func(ctx context.Context) error { return a.Restart(ctx) }, "kea")
+}
+
+// keaRoutersOptionRE anchors SetDNSOption on the one option-data entry
+// the cloud-init template always writes (cloud-init/kea-user-data).
+var keaRoutersOptionRE = regexp.MustCompile(`("option-data": \[ \{ "name": "routers", "data": "[^"]*" \})`)
+
+// SetDNSOption adds a domain-name-servers entry beside the routers
+// option in the running config and restarts (B6, #23). Kea reads
+// option-data at start, so a HUP is not enough here.
+func (a *KeaAdapter) SetDNSOption(ctx context.Context, addr string) (func(context.Context) error, error) {
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+	repl := fmt.Sprintf(`${1}, { "name": "domain-name-servers", "data": "%s" }`, ip)
+	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf",
+		keaRoutersOptionRE, repl, `"domain-name-servers"`,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "kea")
 }

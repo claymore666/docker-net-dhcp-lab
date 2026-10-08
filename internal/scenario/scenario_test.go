@@ -32,6 +32,13 @@ type fakeAdapter struct {
 	resetErr    error
 	shortened   bool
 	restored    bool
+
+	reserveErr  error
+	dnsErr      error
+	reservedMAC []string
+	reservedID  []string
+	dnsSet      string
+	dnsRestored bool
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -42,12 +49,26 @@ func (f *fakeAdapter) Leases(_ context.Context) ([]sourceadapter.Lease, error) {
 	}
 	return f.leases, f.err
 }
-func (f *fakeAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
-func (f *fakeAdapter) ResetLeases(_ context.Context) error             { return f.resetErr }
-func (f *fakeAdapter) Restart(_ context.Context) error                 { return nil }
-func (f *fakeAdapter) Stop(_ context.Context) error                    { return nil }
-func (f *fakeAdapter) Start(_ context.Context) error                   { return nil }
-func (f *fakeAdapter) Reachable(_ context.Context, _ string) error     { return f.reachErr }
+func (f *fakeAdapter) ReserveMAC(_ context.Context, mac, ip string) error {
+	f.reservedMAC = append(f.reservedMAC, mac+"="+ip)
+	return f.reserveErr
+}
+func (f *fakeAdapter) ReserveClientID(_ context.Context, id, ip string) error {
+	f.reservedID = append(f.reservedID, id+"="+ip)
+	return f.reserveErr
+}
+func (f *fakeAdapter) SetDNSOption(_ context.Context, addr string) (func(context.Context) error, error) {
+	if f.dnsErr != nil {
+		return nil, f.dnsErr
+	}
+	f.dnsSet = addr
+	return func(context.Context) error { f.dnsRestored = true; return nil }, nil
+}
+func (f *fakeAdapter) ResetLeases(_ context.Context) error         { return f.resetErr }
+func (f *fakeAdapter) Restart(_ context.Context) error             { return nil }
+func (f *fakeAdapter) Stop(_ context.Context) error                { return nil }
+func (f *fakeAdapter) Start(_ context.Context) error               { return nil }
+func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	if f.shortenErr != nil {
 		return nil, f.shortenErr

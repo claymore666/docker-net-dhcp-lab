@@ -35,6 +35,13 @@ type Env struct {
 	// suffix (issue #3, A13 redesign): A13 checks the container's own
 	// default route against this, not against a hardcoded address.
 	SegGateway string
+	// SegSubnet, PoolStart and PoolEnd are the cell's /24 and the source's
+	// main pool from lab.yaml (group B, #23): the reservation, class-pool
+	// and DNS-option addresses are chosen from SegSubnet and refused
+	// when they fall inside the pool.
+	SegSubnet string
+	PoolStart string
+	PoolEnd   string
 	// HostInfo is the docker host this Env's scenarios run against
 	// (issue #8): copied onto every Verdict by RunOne, once, so no
 	// scenario body has to carry it. Zero value when the read failed;
@@ -97,10 +104,19 @@ const (
 	NameA14 = "A14-short-lease-renewal"
 	NameA15 = "A15-compose-scale"
 	NameA16 = "A16-forced-remove-running"
+
+	NameB1 = "B1-reservation-by-mac"
+	NameB2 = "B2-reservation-by-client-id"
+	NameB3 = "B3-dns-registration"
+	NameB4 = "B4-requested-address-kept"
+	NameB5 = "B5-vendor-class-pool"
+	NameB6 = "B6-option-change-on-renewal"
+	NameB7 = "B7-lease-release"
+	NameB8 = "B8-three-at-once"
 )
 
-// MinPoolAddresses is the most pool addresses one full A1-A16 pass under
-// one shape could hold onto, worst case (issue #3 part 2). The plugin's
+// MinPoolAddresses is the most pool addresses one full pass under one
+// shape could hold onto, worst case (issue #3 part 2, #23). The plugin's
 // own default is release_lease=never (docs/reference.md): nothing frees
 // a lease on its own, so every fresh MAC/client-id a scenario mints
 // keeps its address until the source's lease database is reset
@@ -112,11 +128,22 @@ const (
 // A7(1, persists across the kill) + A8(10, fleet burst) + A9(2) +
 // A10(2) + A11(1, pause/unpause mints nothing new) + A12(2) + A13(1,
 // its own second network is Docker's default IPAM, never this pool) +
-// A14(1) + A15(5, peak replica count) + A16(1) = 38. The pre-shape
-// check in cmd/labctl compares a pool's free addresses against this and
-// aborts the cell as a lab error, never as a scenario FAIL, when the
-// pool cannot cover even one shape's run.
-const MinPoolAddresses = 38
+// A14(1) + A15(5, peak replica count) + A16(1) = 38, plus group B's 11
+// (poolDemand, counted as if every reservation and the class pool missed).
+// The pre-shape check in cmd/labctl compares a pool's free addresses
+// against this and aborts the cell as a lab error, never as a scenario
+// FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
+const MinPoolAddresses = 49
+
+// poolDemand is the per-scenario worst case MinPoolAddresses is the sum
+// of; a scenario added to Catalog without a row here fails the test.
+var poolDemand = map[string]int{
+	NameA1: 1, NameA2: 2, NameA3: 2, NameA4: 2, NameA5: 2, NameA5b: 2,
+	NameA6: 1, NameA7: 1, NameA8: 10, NameA9: 2, NameA10: 2, NameA11: 1,
+	NameA12: 2, NameA13: 1, NameA14: 1, NameA15: 5, NameA16: 1,
+	NameB1: 1, NameB2: 1, NameB3: 1, NameB4: 2, NameB5: 1, NameB6: 1,
+	NameB7: 1, NameB8: 3,
+}
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
 // never has to duplicate that check: a scenario whose capability is
@@ -161,7 +188,7 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 
 // Catalog is the scenario list: first lease, container restart, compose down/up,
 // daemon restart, host reboot, plugin upgrade, plugin killed, fleet
-// burst (issue #3). Groups B, C, D are later PRs, per the issue.
+// burst (issue #3), then group B (#23). Groups C and D are later PRs.
 var Catalog = []Scenario{
 	{Name: NameA1, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA1},
 	{Name: NameA2, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA2},
@@ -180,4 +207,12 @@ var Catalog = []Scenario{
 	{Name: NameA14, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runA14},
 	{Name: NameA15, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA15},
 	{Name: NameA16, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA16},
+	{Name: NameB1, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapReserveMAC}, Run: runB1},
+	{Name: NameB2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapReserveClientID}, Run: runB2},
+	{Name: NameB3, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapDNSRegistration}, Run: runB3},
+	{Name: NameB4, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runB4},
+	{Name: NameB5, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapVendorClassPool}, Run: runB5},
+	{Name: NameB6, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapOptionChange}, Run: runB6},
+	{Name: NameB7, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runB7},
+	{Name: NameB8, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runB8},
 }

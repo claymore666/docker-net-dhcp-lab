@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -278,17 +279,12 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		if !bridgeReady(ctx, r, br) {
 			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after netplan apply", shape, br, SegmentNIC)
 		}
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o bridge=%s %s", driverAlias, ipamDriverFor(shape), br, net)
+		create, _ := networkCreateCmd(shape, net, br, nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, create, err)
 		}
 	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
-		mode := "macvlan"
-		if shape == ShapeIpvlan {
-			mode = "ipvlan"
-		}
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s %s",
-			driverAlias, ipamDriverFor(shape), mode, SegmentNIC, net)
+		create, _ := networkCreateCmd(shape, net, "", nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
@@ -296,6 +292,68 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		return "", fmt.Errorf("networkup: unknown shape %q", shape)
 	}
 	return net, nil
+}
+
+// networkOptRE is the whole grammar of an extra network option: a
+// lower-case key and a value of letters, digits and . _ : -, so nothing
+// else can reach the remote shell (group B, #23).
+var networkOptRE = regexp.MustCompile(`^[a-z_]+=[A-Za-z0-9._:-]+$`)
+
+// networkCreateCmd is the one place a plugin network's create command is
+// built, for the cell's main network (opts nil) and for a group B
+// scenario's own network (opts set). br is the host bridge, used by the
+// two bridge shapes only.
+func networkCreateCmd(shape Shape, net, br string, opts []string) (string, error) {
+	extra := ""
+	for _, o := range opts {
+		if !networkOptRE.MatchString(o) {
+			return "", fmt.Errorf("network option %q is not a plain key=value", o)
+		}
+		extra += " -o " + o
+	}
+	switch shape {
+	case ShapeBridge, ShapeBridgeIPAM:
+		return fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o bridge=%s%s %s", driverAlias, ipamDriverFor(shape), br, extra, net), nil
+	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
+		mode := "macvlan"
+		if shape == ShapeIpvlan {
+			mode = "ipvlan"
+		}
+		return fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s%s %s",
+			driverAlias, ipamDriverFor(shape), mode, SegmentNIC, extra, net), nil
+	}
+	return "", fmt.Errorf("networkup: unknown shape %q", shape)
+}
+
+// NetworkUpExtra creates a second plugin network, mainNet-suffix, beside
+// the cell's main one with extra -o options (group B, #23): one scenario
+// that needs a network option gets its own network and the main network
+// is never changed. A bridge shape reuses the main network's host bridge
+// and needs ignore_conflicts for the second network on it (plugin
+// docs/reference.md, bridge mode only). It removes a stale network of
+// that name first, so a leftover never looks like a fresh create.
+func NetworkUpExtra(ctx context.Context, r sourceadapter.Runner, mainNet string, shape Shape, suffix string, opts []string) (string, error) {
+	net := mainNet + "-" + suffix
+	NetworkDownExtra(ctx, r, mainNet, suffix)
+	br := ""
+	if usesHostBridge(shape) {
+		br = hostBridgeName(mainNet)
+		opts = append(append([]string{}, opts...), "ignore_conflicts=true")
+	}
+	create, err := networkCreateCmd(shape, net, br, opts)
+	if err != nil {
+		return "", err
+	}
+	if _, err := r.Run(ctx, create); err != nil {
+		return "", fmt.Errorf("networkupextra(%s): %s: %w", shape, create, err)
+	}
+	return net, nil
+}
+
+// NetworkDownExtra removes the network NetworkUpExtra created; best
+// effort and idempotent like NetworkDownInternal.
+func NetworkDownExtra(ctx context.Context, r sourceadapter.Runner, mainNet, suffix string) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s-%s", mainNet, suffix))
 }
 
 // NetworkUpInternal brings up an ordinary Docker bridge network with

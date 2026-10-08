@@ -23,11 +23,15 @@ func (a *countingReachAdapter) Capabilities() []sourceadapter.Capability { retur
 func (a *countingReachAdapter) Leases(_ context.Context) ([]sourceadapter.Lease, error) {
 	return nil, nil
 }
-func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
-func (a *countingReachAdapter) ResetLeases(_ context.Context) error             { return nil }
-func (a *countingReachAdapter) Restart(_ context.Context) error                 { return nil }
-func (a *countingReachAdapter) Stop(_ context.Context) error                    { return nil }
-func (a *countingReachAdapter) Start(_ context.Context) error                   { return nil }
+func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error      { return nil }
+func (a *countingReachAdapter) ResetLeases(_ context.Context) error                  { return nil }
+func (a *countingReachAdapter) Restart(_ context.Context) error                      { return nil }
+func (a *countingReachAdapter) Stop(_ context.Context) error                         { return nil }
+func (a *countingReachAdapter) Start(_ context.Context) error                        { return nil }
+func (a *countingReachAdapter) ReserveClientID(_ context.Context, _, _ string) error { return nil }
+func (a *countingReachAdapter) SetDNSOption(_ context.Context, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
 func (a *countingReachAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }

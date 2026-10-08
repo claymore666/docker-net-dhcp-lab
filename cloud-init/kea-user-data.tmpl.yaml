@@ -33,6 +33,10 @@ runcmd:
       "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
       "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases4.csv" },
       "valid-lifetime": 3600,
+      "client-classes": [
+        { "name": "b5", "test": "option[60].text == 'lab-class-b5'" },
+        { "name": "not-b5", "test": "not member('b5')" }
+      ],
       "hooks-libraries": [
         { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
       ],
@@ -40,7 +44,10 @@ runcmd:
         {
           "id": 1,
           "subnet": "__SEG_SUBNET__",
-          "pools": [ { "pool": "__POOL_START__ - __POOL_END__" } ],
+          "pools": [
+            { "pool": "__POOL_START__ - __POOL_END__", "client-class": "not-b5" },
+            { "pool": "__CLASS_POOL_START__ - __CLASS_POOL_END__", "client-class": "b5" }
+          ],
           "option-data": [ { "name": "routers", "data": "__SEG_GATEWAY__" } ],
           "reservations": <?include "/etc/kea/reservations.json"?>
         }

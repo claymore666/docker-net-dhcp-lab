@@ -15,8 +15,15 @@ import (
 // unicast MAC for A5b, distinct per cell x shape so parallel cells never
 // collide on the same segment (#3).
 func fixedMACFor(cell string, shape Shape) string {
+	return fixedMACForScenario(cell, shape, "a5b")
+}
+
+// fixedMACForScenario is fixedMACFor with the scenario tag spelled out,
+// so group B's reservation scenarios never share a MAC (and so a stale
+// lease) with A5b (#23).
+func fixedMACForScenario(cell string, shape Shape, tag string) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
+	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-" + tag))
 	sum := h.Sum32()
 	return fmt.Sprintf("02:42:%02x:%02x:%02x:%02x", byte(sum>>24), byte(sum>>16), byte(sum>>8), byte(sum))
 }

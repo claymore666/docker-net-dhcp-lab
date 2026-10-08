@@ -31,6 +31,14 @@ var PlainNames = map[string]string{
 	scenario.NameA14: "short lease renewal",
 	scenario.NameA15: "compose scale",
 	scenario.NameA16: "forced remove of a running container",
+	scenario.NameB1:  "reservation by MAC",
+	scenario.NameB2:  "reservation by client id",
+	scenario.NameB3:  "DNS registration",
+	scenario.NameB4:  "same MAC, same address",
+	scenario.NameB5:  "vendor class pool",
+	scenario.NameB6:  "option change on renewal",
+	scenario.NameB7:  "lease release on remove",
+	scenario.NameB8:  "three containers at once",
 }
 
 // Order is the row order the results page renders in: scenario.Catalog's

@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Capability is a source's declared ability. A declared capability is a
@@ -28,6 +29,18 @@ const (
 	// its stock lease time (issue #3, A14). A declared capability is a
 	// claim until measured, the same as every other Capability here.
 	CapShortLease Capability = "short-lease"
+	// CapReserveClientID declares ReserveClientID (group B, B2, #23).
+	CapReserveClientID Capability = "reserve-client-id"
+	// CapDNSRegistration declares that the source itself serves DNS
+	// from its leases, so a registered hostname can be queried back
+	// from it (B3, #23). Only dnsmasq does that out of the box; Kea and
+	// ISC would need a separate DNS server beside the stock install.
+	CapDNSRegistration Capability = "dns-registration"
+	// CapVendorClassPool declares that the cloud-init config carries a
+	// class pool served only to option 60 "lab-class-b5" (B5, #23).
+	CapVendorClassPool Capability = "vendor-class-pool"
+	// CapOptionChange declares SetDNSOption (B6, #23).
+	CapOptionChange Capability = "option-change"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -37,12 +50,15 @@ const (
 // field) -- empty when the row carries none. ipvlan slaves share the
 // parent NIC's MAC (docs/reference.md "DHCP identity"), so ClientID is
 // the only field that identifies one slave's lease from another's
-// (#3).
+// (#3). Expires is the lease's end as the source's own table states it,
+// zero when the source gives none (dnsmasq "0" = infinite) or the field
+// did not parse; B6 compares two reads of it (#23).
 type Lease struct {
 	MAC      string
 	Address  string
 	Hostname string
 	ClientID string
+	Expires  time.Time
 }
 
 // hexColon renders raw bytes as lowercase colon-hex, the shape every
@@ -63,8 +79,21 @@ func hexColon(b []byte) string {
 // runner it was built with; none of them ever touch the plugin.
 type Adapter interface {
 	Capabilities() []Capability
+	// Leases returns ACTIVE leases only: an entry the source marks
+	// released, free, expired-reclaimed or declined is dropped by each
+	// adapter's parser, so "the table no longer shows X" (B7, #23) means
+	// the same thing on all three sources.
 	Leases(ctx context.Context) ([]Lease, error)
 	ReserveMAC(ctx context.Context, mac, addr string) error
+	// ReserveClientID reserves addr for a DHCP option 61 value given as
+	// colon-hex (B2, #23). Idempotent: a second call for the same id
+	// replaces the first.
+	ReserveClientID(ctx context.Context, clientID, addr string) error
+	// SetDNSOption makes the source hand out addr as DHCP option 6 and
+	// restarts it; the returned restore func writes the captured running
+	// config back byte for byte (B6, #23). Call restores in reverse
+	// order of the calls that made them.
+	SetDNSOption(ctx context.Context, addr string) (restore func(ctx context.Context) error, err error)
 	Restart(ctx context.Context) error
 	Stop(ctx context.Context) error
 	Start(ctx context.Context) error
@@ -113,6 +142,18 @@ func validateMAC(mac string) (string, error) {
 		return "", fmt.Errorf("invalid MAC %q: %w", mac, err)
 	}
 	return hw.String(), nil
+}
+
+var clientIDRE = regexp.MustCompile(`^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2})*$`)
+
+// validateClientID is validateMAC's counterpart for option 61 values:
+// only colon-hex survives, lower-cased, so nothing else reaches a remote
+// shell or JSON string (B2, #23).
+func validateClientID(id string) (string, error) {
+	if !clientIDRE.MatchString(id) {
+		return "", fmt.Errorf("invalid client id %q: want colon-separated hex bytes", id)
+	}
+	return strings.ToLower(id), nil
 }
 
 func validateAddr(addr string) (string, error) {
@@ -202,4 +243,35 @@ func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile, service, l
 		return fmt.Errorf("%s: reset leases (stop %s, truncate %s, start %s): %w", label, service, leaseFile, service, err)
 	}
 	return nil
+}
+
+// setDNSOptionViaSubstitution is every adapter's SetDNSOption body (B6,
+// #23): the same capture, rewrite, restart and byte-exact restore as
+// shortenLeaseTimeViaSubstitution, for a pattern that must match once
+// and a config that must not already carry a DNS option.
+func setDNSOptionViaSubstitution(ctx context.Context, r Runner, path string, re *regexp.Regexp, repl, already string, restart func(context.Context) error, label string) (func(context.Context) error, error) {
+	orig, err := r.Run(ctx, "sudo cat "+path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: read %s before setting the DNS option: %w", label, path, err)
+	}
+	if strings.Contains(orig, already) {
+		return nil, fmt.Errorf("%s: %s already carries a DNS option (%q); refusing to add a second one", label, path, already)
+	}
+	changed := re.ReplaceAllString(orig, repl)
+	if changed == orig {
+		return nil, fmt.Errorf("%s: DNS-option anchor not found in the running config at %s; refusing to change it blindly", label, path)
+	}
+	if err := writeRemoteConfig(ctx, r, path, changed); err != nil {
+		return nil, fmt.Errorf("%s: write DNS option to %s: %w", label, path, err)
+	}
+	if err := restart(ctx); err != nil {
+		return nil, fmt.Errorf("%s: restart after setting the DNS option: %w", label, err)
+	}
+	restore := func(ctx context.Context) error {
+		if err := writeRemoteConfig(ctx, r, path, orig); err != nil {
+			return fmt.Errorf("%s: restore original config to %s: %w", label, path, err)
+		}
+		return restart(ctx)
+	}
+	return restore, nil
 }

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ISCDHCPAdapter reads dhcpd.leases directly -- the source's own on-disk
@@ -18,7 +19,7 @@ type ISCDHCPAdapter struct {
 }
 
 func (a *ISCDHCPAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange}
 }
 
 // iscLeaseFile is the on-disk lease table this adapter reads directly
@@ -40,6 +41,10 @@ var (
 	iscHostRE       = regexp.MustCompile(`client-hostname\s+"([^"]*)";`)
 	iscStateRE      = regexp.MustCompile(`binding state\s+(\w+);`)
 	iscUIDRE        = regexp.MustCompile(`(?s)uid\s+"(.*?)";`)
+	// iscEndsRE reads the lease end (dhcpd.leases(5): weekday, then
+	// YYYY/MM/DD HH:MM:SS in UTC); "ends never;" does not match and
+	// leaves Expires zero (B6, #23).
+	iscEndsRE = regexp.MustCompile(`\bends\s+\d\s+(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2});`)
 	// iscDefaultLeaseTimeRE matches dhcpd.conf's own default-lease-time
 	// setting (ShortenLeaseTime, #3, A14).
 	iscDefaultLeaseTimeRE = regexp.MustCompile(`default-lease-time\s+[0-9]+;`)
@@ -112,6 +117,11 @@ func parseISCLeases(raw string) ([]Lease, error) {
 		if m := iscHostRE.FindStringSubmatch(body); len(m) == 2 {
 			l.Hostname = m[1]
 		}
+		if m := iscEndsRE.FindStringSubmatch(body); len(m) == 2 {
+			if t, err := time.Parse("2006/01/02 15:04:05", m[1]); err == nil {
+				l.Expires = t.UTC()
+			}
+		}
 		if m := iscUIDRE.FindStringSubmatch(body); len(m) == 2 {
 			raw, err := decodeISCQuotedString(m[1])
 			if err != nil {
@@ -129,10 +139,22 @@ func parseISCLeases(raw string) ([]Lease, error) {
 	return leases, nil
 }
 
-// ReserveMAC appends a host block to the file the stock config is made
-// to include (issue #2), then restarts -- dhcpd has no reload signal
-// that re-reads new host declarations. hw/ip are guaranteed clean by
-// validateMAC/validateAddr before they ever reach this string.
+// iscReserve replaces any host block of the same name in the include
+// file and appends the new one, then restarts -- dhcpd has no reload
+// signal that re-reads new host declarations, and it refuses to start on
+// a duplicate host name, which a rerun would otherwise create (#23).
+// name, match and ip are validated by the callers.
+func (a *ISCDHCPAdapter) iscReserve(ctx context.Context, name, match, ip string) error {
+	block := fmt.Sprintf(`host %s { %s; fixed-address %s; }`, name, match, ip)
+	cmd := fmt.Sprintf(`sudo sed -i '/^host %s /d' /etc/dhcp/lab-reservations.conf && echo '%s' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && sudo systemctl restart isc-dhcp-server`, name, block)
+	if _, err := a.Runner.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("isc-dhcp: reserve %s -> %s: %w", name, ip, err)
+	}
+	return nil
+}
+
+// ReserveMAC reserves ip for the MAC (issue #2). hw/ip are guaranteed
+// clean by validateMAC/validateAddr before they ever reach the command.
 func (a *ISCDHCPAdapter) ReserveMAC(ctx context.Context, mac, addr string) error {
 	hw, err := validateMAC(mac)
 	if err != nil {
@@ -142,13 +164,22 @@ func (a *ISCDHCPAdapter) ReserveMAC(ctx context.Context, mac, addr string) error
 	if err != nil {
 		return err
 	}
-	name := strings.ReplaceAll(hw, ":", "")
-	block := fmt.Sprintf(`host lab-%s { hardware ethernet %s; fixed-address %s; }`, name, hw, ip)
-	cmd := fmt.Sprintf(`echo '%s' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && sudo systemctl restart isc-dhcp-server`, block)
-	if _, err := a.Runner.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("isc-dhcp: reserve %s -> %s: %w", hw, ip, err)
+	return a.iscReserve(ctx, "lab-"+strings.ReplaceAll(hw, ":", ""), "hardware ethernet "+hw, ip)
+}
+
+// ReserveClientID reserves ip for an option 61 value (B2, #23). dhcpd
+// matches option dhcp-client-identifier against the whole payload, type
+// byte included, which is the form its lease "uid" field records.
+func (a *ISCDHCPAdapter) ReserveClientID(ctx context.Context, clientID, addr string) error {
+	id, err := validateClientID(clientID)
+	if err != nil {
+		return err
 	}
-	return nil
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return err
+	}
+	return a.iscReserve(ctx, "lab-cid-"+strings.ReplaceAll(id, ":", ""), "option dhcp-client-identifier "+id, ip)
 }
 
 func (a *ISCDHCPAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
@@ -191,5 +222,22 @@ func (a *ISCDHCPAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (fun
 	repl := fmt.Sprintf(`default-lease-time %d;`, seconds)
 	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
 		iscDefaultLeaseTimeRE, repl,
+		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
+}
+
+// iscRoutersRE anchors SetDNSOption on the routers line the cloud-init
+// template always writes inside the subnet block.
+var iscRoutersRE = regexp.MustCompile(`(?m)^(\s*)(option routers [^;]*;)`)
+
+// SetDNSOption adds an option domain-name-servers line after the routers
+// line of the running config and restarts (B6, #23).
+func (a *ISCDHCPAdapter) SetDNSOption(ctx context.Context, addr string) (func(context.Context) error, error) {
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+	repl := fmt.Sprintf("${1}${2}\n${1}option domain-name-servers %s;", ip)
+	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
+		iscRoutersRE, repl, "option domain-name-servers",
 		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 }

@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // dnsmasqRangeRE matches the dhcp-range config line's own three fields
 // (start, end, lease-time), capturing everything up to the lease-time
 // field so ShortenLeaseTime can replace only that field (#3, A14).
-var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=[^,]+,[^,]+,)[^,]+$`)
+//
+// The optional tag:... field is what B5's class ranges carry
+// (dhcp-range=tag:b5,start,end,12h, #23); without it the main range
+// would no longer match once the config is tagged and A14 would break.
+var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=(?:tag:[^,\n]+,)?[^,\n]+,[^,\n]+,)[^,\n]+$`)
 
 // DnsmasqAdapter reads dnsmasq's own lease file directly. ReserveMAC's
 // command construction is unit-tested against a fake runner
@@ -22,7 +28,7 @@ type DnsmasqAdapter struct {
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange}
 }
 
 // dnsmasqLeaseFile is the on-disk lease table this adapter reads
@@ -60,6 +66,11 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 			return nil, fmt.Errorf("dnsmasq: lease line %d: invalid MAC %q: %w", i+1, mac, err)
 		}
 		l := Lease{MAC: mac, Address: ip, Hostname: host}
+		// Field 1 is the expiry as a unix epoch; 0 means infinite
+		// (dnsmasq(8)) and leaves Expires zero (B6, #23).
+		if epoch, err := strconv.ParseInt(fields[0], 10, 64); err == nil && epoch > 0 {
+			l.Expires = time.Unix(epoch, 0).UTC()
+		}
 		// Field 5, the client-id (option 61), is dnsmasq's own
 		// colon-hex encoding, or "*" when the client sent none
 		// (#3).
@@ -71,11 +82,20 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	return leases, nil
 }
 
-// ReserveMAC appends a dhcp-host line to the lab's own reservations file
-// under dnsmasq's conf-dir (issue #2), then restarts -- dnsmasq's SIGHUP
-// reloads the lease file and a handful of directives but not a new
-// dhcp-host line. hw/ip are guaranteed clean by validateMAC/validateAddr
-// before they ever reach this string.
+// dnsmasqReserve replaces any dhcp-host line for the same key in the
+// lab's reservations file under dnsmasq's conf-dir and appends the new
+// one, then restarts -- dnsmasq's SIGHUP reloads the lease file and a
+// handful of directives but not a new dhcp-host line. key and ip are
+// validated by the callers (issue #2, #23).
+func (a *DnsmasqAdapter) dnsmasqReserve(ctx context.Context, key, ip string) error {
+	cmd := fmt.Sprintf(`sudo sed -i '/^dhcp-host=%s,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart dnsmasq`, key, key, ip)
+	if _, err := a.Runner.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("dnsmasq: reserve %s -> %s: %w", key, ip, err)
+	}
+	return nil
+}
+
+// ReserveMAC reserves ip for the MAC (issue #2).
 func (a *DnsmasqAdapter) ReserveMAC(ctx context.Context, mac, addr string) error {
 	hw, err := validateMAC(mac)
 	if err != nil {
@@ -85,11 +105,22 @@ func (a *DnsmasqAdapter) ReserveMAC(ctx context.Context, mac, addr string) error
 	if err != nil {
 		return err
 	}
-	cmd := fmt.Sprintf(`echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart dnsmasq`, hw, ip)
-	if _, err := a.Runner.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("dnsmasq: reserve %s -> %s: %w", hw, ip, err)
+	return a.dnsmasqReserve(ctx, hw, ip)
+}
+
+// ReserveClientID reserves ip for an option 61 value with dhcp-host=
+// id:<hex> (B2, #23); dnsmasq compares it with the payload as received,
+// type byte included, the form its lease file prints.
+func (a *DnsmasqAdapter) ReserveClientID(ctx context.Context, clientID, addr string) error {
+	id, err := validateClientID(clientID)
+	if err != nil {
+		return err
 	}
-	return nil
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return err
+	}
+	return a.dnsmasqReserve(ctx, "id:"+id, ip)
 }
 
 func (a *DnsmasqAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
@@ -127,5 +158,23 @@ func (a *DnsmasqAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (fun
 	}
 	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/dnsmasq.conf",
 		dnsmasqRangeRE, fmt.Sprintf("${1}%d", seconds),
+		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
+}
+
+// dnsmasqRouterOptionRE anchors SetDNSOption on the router option line
+// the cloud-init template always writes.
+var dnsmasqRouterOptionRE = regexp.MustCompile(`(?m)^(dhcp-option=3,[^\n]*)$`)
+
+// SetDNSOption adds dhcp-option=6 after the router option of the
+// running config and restarts (B6, #23). Without it dnsmasq advertises
+// its own address as the DNS server.
+func (a *DnsmasqAdapter) SetDNSOption(ctx context.Context, addr string) (func(context.Context) error, error) {
+	ip, err := validateAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+	repl := fmt.Sprintf("${1}\ndhcp-option=6,%s", ip)
+	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/dnsmasq.conf",
+		dnsmasqRouterOptionRE, repl, "dhcp-option=6,",
 		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
 }
