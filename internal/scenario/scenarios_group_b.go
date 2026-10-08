@@ -113,9 +113,6 @@ func b2ClientID(shape Shape) string { return "lab-b2-" + string(shape) }
 // b2WireClientID is b2ClientID as the source's table spells it.
 func b2WireClientID(id string) string { return hexColonID(append([]byte{0}, id...)) }
 
-// runB2 -- reservation by client id: the network sets client_id, the
-// source reserves an address for that option 61 value, the container
-// must get it.
 // bIPAMNA is the N/A for the scenarios that need a second, option
 // carrying network. The lab cannot create it in the IPAM shapes: the
 // plugin's docs/reference.md says "Two such networks otherwise derive
@@ -129,6 +126,9 @@ func bIPAMNA(name string, e Env) (Verdict, bool) {
 	return na(name, e.Cell, e.Shape, "plugin docs/reference.md: \"Two such networks otherwise derive the same pool identity, and the second `docker network create` is refused\"; the lab cannot create the option-carrying network in this shape", e.GitSHA), true
 }
 
+// runB2 -- reservation by client id: the network sets client_id, the
+// source reserves an address for that option 61 value, the container
+// must get it.
 func runB2(ctx context.Context, e Env) Verdict {
 	if v, ok := bIPAMNA(NameB2, e); ok {
 		return v
