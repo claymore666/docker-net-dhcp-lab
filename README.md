@@ -246,9 +246,12 @@ name, VM name, bridge, management address, observer container, observer
 veth or directory, or if any of those VMs or containers already exists on
 the host; `--check` prints that table and stops there. Before each start it
 wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
-minutes for it, and otherwise marks the cell `skipped-disk`. INT or TERM
-stops every running cell and tears it down with `down-cell.sh`. Starting
-two `run-cells.sh` at once on overlapping cells is not guarded. Render the
+minutes for it, and otherwise marks the cell `skipped-disk`; it also looks
+again for that cell's VMs and observer and marks the cell `skipped-exists`
+if they have appeared meanwhile. INT or TERM
+stops every running cell and tears it down with `down-cell.sh`. Two
+`run-cells.sh` started within the same minutes on overlapping cells are only
+caught once the first has defined its VMs, so do not do that. Render the
 results the same way as for one cell:
 `labctl matrix --root <root>/evidence <root>/evidence/<cell>...`.
 

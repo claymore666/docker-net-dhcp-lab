@@ -416,6 +416,69 @@ fi
 wait "$wpid" || true
 [ "$(cat "$e/root/logs/a.rc")" = 0 ] || { echo "run-cells-test: FAIL -- case 14: final rc file is not 0" >&2; fail=1; }
 
+# Case 15: a queued cell whose domain appears on the host after the
+# up-front check is not started; the table names it and the wrapper exits 1.
+e=$(new_env)
+meminfo "$e" 60
+echo "2 0" >"$e/state/spec.a"
+(
+	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" -j 1 a b >"$e/out" 2>&1
+) &
+wpid=$!
+n=0
+until grep -q '^start a ' "$e/state/calls.log"; do
+	n=$((n + 1))
+	[ "$n" -gt 100 ] && break
+	sleep 0.1
+done
+echo "lab-b-dockerhost" >"$e/state/existing"
+wrc=0
+wait "$wpid" || wrc=$?
+[ "$wrc" -eq 1 ] || { echo "run-cells-test: FAIL -- case 15: exit $wrc, wanted 1" >&2; fail=1; }
+if grep -q '^start b ' "$e/state/calls.log"; then
+	echo "run-cells-test: FAIL -- case 15: b was started over a domain that appeared while it waited" >&2
+	fail=1
+fi
+has "case 15 table" "$e" "^b +skipped-exists "
+has "case 15 message" "$e" "domain lab-b-dockerhost already exists"
+[ "$(cat "$e/root/logs/b.rc")" = skipped-exists ] || { echo "run-cells-test: FAIL -- case 15: b.rc is not skipped-exists" >&2; fail=1; }
+
+# Case 16: the real run-cell.sh has no signal trap. A stand-in without one,
+# whose child would outlive it, must still lose that child on a TERM to the
+# wrapper (the group kill; without setsid only the stand-in itself dies).
+e=$(new_env)
+meminfo "$e" 60
+cat >"$e/repo/scripts/run-cell.sh" <<'STUB'
+#!/bin/bash
+sleep 30 &
+echo $! >"$LAB_TEST_DIR/child.$1"
+wait
+STUB
+chmod +x "$e/repo/scripts/run-cell.sh"
+(
+	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" a >"$e/out" 2>&1
+) &
+wpid=$!
+n=0
+until [ -s "$e/state/child.a" ]; do
+	n=$((n + 1))
+	[ "$n" -gt 100 ] && break
+	sleep 0.1
+done
+child=$(cat "$e/state/child.a" 2>/dev/null || true)
+kill -TERM "$wpid"
+wrc=0
+wait "$wpid" || wrc=$?
+sleep 0.3
+if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
+	echo "run-cells-test: FAIL -- case 16: the cell's child $child outlived the TERM" >&2
+	kill -KILL "$child" 2>/dev/null || true
+	fail=1
+fi
+[ -n "$child" ] || { echo "run-cells-test: FAIL -- case 16: the stand-in never started" >&2; fail=1; }
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

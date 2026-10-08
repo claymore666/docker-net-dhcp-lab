@@ -94,7 +94,6 @@ T_BRIDGE=()
 T_DOCKER=()
 T_SOURCE=()
 T_VETH=()
-DOMAINS=()
 for i in "${!CELLS[@]}"; do
 	cell=${CELLS[$i]}
 	if ! json=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$cell"); then
@@ -117,12 +116,10 @@ for i in "${!CELLS[@]}"; do
 
 	claim "cell name" "$cell" "$cell"
 	claim "domain" "lab-${cell}-dockerhost" "$cell"
-	DOMAINS+=("lab-${cell}-dockerhost")
 	claim "bridge" "$bridge" "$cell"
 	claim "management address" "${T_DOCKER[i]}" "$cell"
 	if [ -n "${T_SOURCE[i]}" ]; then
 		claim "domain" "lab-${cell}-source" "$cell"
-		DOMAINS+=("lab-${cell}-source")
 		claim "management address" "${T_SOURCE[i]}" "$cell"
 	fi
 	claim "observer container" "lab-observer-${cell}" "$cell"
@@ -132,14 +129,25 @@ for i in "${!CELLS[@]}"; do
 done
 
 # Whatever is already on the host belongs to a run that is not ours.
-for d in "${DOMAINS[@]}"; do
-	if sudo -n virsh dominfo "$d" >/dev/null 2>&1; then
-		refusals+=("domain $d already exists on this host (run down-cell.sh for that cell first)")
-	fi
-done
-for cell in "${CELLS[@]}"; do
+# Asked again right before each start: a queued cell can wait a long
+# time, and another run may define its domain meanwhile.
+host_conflict() {
+	local cell=$1 d
+	for d in "lab-${cell}-dockerhost" "lab-${cell}-source"; do
+		if sudo -n virsh dominfo "$d" >/dev/null 2>&1; then
+			echo "domain $d already exists on this host (run down-cell.sh for that cell first)"
+			return 0
+		fi
+	done
 	if sudo -n docker inspect "lab-observer-${cell}" >/dev/null 2>&1; then
-		refusals+=("observer container lab-observer-${cell} already exists on this host (run down-cell.sh for that cell first)")
+		echo "observer container lab-observer-${cell} already exists on this host (run down-cell.sh for that cell first)"
+		return 0
+	fi
+	return 1
+}
+for cell in "${CELLS[@]}"; do
+	if msg=$(host_conflict "$cell"); then
+		refusals+=("$msg")
 	fi
 done
 
@@ -220,6 +228,13 @@ start_cell() {
 		END[$cell]=$EPOCHSECONDS
 		echo "skipped-disk" >"$ROOT/logs/$cell.rc"
 		echo "run-cells: $cell not started, under $MIN_FREE_GIB GiB free on $ROOT for ${DISK_WAIT}s" >&2
+		return 0
+	fi
+	if msg=$(host_conflict "$cell"); then
+		RC[$cell]=skipped-exists
+		END[$cell]=$EPOCHSECONDS
+		echo "skipped-exists" >"$ROOT/logs/$cell.rc"
+		echo "run-cells: $cell not started: $msg" >&2
 		return 0
 	fi
 	# Own session: a TERM to the group reaches run-cell.sh and everything
