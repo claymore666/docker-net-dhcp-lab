@@ -86,6 +86,17 @@ func runContainerFixedMAC(ctx context.Context, r sourceadapter.Runner, shape Sha
 	return inspectContainer(ctx, r, shape, name)
 }
 
+// runContainerWith is runContainer with extra docker-run flags, for group
+// B (#23): --mac-address, --hostname. extra is built by the caller from
+// validated values only.
+func runContainerWith(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name, extra string) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	if _, err = r.Run(ctx, fmt.Sprintf("sudo docker run -d --name %s --network %s %s alpine:3.20 sleep 600", name, net, extra)); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
 func inspectField(ctx context.Context, r sourceadapter.Runner, name, field string) (string, error) {
 	out, err := r.Run(ctx, fmt.Sprintf(
 		`sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.%s}}{{end}}' %s`, field, name))

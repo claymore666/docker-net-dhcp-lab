@@ -57,6 +57,21 @@ Group A runs today:
 | A15 | compose scale | `docker compose up --scale` |
 | A16 | forced remove | `docker rm -f` on a running container; the endpoint goes, the lease stays (the plugin default) |
 
+Group B runs today (IPv4; a scenario whose source lacks the feature reports N/A, not a pass):
+
+| ID | Scenario | What it does |
+|---|---|---|
+| B1 | reservation by MAC | the source reserves an address for a fixed MAC; the container must get it (not on ipvlan, which shares the parent's MAC) |
+| B2 | reservation by client id | the source reserves an address for the `client_id` option; the container must get it |
+| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq only) |
+| B4 | same MAC, same address | a container is removed and a new one with the same MAC must get the same address from the same single lease |
+| B5 | vendor class pool | with `vendor_class` the source serves the address from the class pool |
+| B6 | option change on renewal | the source changes its DNS option; after the lease renews, the container's `resolv.conf` carries the new server |
+| B7 | lease release on remove | with `release_lease=on_remove` the source's table stops showing the lease after the container is removed |
+| B8 | three at once | three live containers hold three distinct leases (ipvlan: one shared MAC, three client ids) |
+
+B2, B3, B5, B6 and B7 run on their own network next to the cell's, removed afterwards. A source VM built before B5 needs a rebuild to get the class pool.
+
 ## Reading a result
 
 Each scenario on each shape and source gets one verdict:

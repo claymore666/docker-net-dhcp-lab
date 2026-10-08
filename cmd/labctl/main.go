@@ -455,6 +455,9 @@ func cmdRun(args []string) int {
 		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
 		GitSHA:            gitSHA,
 		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
+		SegSubnet:         cell.Segment.Subnet,
+		PoolStart:         cell.Source.PoolStart,
+		PoolEnd:           cell.Source.PoolEnd,
 		HostInfo:          hi,
 	}
 
