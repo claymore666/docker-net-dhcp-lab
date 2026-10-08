@@ -116,7 +116,23 @@ func b2WireClientID(id string) string { return hexColonID(append([]byte{0}, id..
 // runB2 -- reservation by client id: the network sets client_id, the
 // source reserves an address for that option 61 value, the container
 // must get it.
+// bIPAMNA is the N/A for the scenarios that need a second, option
+// carrying network. The lab cannot create it in the IPAM shapes: the
+// plugin's docs/reference.md says "Two such networks otherwise derive
+// the same pool identity, and the second `docker network create` is
+// refused", and the lab will not give the second network its own
+// subnet or parent (measured on the kea cell).
+func bIPAMNA(name string, e Env) (Verdict, bool) {
+	if e.Shape != ShapeBridgeIPAM && e.Shape != ShapeMacvlanIPAM {
+		return Verdict{}, false
+	}
+	return na(name, e.Cell, e.Shape, "plugin docs/reference.md: \"Two such networks otherwise derive the same pool identity, and the second `docker network create` is refused\"; the lab cannot create the option-carrying network in this shape", e.GitSHA), true
+}
+
 func runB2(ctx context.Context, e Env) Verdict {
+	if v, ok := bIPAMNA(NameB2, e); ok {
+		return v
+	}
 	reserved, err := reservationAddr(e, NameB2)
 	if err != nil {
 		return fail(NameB2, e.Cell, e.Shape, fmt.Sprintf("no usable reservation address: %v", err), nil, e.GitSHA)
@@ -285,6 +301,9 @@ const vendorClass = "lab-class-b5"
 // runB5 -- vendor class: with vendor_class set, the source serves the
 // container from the class pool, outside the main pool.
 func runB5(ctx context.Context, e Env) Verdict {
+	if v, ok := bIPAMNA(NameB5, e); ok {
+		return v
+	}
 	first, last, err := classPool(e)
 	if err != nil {
 		return fail(NameB5, e.Cell, e.Shape, fmt.Sprintf("no usable class pool: %v", err), nil, e.GitSHA)
@@ -339,6 +358,9 @@ func runB6(ctx context.Context, e Env) Verdict {
 }
 
 func runB6Tuned(ctx context.Context, e Env, leaseSeconds int, wait, poll time.Duration) Verdict {
+	if v, ok := bIPAMNA(NameB6, e); ok {
+		return v
+	}
 	newDNS, err := groupBAddr(e, dnsOptionHost)
 	if err != nil {
 		return fail(NameB6, e.Cell, e.Shape, fmt.Sprintf("no usable DNS address: %v", err), nil, e.GitSHA)
@@ -441,6 +463,9 @@ func runB7(ctx context.Context, e Env) Verdict {
 }
 
 func runB7Tuned(ctx context.Context, e Env, wait, poll time.Duration) Verdict {
+	if v, ok := bIPAMNA(NameB7, e); ok {
+		return v
+	}
 	net, down, err := bNetwork(ctx, e, 7, []string{"release_lease=on_remove"})
 	defer down()
 	if err != nil {

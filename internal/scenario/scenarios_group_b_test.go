@@ -521,8 +521,8 @@ func TestRunB2RemovesTheNetworkWhenTheCreateFails(t *testing.T) {
 	}
 }
 
-func TestRunB2RunsOnEveryShape(t *testing.T) {
-	for _, shape := range Shapes {
+func TestRunB2RunsOnEveryShapeButTheIPAMOnes(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
 		h, src, e, reserved, wire := b2Fixture(t, shape)
 		h.addrFn = func(string, string) string { return reserved }
 		src.fn = staticLeases(sourceadapter.Lease{Address: reserved, ClientID: wire})
@@ -1110,6 +1110,42 @@ func TestReadmeGroupBTableMatchesTheCatalog(t *testing.T) {
 	for id := range inReadme {
 		if !inCatalog[id] {
 			t.Errorf("%s is in the README table but not in the catalog", id)
+		}
+	}
+}
+
+// ---- IPAM shapes ----
+
+// The lab cannot create the second, option-carrying network in the two
+// IPAM shapes (plugin docs/reference.md refuses it), so B2, B5, B6 and B7
+// are N/A there, before anything touches the host. B8 still runs.
+func TestGroupBSecondNetworkScenariosAreNotApplicableOnIPAMShapes(t *testing.T) {
+	runs := map[string]func(context.Context, Env) Verdict{
+		NameB2: runB2, NameB5: runB5, NameB6: runB6, NameB7: runB7,
+	}
+	for _, shape := range []Shape{ShapeBridgeIPAM, ShapeMacvlanIPAM} {
+		for name, run := range runs {
+			t.Run(string(shape)+"/"+name, func(t *testing.T) {
+				h := newBRunner()
+				src := &bAdapter{fakeAdapter: &fakeAdapter{}}
+				e := bEnv(t, h, src, shape)
+				v := run(context.Background(), e)
+				needResult(t, v, NA)
+				if !strings.Contains(v.Reason, "derive the same pool identity") {
+					t.Errorf("reason does not quote the plugin rule: %q", v.Reason)
+				}
+				if len(h.cmds) != 0 {
+					t.Errorf("N/A touched the host: %v", h.cmds)
+				}
+			})
+		}
+	}
+}
+
+func TestGroupBSecondNetworkScenariosStillRunOnTheOtherShapes(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
+		if _, ok := bIPAMNA(NameB2, Env{Shape: shape}); ok {
+			t.Errorf("%s must not be N/A by the IPAM rule", shape)
 		}
 	}
 }
