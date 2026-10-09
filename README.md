@@ -140,7 +140,7 @@ Group B runs today (IPv4; a scenario whose source lacks the feature reports N/A,
 |---|---|---|
 | B1 | reservation by MAC | the source reserves an address for a fixed MAC; the container must get it (not on ipvlan, which shares the parent's MAC) |
 | B2 | reservation by client id | the source reserves an address for the `client_id` option; the container must get it |
-| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq and Pi-hole) |
+| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq; Pi-hole expected, not yet confirmed on the host) |
 | B4 | same MAC, same address | a container is removed and a new one with the same MAC must get the same address from the same single lease |
 | B5 | vendor class pool | with `vendor_class` the source serves the address from the class pool |
 | B6 | option change on renewal | the source changes its DNS option; after the lease renews, the container's `resolv.conf` carries the new server |
@@ -193,8 +193,8 @@ Group F runs today (the plugin's client options, judged by the bytes the contain
 | F1 | user class pool | with `user_class` the container sends a short label naming its kind of client (DHCP option 77); the source serves that label from its own address range, outside the main one |
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
 | F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
-| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq and Pi-hole grant it, Kea and ISC answer as usual and the normal four messages follow |
-| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source grants it, so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
+| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Pi-hole's embedded dnsmasq is expected to (the host run has not confirmed it yet), Kea and ISC answer as usual and the normal four messages follow |
+| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source that serves DHCPv6 grants it (not udhcpd or Pi-hole, whose cells are DHCPv4 only), so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
 | F5 | temporary address | with `ipv6_temporary` the client also asks for a temporary address (IA_TA); ISC and dnsmasq grant one, which must be on the link beside the stable address, in the source's table and on `/Plugin.Health`, never in docker inspect. Kea grants none, so there the container must run as without the option |
 | F6 | prefix delegation | N/A on every source until the sources delegate prefixes (#23 group D part 2) |
 | F7 | NAT64 prefix | N/A on every source until the router advertisements carry one (#23 group D part 2) |
