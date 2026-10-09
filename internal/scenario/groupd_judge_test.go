@@ -62,18 +62,22 @@ func TestJudgeD1(t *testing.T) {
 		want Result
 		sub  string
 	}{
-		"good, forever at start":       {func(*d1Obs) {}, PASS, "default route via fe80::1"},
-		"forever once settled":         {func(o *d1Obs) { o.Settled.Addrs[1].Valid = forever }, FAIL, "-1 is forever"},
-		"settled above the Reply":      {func(o *d1Obs) { o.Settled.Addrs[1].Valid = 7300 }, FAIL, "stated 7200/3600"},
-		"settled lifetime 0":           {func(o *d1Obs) { o.Settled.Addrs[1].Pref = 0 }, FAIL, "stated 7200/3600"},
-		"settled below the count-down": {func(o *d1Obs) { o.Settled.Addrs[1].Valid = 7000 }, FAIL, "stated 7200/3600"},
-		"start above the Reply":        {func(o *d1Obs) { o.Start.Addrs[1].Valid = 9000 }, FAIL, "at start"},
-		"not a /128":                   {func(o *d1Obs) { o.Start.Addrs[1].Bits = 64 }, FAIL, "as /64"},
-		"missing at start":             {func(o *d1Obs) { o.Start.Addrs = o.Start.Addrs[:1] }, FAIL, "right after docker run"},
-		"gone once settled":            {func(o *d1Obs) { o.Settled.Addrs = o.Settled.Addrs[:1] }, FAIL, "gone from the link"},
+		"good, forever at start":          {func(*d1Obs) {}, PASS, "default route via fe80::1"},
+		"forever once settled":            {func(o *d1Obs) { o.Settled.Addrs[1].Valid = forever }, FAIL, "-1 is forever"},
+		"settled above the Reply":         {func(o *d1Obs) { o.Settled.Addrs[1].Valid = 7300 }, FAIL, "stated 7200/3600"},
+		"settled lifetime 0":              {func(o *d1Obs) { o.Settled.Addrs[1].Pref = 0 }, FAIL, "stated 7200/3600"},
+		"settled below the count-down":    {func(o *d1Obs) { o.Settled.Addrs[1].Valid = 7000 }, FAIL, "stated 7200/3600"},
+		"start above the Reply":           {func(o *d1Obs) { o.Start.Addrs[1].Valid = 9000 }, FAIL, "at start"},
+		"start preferred above the Reply": {func(o *d1Obs) { o.Start.Addrs[1].Pref = 5000 }, FAIL, "at start"},
+		"not a /128":                      {func(o *d1Obs) { o.Start.Addrs[1].Bits = 64 }, FAIL, "as /64"},
+		"missing at start":                {func(o *d1Obs) { o.Start.Addrs = o.Start.Addrs[:1] }, FAIL, "right after docker run"},
+		"gone once settled":               {func(o *d1Obs) { o.Settled.Addrs = o.Settled.Addrs[:1] }, FAIL, "gone from the link"},
 		"leftover address": {func(o *d1Obs) {
 			o.Settled.Addrs = append(o.Settled.Addrs, addr6{Addr: netip.MustParseAddr("fd42:200:0:100::99"), Bits: 128, Scope: "global", Valid: 10, Pref: 10})
 		}, FAIL, "fd42:200:0:100::99"},
+		"leftover only at start": {func(o *d1Obs) {
+			o.Start.Addrs = append(o.Start.Addrs, addr6{Addr: netip.MustParseAddr("fd42:200:0:100::98"), Bits: 128, Scope: "global", Valid: 10, Pref: 10})
+		}, FAIL, "fd42:200:0:100::98"},
 		"inspect differs from the link": {func(o *d1Obs) { o.Inspect = "fd42:200:0:100::151" }, FAIL, "docker inspect"},
 		"inspect empty":                 {func(o *d1Obs) { o.Inspect = "" }, FAIL, "docker inspect"},
 		"no lease in the table":         {func(o *d1Obs) { o.Leases = nil }, FAIL, "holds no IA_NA"},

@@ -26,6 +26,8 @@ type hostRunner struct {
 	extra   map[string]string
 	written string
 	calls   []string
+	// lease6Err makes the kea v6 lease read fail.
+	lease6Err bool
 }
 
 var cfg6Probe = regexp.MustCompile(`printf 'cfg6:([^:']+):'`)
@@ -40,6 +42,8 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 		return "", nil
 	case strings.HasPrefix(cmd, "sudo cat "+dnsmasqLeaseFile), strings.HasPrefix(cmd, "sudo cat /var/lib/dhcp/"):
 		return "", nil
+	case cmd == keaLease6Cmd && h.lease6Err:
+		return "", errors.New("kea-dhcp6 control socket refused")
 	case cmd == keaLeaseCmd || cmd == keaLease6Cmd:
 		return `[{"result":3,"text":"0 leases found"}]`, nil
 	case strings.HasPrefix(cmd, "sudo cat ") && h.extra[strings.TrimPrefix(cmd, "sudo cat ")] != "":
@@ -141,6 +145,29 @@ func TestReadyTakesTheBaselineThenHoldsTheSourceToIt(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Ready = %v, want an error naming %q", c.name, err, c.want)
 		}
+	}
+}
+
+// A source whose DHCPv6 table cannot be read fails Ready, so a v6 row
+// never judges an empty table as "no lease" (#23 group D).
+func TestReadyFailsWhenTheV6LeaseTableIsUnreadable(t *testing.T) {
+	h := healthyHost()
+	a := &KeaAdapter{Runner: h}
+	if err := a.Ready(context.Background()); err != nil {
+		t.Fatalf("first Ready on a healthy source: %v", err)
+	}
+	h.lease6Err = true
+	if err := a.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "v6 lease table not readable") {
+		t.Fatalf("Ready = %v, want the v6 lease table error", err)
+	}
+}
+
+// The baseline holds permanent v6 addresses only: an RA-formed address
+// on the source would move it between two readiness checks (#23 group D).
+func TestStateCmdReadsOnlyPermanentV6Addresses(t *testing.T) {
+	cmd := stateCmd(sourceUnits{cfgPath: "/etc/x"})
+	if !strings.Contains(cmd, "ip -6 -o addr show dev "+segmentNIC+" scope global permanent |") {
+		t.Fatalf("stateCmd reads v6 addresses without the permanent filter: %s", cmd)
 	}
 }
 
