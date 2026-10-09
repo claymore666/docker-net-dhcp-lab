@@ -12,6 +12,7 @@ set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 . "$REPO_ROOT/scripts/hygiene-patterns.sh"
+. "$REPO_ROOT/scripts/config-diff-lib.sh"
 
 BUNDLE_DIR=${1:?usage: pack.sh <bundle-dir> <out.tar.gz> <denylist-file>}
 OUT=${2:?usage: pack.sh <bundle-dir> <out.tar.gz> <denylist-file>}
@@ -100,8 +101,25 @@ while IFS= read -r -d '' vf; do
 	done <"$vf"
 	mv "$tmp" "$vf"
 done < <(find "$STAGED_BUNDLE" -maxdepth 1 -name '*.verdict' -print0)
+# A config diff is scanned in its effective form (issues #32, #46): the
+# stock package's commented example addresses are not the lab's evidence,
+# but a disallowed address on the live side is refused even in a comment.
+# An old stored diff is rebuilt and rendered the same way, in the staged
+# copy only; one that does not cover both whole files is refused.
+declare -A config_diff_refused=()
 while IFS= read -r -d '' f; do
 	rel=${f#"$STAGED_BUNDLE"/}
+	if err=$(config_diff_rerender_file "$f" "$f.pack-rendered" 2>&1); then
+		mv "$f.pack-rendered" "$f"
+	else
+		echo "pack: REFUSED -- $rel: $err" >&2
+		config_diff_refused["$f"]=1
+		fail=1
+	fi
+done < <(find "$STAGED_BUNDLE" -type f -name '*-config-diff-*.txt' -print0)
+while IFS= read -r -d '' f; do
+	rel=${f#"$STAGED_BUNDLE"/}
+	[ -z "${config_diff_refused[$f]:-}" ] || continue
 	# Binary evidence (a capture) is never text-scanned; that is out of
 	# scope here, same as hygiene-check.sh only ever scanning tracked text.
 	case "$f" in
