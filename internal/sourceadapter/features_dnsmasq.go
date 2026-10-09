@@ -15,11 +15,16 @@ var (
 
 // EnableFeature rewrites the running /etc/dnsmasq.conf (#20). Option 108
 // goes in as hex bytes: dnsmasq reads a bare number for an option it has
-// no type for as one or two bytes, not the four RFC 8925 wants.
+// no type for as one or two bytes, not the four RFC 8925 wants. The v6
+// features need no edit: dnsmasq 2.91 honours option 14 and grants IA_TA
+// from its v6 range as shipped (MEASURED 2026-10-09, #23).
 func (a *DnsmasqAdapter) EnableFeature(ctx context.Context, f Feature, p FeatureParams) (func(context.Context) error, error) {
 	v, err := validateFeature(f, p)
 	if err != nil {
 		return nil, err
+	}
+	if f == FeatureRapidCommit6 || f == FeatureTemporary6 {
+		return func(context.Context) error { return nil }, nil
 	}
 	var edits []configEdit
 	var already string

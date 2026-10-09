@@ -25,6 +25,19 @@ pool_end=$(jq -r '.cell.source.pool_end' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.source.vcpus' <<<"$RESOLVED")
 mem=$(jq -r '.cell.source.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.source.disk_gib' <<<"$RESOLVED")
+# The IPv6 side (#23 group D): every source cell serves v6, and the
+# adapters' Ready reads the v6 configs, so a cell without it stops here.
+seg_subnet6=$(jq -r '.cell.segment.subnet6 // empty' <<<"$RESOLVED")
+seg_addr6=$(jq -r '.cell.source.seg_address6 // empty' <<<"$RESOLVED")
+pool6_start=$(jq -r '.cell.source.pool6_start // empty' <<<"$RESOLVED")
+pool6_end=$(jq -r '.cell.source.pool6_end // empty' <<<"$RESOLVED")
+temp6_pool=$(jq -r '.cell.source.temp6_pool // empty' <<<"$RESOLVED")
+for v in seg_subnet6 seg_addr6 pool6_start pool6_end temp6_pool; do
+	if [ -z "${!v}" ]; then
+		echo "up-source: cell $CELL has no $v in lab.yaml" >&2
+		exit 1
+	fi
+done
 domain="lab-${CELL}-source"
 
 # Same deterministic-MAC scheme as up-cell.sh, own domain name so the two
@@ -83,10 +96,12 @@ sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__SEG_GATEWAY__#$seg_addr_ip#g" \
 	-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
 	-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
+	-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
+	-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
 	"$tmpl" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
-	-e "s#__SEG_ADDR__#$seg_addr#" \
+	-e "s#__SEG_ADDR__#$seg_addr#" -e "s#__SEG_ADDR6__#$seg_addr6#" \
 	"$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$seed_dir/network-config"
 echo "instance-id: $domain" >"$seed_dir/meta-data"
 echo "local-hostname: lab-${source_type}-source" >>"$seed_dir/meta-data"

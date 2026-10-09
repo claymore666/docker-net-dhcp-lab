@@ -326,7 +326,7 @@ func TestClassPoolBandMatchesUpSource(t *testing.T) {
 func TestNetworkUpExtraBuildsItsOwnNetworkWithOptions(t *testing.T) {
 	for _, shape := range Shapes {
 		r := &fakeShapeRunner{}
-		net, err := NetworkUpExtra(context.Background(), r, "net1", shape, "b2", []string{"client_id=lab-b2-x"})
+		net, err := NetworkUpExtra(context.Background(), r, "net1", shape, "b2", []string{"client_id=lab-b2-x", "ipv6_mode=dhcp"})
 		if err != nil {
 			t.Fatalf("%s: %v", shape, err)
 		}
@@ -337,7 +337,7 @@ func TestNetworkUpExtraBuildsItsOwnNetworkWithOptions(t *testing.T) {
 		if !strings.Contains(joined, "network rm net1-b2") {
 			t.Errorf("%s: no stale-network removal first", shape)
 		}
-		if !strings.Contains(joined, "client_id=lab-b2-x") {
+		if !strings.Contains(joined, "client_id=lab-b2-x") || !strings.Contains(joined, "ipv6_mode=dhcp") {
 			t.Errorf("%s: option missing from %q", shape, joined)
 		}
 		hasIgnore := strings.Contains(joined, "ignore_conflicts=true")
@@ -348,7 +348,7 @@ func TestNetworkUpExtraBuildsItsOwnNetworkWithOptions(t *testing.T) {
 }
 
 func TestNetworkUpExtraRefusesAnOptionOutsideTheGrammar(t *testing.T) {
-	for _, bad := range []string{"client_id=a;rm", "client_id=a b", "=x", "no-equals", "a=$(id)", "a='x'"} {
+	for _, bad := range []string{"client_id=a;rm", "client_id=a b", "=x", "no-equals", "a=$(id)", "a='x'", "6_mode=dhcp", "_x=1", "ipv6-mode=dhcp"} {
 		r := &fakeShapeRunner{}
 		if _, err := NetworkUpExtra(context.Background(), r, "net1", ShapeBridge, "b2", []string{bad}); err == nil {
 			t.Errorf("option %q was accepted", bad)
@@ -1100,6 +1100,8 @@ func TestRunB8FailsOnIpvlanWhenTheTableShowsMoreThanOneMAC(t *testing.T) {
 func TestReadmeGroupBTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "B") }
 
 func TestReadmeGroupCTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "C") }
+
+func TestReadmeGroupDTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "D") }
 
 func TestReadmeGroupFTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "F") }
 

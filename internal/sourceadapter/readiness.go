@@ -2,8 +2,10 @@ package sourceadapter
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,22 +22,50 @@ const segmentNIC = "eth1"
 const tcBin = "/usr/sbin/tc"
 
 // baseline is the state the first Ready of an adapter saw: the segment
-// addresses and the main config bytes. Reservations live in include
-// files, so B1/B2 never move it (group C defeat A8, #23).
+// addresses and the config bytes. Reservations live in include files,
+// so B1/B2 never move it (group C defeat A8, #23).
 type baseline struct {
-	mu    sync.Mutex
-	taken bool
-	addrs string
-	cfg   string
+	mu     sync.Mutex
+	taken  bool
+	addrs  string
+	addrs6 string
+	cfg    string
+	extra  map[string]string
+}
+
+// extraConf is a v6 config file and the unit that serves it; Ready holds
+// both to the baseline, so a lost SetRA or feature restore fails the
+// next scenario's Ready and not its verdict (group D defeat 4, #23).
+type extraConf struct{ path, service string }
+
+// sourceUnits names one adapter's Ready and Recover inputs.
+type sourceUnits struct {
+	service string
+	cfgPath string
+	extra   []extraConf
+	leases6 func(context.Context) ([]Lease6, error)
+}
+
+// services is the main unit, then every extra unit once, in order.
+func (u sourceUnits) services() []string {
+	out := []string{u.service}
+	for _, e := range u.extra {
+		if !slices.Contains(out, e.service) {
+			out = append(out, e.service)
+		}
+	}
+	return out
 }
 
 type sourceState struct {
-	netns []string
-	links []string
-	procs int
-	netem bool
-	addrs string
-	cfg   string
+	netns  []string
+	links  []string
+	procs  int
+	netem  bool
+	addrs  string
+	addrs6 string
+	cfg    string
+	extra  map[string]string
 }
 
 // actorRE matches the group C actors' names (adapter.go) in netns,
@@ -44,23 +74,32 @@ type sourceState struct {
 // the shell running the search itself (pgrep(1) -f reads full argv).
 const actorRE = `[l]abc-`
 
-// stateCmd reads every Ready input in one remote command; the config
-// comes last, after a "cfg:" line, so its bytes stay exact.
-func stateCmd(cfgPath string) string {
-	return fmt.Sprintf(`printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^%[4]s/ {printf "%%s ", $1}'; echo; `+
-		`printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^%[4]s/ {split($2, n, "@"); printf "%%s ", n[1]}'; echo; `+
-		`printf 'procs:'; pgrep -f '%[4]s' | wc -l; `+
-		`printf 'netem:'; %[3]s qdisc show dev %[2]s root 2>/dev/null | grep -c netem; `+
-		`printf 'addr:'; ip -4 -o addr show dev %[2]s | awk '{printf "%%s ", $4}'; echo; `+
-		`echo 'cfg:'; sudo cat %[1]s`, cfgPath, segmentNIC, tcBin, actorRE)
+// stateCmd reads every Ready input in one remote command. Each v6 config
+// comes base64 on one line ("!" when unreadable, outside the alphabet);
+// the main config comes last, after a "cfg:" line, so its bytes stay
+// exact. addr6 lists permanent addresses only, so an RA-formed address
+// on the source never moves the baseline.
+func stateCmd(u sourceUnits) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {printf "%%s ", $1}'; echo; `+
+		`printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); printf "%%s ", n[1]}'; echo; `+
+		`printf 'procs:'; pgrep -f '%[3]s' | wc -l; `+
+		`printf 'netem:'; %[2]s qdisc show dev %[1]s root 2>/dev/null | grep -c netem; `+
+		`printf 'addr:'; ip -4 -o addr show dev %[1]s | awk '{printf "%%s ", $4}'; echo; `+
+		`printf 'addr6:'; ip -6 -o addr show dev %[1]s scope global permanent | awk '{printf "%%s ", $4}'; echo; `, segmentNIC, tcBin, actorRE)
+	for _, e := range u.extra {
+		fmt.Fprintf(&b, `printf 'cfg6:%[1]s:'; sudo base64 -w0 %[1]s 2>/dev/null || printf '!'; echo; `, e.path)
+	}
+	fmt.Fprintf(&b, `echo 'cfg:'; sudo cat %s`, u.cfgPath)
+	return b.String()
 }
 
-func parseState(out string) (sourceState, error) {
+func parseState(out string, u sourceUnits) (sourceState, error) {
 	head, cfg, ok := strings.Cut(out, "cfg:\n")
 	if !ok {
 		return sourceState{}, fmt.Errorf("state read carries no cfg: marker")
 	}
-	st := sourceState{cfg: cfg}
+	st := sourceState{cfg: cfg, extra: map[string]string{}}
 	seen := 0
 	for _, line := range strings.Split(head, "\n") {
 		key, val, found := strings.Cut(line, ":")
@@ -88,31 +127,54 @@ func parseState(out string) (sourceState, error) {
 		case "addr":
 			st.addrs = val
 			seen++
+		case "addr6":
+			st.addrs6 = val
+			seen++
+		case "cfg6":
+			path, enc, ok := strings.Cut(val, ":")
+			if !ok || !slices.ContainsFunc(u.extra, func(e extraConf) bool { return e.path == path }) {
+				return sourceState{}, fmt.Errorf("state read names an unexpected v6 config: %q", line)
+			}
+			if _, dup := st.extra[path]; dup {
+				return sourceState{}, fmt.Errorf("state read names %s twice", path)
+			}
+			body, err := base64.StdEncoding.DecodeString(enc)
+			if err != nil {
+				return sourceState{}, fmt.Errorf("%s is not readable on the source", path)
+			}
+			st.extra[path] = string(body)
 		}
 	}
-	if seen != 5 {
+	if seen != 6 || len(st.extra) != len(u.extra) {
 		return sourceState{}, fmt.Errorf("state read is incomplete: %q", head)
 	}
 	return st, nil
 }
 
-func readState(ctx context.Context, r Runner, cfgPath string) (sourceState, error) {
-	out, err := r.Run(ctx, stateCmd(cfgPath))
+func readState(ctx context.Context, r Runner, u sourceUnits) (sourceState, error) {
+	out, err := r.Run(ctx, stateCmd(u))
 	if err != nil {
 		return sourceState{}, fmt.Errorf("read source state: %w", err)
 	}
-	return parseState(out)
+	return parseState(out, u)
 }
 
 // sourceReady is every adapter's Ready body (#23).
-func sourceReady(ctx context.Context, r Runner, service, cfgPath string, leases func(context.Context) ([]Lease, error), b *baseline) error {
-	if _, err := r.Run(ctx, "sudo systemctl is-active --quiet "+service); err != nil {
-		return fmt.Errorf("%s is not active: %w", service, err)
+func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(context.Context) ([]Lease, error), b *baseline) error {
+	for _, svc := range u.services() {
+		if _, err := r.Run(ctx, "sudo systemctl is-active --quiet "+svc); err != nil {
+			return fmt.Errorf("%s is not active: %w", svc, err)
+		}
 	}
 	if _, err := leases(ctx); err != nil {
 		return fmt.Errorf("lease table not readable: %w", err)
 	}
-	st, err := readState(ctx, r, cfgPath)
+	if u.leases6 != nil {
+		if _, err := u.leases6(ctx); err != nil {
+			return fmt.Errorf("v6 lease table not readable: %w", err)
+		}
+	}
+	st, err := readState(ctx, r, u)
 	if err != nil {
 		return err
 	}
@@ -131,23 +193,31 @@ func sourceReady(ctx context.Context, r Runner, service, cfgPath string, leases 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.taken {
-		b.taken, b.addrs, b.cfg = true, st.addrs, st.cfg
+		b.taken, b.addrs, b.addrs6, b.cfg, b.extra = true, st.addrs, st.addrs6, st.cfg, st.extra
 		return nil
 	}
 	if st.addrs != b.addrs {
 		return fmt.Errorf("%s carries %q, the first readiness check saw %q", segmentNIC, st.addrs, b.addrs)
 	}
+	if st.addrs6 != b.addrs6 {
+		return fmt.Errorf("%s carries v6 %q, the first readiness check saw %q", segmentNIC, st.addrs6, b.addrs6)
+	}
 	if st.cfg != b.cfg {
-		return fmt.Errorf("%s differs from the copy taken at the first readiness check", cfgPath)
+		return fmt.Errorf("%s differs from the copy taken at the first readiness check", u.cfgPath)
+	}
+	for _, e := range u.extra {
+		if st.extra[e.path] != b.extra[e.path] {
+			return fmt.Errorf("%s differs from the copy taken at the first readiness check", e.path)
+		}
 	}
 	return nil
 }
 
 // sourceRecover is every adapter's Recover body (#23): kill the actor
 // processes, delete their netns and links and the netem qdisc, put the
-// baseline segment addresses and config back when they differ, and
-// restart the service.
-func sourceRecover(ctx context.Context, r Runner, service, cfgPath string, b *baseline) error {
+// baseline v4 segment addresses and every baseline config back when
+// they differ, and restart every unit (a stopped radvd starts again).
+func sourceRecover(ctx context.Context, r Runner, u sourceUnits, b *baseline) error {
 	clean := fmt.Sprintf(`sudo pkill -f '%[3]s'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {print $1}'); do p=$(sudo ip netns pids "$n"); [ -z "$p" ] || sudo kill -9 $p; sudo ip netns del "$n"; done; `+
 		`for l in $(ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); print n[1]}'); do sudo ip link del "$l"; done; `+
 		`sudo %[1]s qdisc del dev %[2]s root 2>/dev/null; true`, tcBin, segmentNIC, actorRE)
@@ -155,10 +225,10 @@ func sourceRecover(ctx context.Context, r Runner, service, cfgPath string, b *ba
 		return fmt.Errorf("recover: clear actors and qdisc: %w", err)
 	}
 	b.mu.Lock()
-	taken, addrs, cfg := b.taken, b.addrs, b.cfg
+	taken, addrs, cfg, extra := b.taken, b.addrs, b.cfg, b.extra
 	b.mu.Unlock()
 	if taken {
-		st, err := readState(ctx, r, cfgPath)
+		st, err := readState(ctx, r, u)
 		if err != nil {
 			return fmt.Errorf("recover: %w", err)
 		}
@@ -178,17 +248,29 @@ func sourceRecover(ctx context.Context, r Runner, service, cfgPath string, b *ba
 				return fmt.Errorf("recover: %w", err)
 			}
 		}
-		if st.cfg != cfg {
-			if !strings.HasSuffix(cfg, "\n") {
-				return fmt.Errorf("recover: baseline %s does not end in a newline, cannot write it back byte for byte", cfgPath)
+		want := map[string]string{u.cfgPath: cfg}
+		got := map[string]string{u.cfgPath: st.cfg}
+		paths := []string{u.cfgPath}
+		for _, e := range u.extra {
+			want[e.path], got[e.path] = extra[e.path], st.extra[e.path]
+			paths = append(paths, e.path)
+		}
+		for _, p := range paths {
+			if got[p] == want[p] {
+				continue
 			}
-			if err := writeRemoteConfig(ctx, r, cfgPath, cfg); err != nil {
-				return fmt.Errorf("recover: write %s back: %w", cfgPath, err)
+			if !strings.HasSuffix(want[p], "\n") {
+				return fmt.Errorf("recover: baseline %s does not end in a newline, cannot write it back byte for byte", p)
+			}
+			if err := writeRemoteConfig(ctx, r, p, want[p]); err != nil {
+				return fmt.Errorf("recover: write %s back: %w", p, err)
 			}
 		}
 	}
-	if _, err := r.Run(ctx, "sudo systemctl restart "+service); err != nil {
-		return fmt.Errorf("recover: restart %s: %w", service, err)
+	for _, svc := range u.services() {
+		if _, err := r.Run(ctx, "sudo systemctl restart "+svc); err != nil {
+			return fmt.Errorf("recover: restart %s: %w", svc, err)
+		}
 	}
 	return nil
 }

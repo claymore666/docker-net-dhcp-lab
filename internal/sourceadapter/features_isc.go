@@ -12,15 +12,31 @@ var (
 	iscSubnetRE       = regexp.MustCompile(`(?m)^([ \t]*)(subnet )`)
 	iscMainPoolDenyRE = regexp.MustCompile(`(?m)^([ \t]*)(deny members of "b5";)`)
 	iscRoutersLineRE  = regexp.MustCompile(`(?m)^([ \t]*)(option routers [^;]*;)`)
+	// iscRapidCommit6RE and iscTemporary6RE uncomment the anchor lines
+	// dhcpd6.conf carries at baseline (cloud-init/isc-dhcp-user-data).
+	iscRapidCommit6RE = regexp.MustCompile(`(?m)^([ \t]*)#lab-rapid-commit (option dhcp6\.rapid-commit;)$`)
+	iscTemporary6RE   = regexp.MustCompile(`(?m)^([ \t]*)#lab-temporary (range6 [0-9a-f:]+/[0-9]+ temporary;)$`)
 )
 
 // EnableFeature rewrites the running dhcpd.conf (#20). ISC dhcpd 4.4.3
 // has no DHCPv4 rapid commit (dhcp-options(5) lists only dhcp6.rapid-commit),
 // so FeatureRapidCommit4 is refused and CapRapidCommit4 is not declared.
+// The v6 features edit dhcpd6.conf; one init script runs -4 and -6, so
+// Restart covers both.
 func (a *ISCDHCPAdapter) EnableFeature(ctx context.Context, f Feature, p FeatureParams) (func(context.Context) error, error) {
 	v, err := validateFeature(f, p)
 	if err != nil {
 		return nil, err
+	}
+	switch f {
+	case FeatureRapidCommit6:
+		edits := []configEdit{{iscRapidCommit6RE, "${1}${2} # lab-rapid-commit-on", "the rapid-commit anchor"}}
+		return enableFeatureViaSubstitution(ctx, a.Runner, iscDHCP6Conf, "lab-rapid-commit-on", edits,
+			func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
+	case FeatureTemporary6:
+		edits := []configEdit{{iscTemporary6RE, "${1}${2} # lab-temporary-on", "the temporary range anchor"}}
+		return enableFeatureViaSubstitution(ctx, a.Runner, iscDHCP6Conf, "lab-temporary-on", edits,
+			func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 	}
 	var edits []configEdit
 	var already string

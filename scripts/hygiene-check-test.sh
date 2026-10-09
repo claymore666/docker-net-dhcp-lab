@@ -60,6 +60,18 @@ run_case "172.16.x address, not a docker default pool, refused" \
 	$'note: two networks: 172.16.0.2 plus the lease\n' fail || fail=1
 run_case "172.17.x address, a real docker default pool, packs" \
 	$'note: two networks: 172.17.0.2 plus the lease\n' ok || fail=1
+# The ULA is exactly fd42:200::/48 (#23 group D): another /48 that only
+# shares the leading characters is refused, every form inside it allowed.
+run_case "ULA, different /48 sharing a prefix string, refused" \
+	$'note: fd42:2001::1\n' fail || fail=1
+run_case "ULA, different /48 in the third group, refused" \
+	$'note: fd42:200:1::1\n' fail || fail=1
+run_case "ULA, cell segment address, allowed" \
+	$'note: fd42:200:0:300::2\n' ok || fail=1
+run_case "ULA, the /48 itself, allowed" \
+	$'note: ula_prefix "fd42:200::/48"\n' ok || fail=1
+run_case "ULA, zero third group with leading zeros, allowed" \
+	$'note: fd42:200:0000:100::1\n' ok || fail=1
 # No candidate address at all.
 run_case "no address" $'note: nothing here\n' ok || fail=1
 # A session agent name or a review-exchange marker must be caught even

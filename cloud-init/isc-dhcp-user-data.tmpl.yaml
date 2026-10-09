@@ -16,11 +16,11 @@ runcmd:
   # noninteractive: the kea cell hit a debconf prompt that hung apt-get
   # with no frontend (issue #2, measured live 2026-09-25); same guard
   # here in case any future isc-dhcp-server package version adds one.
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server dnsmasq-base iputils-arping
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server radvd dnsmasq-base iputils-arping
   - mkdir -p /root/lab-stock-config
   - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
   - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock
-  - touch /etc/dhcp/lab-reservations.conf
+  - touch /etc/dhcp/lab-reservations.conf /var/lib/dhcp/dhcpd6.leases
   - |
     cat >/etc/dhcp/dhcpd.conf <<'DHCPDEOF'
     default-lease-time 600;
@@ -42,15 +42,46 @@ runcmd:
     }
     include "/etc/dhcp/lab-reservations.conf";
     DHCPDEOF
+  # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the rapid commit
+  # and temporary address features uncomment; the init script runs -4 and -6 together.
+  - |
+    cat >/etc/dhcp/dhcpd6.conf <<'DHCPDEOF'
+    default-lease-time 7200;
+    preferred-lifetime 3600;
+    #lab-rapid-commit option dhcp6.rapid-commit;
+    subnet6 __SEG_SUBNET6__ {
+      range6 __POOL6_START__ __POOL6_END__;
+      #lab-temporary range6 __TEMP6_POOL__ temporary;
+    }
+    DHCPDEOF
+  # IPv6 RA for the segment (#23 group D): M=1 A=1, router lifetime 1800,
+  # the cell's /64. radvd needs no forwarding (measured with forwarding 0).
+  - |
+    cat >/etc/radvd.conf <<'RADVDEOF'
+    interface eth1 {
+      AdvSendAdvert on;
+      MinRtrAdvInterval 3;
+      MaxRtrAdvInterval 10;
+      AdvManagedFlag on;
+      AdvOtherConfigFlag off;
+      AdvDefaultLifetime 1800;
+      prefix __SEG_SUBNET6__ {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 7200;
+        AdvPreferredLifetime 3600;
+      };
+    };
+    RADVDEOF
   - |
     cat >/etc/default/isc-dhcp-server <<'DHCPDEOF'
     INTERFACESv4="eth1"
-    INTERFACESv6=""
+    INTERFACESv6="eth1"
     DHCPDEOF
   # restart, not enable --now: the kea cell found that apt-get's postinst
   # can already have started the service against a stock config, making
   # enable --now a no-op that leaves the stock config running instead of
   # ours (issue #2, measured live 2026-09-25).
-  - systemctl enable isc-dhcp-server
-  - systemctl restart isc-dhcp-server
+  - systemctl enable isc-dhcp-server radvd
+  - systemctl restart isc-dhcp-server radvd
   - touch /var/lib/cloud/lab-bootstrap-done

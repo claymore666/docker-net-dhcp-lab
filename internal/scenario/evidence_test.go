@@ -111,3 +111,10 @@ func (a *countingReachAdapter) NarrowPool(_ context.Context, _, _ string) (func(
 func (a *countingReachAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+
+func (a *countingReachAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error) {
+	return nil, nil
+}
+func (a *countingReachAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

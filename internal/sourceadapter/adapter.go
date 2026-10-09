@@ -69,9 +69,21 @@ const (
 	CapRogueServer Capability = "rogue-server"
 	CapNarrowPool  Capability = "narrow-pool"
 	CapRenumber    Capability = "renumber"
-	// CapV6 is declared by no adapter until group D's IPv6 segment
-	// exists; the IPv6 rows of group F stay N/A through Applicable until then (#20).
+	// CapV6 declares the IPv6 segment: a DHCPv6 server answering IA_NA
+	// on eth1 and RAs at the M=1 A=1 baseline, Leases6 and SetRA Off
+	// (#23 group D).
 	CapV6 Capability = "v6"
+	// CapRapidCommit6 declares EnableFeature(FeatureRapidCommit6): a
+	// Solicit carrying option 14 is answered by a Reply (RFC 8415
+	// section 18.3.1).
+	CapRapidCommit6 Capability = "rapid-commit-6"
+	// CapTemporary6 declares that the server grants an IA_TA (RFC 8415
+	// section 21.5) once EnableFeature(FeatureTemporary6) ran.
+	CapTemporary6 Capability = "temporary-6"
+	// CapPD and CapPref64 are declared by no adapter until #23 group D
+	// part 2 adds delegation and PREF64 to the sources.
+	CapPD     Capability = "pd"
+	CapPref64 Capability = "pref64"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -115,6 +127,14 @@ type Adapter interface {
 	// adapter's parser, so "the table no longer shows X" (B7, #23) means
 	// the same thing on all three sources.
 	Leases(ctx context.Context) ([]Lease, error)
+	// Leases6 returns the active IA_NA and IA_TA addresses of the
+	// source's DHCPv6 table, the same "active only" rule as Leases (#23
+	// group D).
+	Leases6(ctx context.Context) ([]Lease6, error)
+	// SetRA changes what the segment's router advertisements say and
+	// returns the restore that puts the baseline (M=1, A=1) back (#23
+	// group D). Only RAParams.Off is implemented.
+	SetRA(ctx context.Context, p RAParams) (restore func(ctx context.Context) error, err error)
 	ReserveMAC(ctx context.Context, mac, addr string) error
 	// ReserveClientID reserves addr for a DHCP option 61 value given as
 	// colon-hex (B2, #23). Idempotent: a second call for the same id
@@ -243,11 +263,15 @@ func validateAddr(addr string) (string, error) {
 // through validateAddr first, so it is stdlib's own normalized form
 // before it ever reaches the command line.
 func reachable(ctx context.Context, r Runner, addr string) error {
+	ping := "ping -c1 -W2 "
 	ip, err := validateAddr(addr)
 	if err != nil {
-		return err
+		if ip, err = validateAddr6(addr); err != nil {
+			return err
+		}
+		ping = "ping -6 -c1 -W2 "
 	}
-	if _, err := r.Run(ctx, "ping -c1 -W2 "+ip); err != nil {
+	if _, err := r.Run(ctx, ping+ip); err != nil {
 		return fmt.Errorf("ping %s: %w", ip, err)
 	}
 	return nil

@@ -29,7 +29,7 @@ type DnsmasqAdapter struct {
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6}
 }
 
 // dnsmasqLeaseFile is the on-disk lease table this adapter reads
@@ -49,7 +49,9 @@ func (a *DnsmasqAdapter) Leases(ctx context.Context) ([]Lease, error) {
 // <client-id>". A blank file (dnsmasq creates it at startup even with
 // zero leases) is a genuine empty table; a line with too few fields, or
 // a MAC that does not parse, is a truncated or malformed read and must
-// fail rather than silently drop that row (issue #2).
+// fail rather than silently drop that row (issue #2). The v4 table ends
+// at the "duid" line; the DHCPv6 rows after it are parseDnsmasqLeases6's
+// (#23 group D).
 func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	trimmed := strings.TrimRight(raw, "\n")
 	if trimmed == "" {
@@ -59,6 +61,9 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	leases := make([]Lease, 0, len(lines))
 	for i, line := range lines {
 		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "duid" {
+			break
+		}
 		if len(fields) < 4 {
 			return nil, fmt.Errorf("dnsmasq: lease line %d has %d field(s), want at least 4: %q", i+1, len(fields), line)
 		}
@@ -182,11 +187,11 @@ func (a *DnsmasqAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *DnsmasqAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", a.Leases, &a.base)
+	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *DnsmasqAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", &a.base)
+	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *DnsmasqAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {

@@ -286,4 +286,82 @@ write_pcap("dhcp-f-forcerenew.pcap", [
                                          opt_msgtype(MSG_FORCERENEW) + opt(54, socket.inet_aton(SERVER))))),
 ])
 
-print("wrote 14 fixtures")
+# ---- IPv6 (#23 group D): what the real captures under v6/ do not hold.
+def eth6(dst: str, src: str, payload: bytes) -> bytes:
+    return mac_b(dst) + mac_b(src) + struct.pack("!H", 0x86dd) + payload
+
+def ipv6(src: str, dst: str, nh: int, payload: bytes) -> bytes:
+    return (struct.pack("!IHBB", 0x60000000, len(payload), nh, 255)
+            + socket.inet_pton(socket.AF_INET6, src) + socket.inet_pton(socket.AF_INET6, dst) + payload)
+
+def udp6(sport: int, dport: int, payload: bytes) -> bytes:
+    return struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
+
+def o6(code: int, val: bytes) -> bytes:
+    return struct.pack("!HH", code, len(val)) + val
+
+def iaaddr(addr: str, pref: int, valid: int) -> bytes:
+    return o6(5, socket.inet_pton(socket.AF_INET6, addr) + struct.pack("!II", pref, valid))
+
+def iaprefix(prefix: str, plen: int, pref: int, valid: int) -> bytes:
+    return o6(26, struct.pack("!IIB", pref, valid, plen) + socket.inet_pton(socket.AF_INET6, prefix))
+
+def dhcp6(mt: int, xid: int, opts: bytes) -> bytes:
+    return struct.pack("!I", (mt << 24) | xid) + opts
+
+SRV6_MAC, SRV6_LL = "02:00:00:00:06:01", "fe80::6:1"
+C6_MAC = "02:00:00:00:06:02"
+DUID_A = bytes.fromhex("00030001020000000602")
+DUID_B = bytes.fromhex("000300010200000006ff")
+SDUID = bytes.fromhex("00030001020000000601")
+
+def c2s6(ll: str, payload: bytes, mac: str = C6_MAC) -> bytes:
+    return eth6("33:33:00:01:00:02", mac, ipv6(ll, "ff02::1:2", 17, udp6(546, 547, payload)))
+
+def s2c6(ll: str, payload: bytes, mac: str = C6_MAC) -> bytes:
+    return eth6(mac, SRV6_MAC, ipv6(SRV6_LL, ll, 17, udp6(547, 546, payload)))
+
+def ra6(flags: int, life: int, opts: bytes) -> bytes:
+    body = struct.pack("!BBHBBHII", 134, 0, 0, 64, flags, life, 0, 0) + opts
+    return eth6("33:33:00:00:00:01", SRV6_MAC, ipv6(SRV6_LL, "ff02::1", 58, body))
+
+def pio(prefix: str, plen: int, flags: int, valid: int, pref: int) -> bytes:
+    return struct.pack("!BBBBIII", 3, 4, plen, flags, valid, pref, 0) + socket.inet_pton(socket.AF_INET6, prefix)
+
+def pref64(prefix: str, plc: int, lifetime: int) -> bytes:
+    return struct.pack("!BBH", 38, 2, (lifetime // 8) << 3 | plc) + socket.inet_pton(socket.AF_INET6, prefix)[:12]
+
+# Two PIOs (one without A) and a PREF64 /96 with 600 s (RFC 8781 4).
+# Two clients behind one MAC as on ipvlan; only DUID_A's link-local is
+# the ident, so B's Solicit, its Reply and a Reply to A's other xid
+# that never matched must not print. A UDP packet behind a hop-by-hop
+# header is skipped, and so is a Relay-forward. A Reply with an IA_PD.
+LL_A, LL_B = "fe80::6:2", "fe80::6:3"
+hbh = bytes([17, 0, 5, 2, 0, 0, 1, 0])
+write_pcap("v6/synth-mixed.pcap", [
+    (70.0, ra6(0xc0, 1800, pio("fd42:200:0:900::", 64, 0xc0, 7200, 3600)
+                            + pio("fd42:200:0:901::", 64, 0x80, 600, 300)
+                            + pref64("64:ff9b::", 0, 600))),
+    (70.1, c2s6(LL_B, dhcp6(1, 0x0b0001, o6(1, DUID_B) + o6(3, struct.pack("!III", 7, 0, 0)))) ),
+    (70.2, s2c6(LL_B, dhcp6(7, 0x0b0001, o6(1, DUID_B) + o6(2, SDUID)
+                            + o6(3, struct.pack("!III", 7, 0, 0) + iaaddr("fd42:200:0:900::1b", 3600, 7200))))),
+    (70.3, c2s6(LL_A, dhcp6(1, 0x0a0001, o6(1, DUID_A) + o6(14, b"")
+                            + o6(3, struct.pack("!III", 1, 0, 0)) + o6(4, struct.pack("!I", 2))
+                            + o6(25, struct.pack("!III", 3, 0, 0))))),
+    (70.4, s2c6(LL_A, dhcp6(7, 0x0a0001, o6(1, DUID_A) + o6(2, SDUID) + o6(14, b"")
+                            + o6(3, struct.pack("!III", 1, 0, 0) + iaaddr("fd42:200:0:900::1a", 3600, 7200))
+                            + o6(4, struct.pack("!I", 2) + o6(13, struct.pack("!H", 2)))
+                            + o6(25, struct.pack("!III", 3, 0, 0) + iaprefix("fd42:200:0:9f0::", 60, 1800, 3600))))),
+    (70.5, s2c6(LL_A, dhcp6(7, 0x0c0001, o6(2, SDUID)))),
+    (70.6, eth6("33:33:00:01:00:02", C6_MAC, ipv6(LL_A, "ff02::1:2", 0, hbh + udp6(546, 547, dhcp6(1, 0x0a0002, o6(1, DUID_A)))))),
+    (70.7, c2s6(LL_A, dhcp6(12, 0x000000, o6(1, DUID_A)))),
+])
+
+# A Reply that carries no Client Identifier, so only the xid of A's
+# matched Information-request ties it to the ident.
+write_pcap("v6/synth-xid.pcap", [
+    (80.0, c2s6(LL_A, dhcp6(11, 0x0a0003, o6(1, DUID_A)))),
+    (80.1, s2c6(LL_A, dhcp6(7, 0x0a0003, o6(2, SDUID)))),
+])
+
+print("wrote 16 fixtures")

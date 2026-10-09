@@ -93,6 +93,8 @@ var capabilityNAReason = map[sourceadapter.Capability]string{
 	sourceadapter.CapFailoverPair: "needs a failover pair cell, claymore666/docker-net-dhcp-lab#12",
 	sourceadapter.CapRelay:        "needs a relay cell, claymore666/docker-net-dhcp-lab#11",
 	sourceadapter.CapV6:           "needs the IPv6 segment, #23 group D",
+	sourceadapter.CapPD:           "needs delegated prefixes at the source, #23 group D part 2",
+	sourceadapter.CapPref64:       "needs PREF64 in the segment's RAs, #23 group D part 2",
 }
 
 // Scenario name constants: the single source of truth for both Catalog
@@ -147,6 +149,12 @@ const (
 	NameC11 = "C11-validate-dhcp-create"
 	NameC12 = "C12-relay"
 
+	NameD1  = "D1-dhcpv6-lease"
+	NameD1b = "D1b-dhcpv6-lease-ipv6-true"
+	NameD1c = "D1c-dhcpv6-no-ra"
+	NameD2  = "D2-slaac"
+	NameD2b = "D2b-slaac-no-ra"
+
 	NameF1  = "F1-user-class-pool"
 	NameF2a = "F2a-option-108-not-asked"
 	NameF2b = "F2b-option-108-forced"
@@ -179,12 +187,15 @@ const (
 // C6b(2) + C7(2, the rogue's pool is its own) + C8(1, the fills sit on
 // the narrowed range outside the pool) + C9(1, the renumbered lease is
 // reset) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
-// plus group F's 7: one each for the user class, 108 not asked and rapid commit, two each
-// for 108 forced and FORCERENEW (their control clients, #21); the IPv6 rows never run (#20).
+// plus group D's 5: one IPv4 lease for each row's container, the slaac
+// rows included, since the container also leases IPv4 (#23),
+// plus group F's 9: one each for the user class, 108 not asked, both rapid commits and
+// the temporary address, two each for 108 forced and FORCERENEW (their control clients,
+// #21); prefix delegation and PREF64 never run yet (#23 group D part 2).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 73
+const MinPoolAddresses = 80
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -197,8 +208,9 @@ var poolDemand = map[string]int{
 	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC6: 1,
 	NameC6b: 2, NameC7: 2, NameC8: 1, NameC9: 1, NameC10: 2,
 	NameC11: 1, NameC12: 0,
+	NameD1: 1, NameD1b: 1, NameD1c: 1, NameD2: 1, NameD2b: 1,
 	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
-	NameF4: 0, NameF5: 0, NameF6: 0, NameF7: 0, NameF8: 2,
+	NameF4: 1, NameF5: 1, NameF6: 0, NameF7: 0, NameF8: 2,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -326,13 +338,18 @@ var Catalog = []Scenario{
 	{Name: NameC10, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapImpair}, Run: runC10},
 	{Name: NameC11, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}, Run: runC11},
 	{Name: NameC12, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runNeverReached},
+	{Name: NameD1, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1},
+	{Name: NameD1b, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1b},
+	{Name: NameD1c, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1c},
+	{Name: NameD2, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD2},
+	{Name: NameD2b, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD2b},
 	{Name: NameF1, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapUserClassPool}, Run: runF1},
 	{Name: NameF2a, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapOption108}, Run: runF2a},
 	{Name: NameF2b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapOption108}, Run: runF2b},
 	{Name: NameF3, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runF3},
-	{Name: NameF4, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
-	{Name: NameF5, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
-	{Name: NameF6, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
-	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
+	{Name: NameF4, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runF4},
+	{Name: NameF5, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runF5},
+	{Name: NameF6, Needs: []sourceadapter.Capability{sourceadapter.CapV6, sourceadapter.CapPD}, Run: runNeverReached},
+	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6, sourceadapter.CapPref64}, Run: runNeverReached},
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
 }

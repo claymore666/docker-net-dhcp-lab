@@ -163,7 +163,19 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 
 C1, C6, C6b, C7, C8 (its third container), C9 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
 
-Group F runs today (IPv4; the plugin's client options, judged by the bytes the container sends and by the source's own table; the source setting changes for the scenario and is put back afterwards):
+Group D runs today (IPv6; each row creates its own network with the plugin's `ipv6_mode`, starts one container and reads its addresses inside the container, in docker inspect, in the source's DHCPv6 table and on the wire):
+
+| ID | Scenario | What it does |
+|---|---|---|
+| D1 | DHCPv6 address | with `ipv6_mode=dhcp` the container leases an address over DHCPv6 (IA_NA); it sits on the link as a /128 with the server's lifetimes counting down, the source's table holds it for the container's DUID, docker inspect shows it, the default route goes via the advertising router, and it answers a ping from the source |
+| D1b | DHCPv6 address, ipv6=true | the same checks with the older `ipv6=true` option instead of `ipv6_mode` |
+| D1c | DHCPv6 mode without router advertisements | the source stops advertising; with `ipv6_mode=dhcp` the container still starts, and carries no IPv6 address unless the source's DHCPv6 server, which keeps running, answered it (recorded) |
+| D2 | SLAAC address | with `ipv6_mode=slaac` the container forms its address from the advertised prefix and its own MAC (modified EUI-64), sends no DHCPv6 request and gets no lease; on ipvlan the network create must be refused |
+| D2b | SLAAC mode without router advertisements | the source stops advertising; with `ipv6_mode=slaac` the container must fail to start (N/A on ipvlan, which refuses the mode) |
+
+Every source serves the same IPv6 baseline on the segment: router advertisements with the managed and autonomous flags set (radvd beside Kea and ISC, dnsmasq's own), and a DHCPv6 range in the lab's private prefix. A source VM built before group D must be rebuilt to carry it. Group D reports N/A on `bridge-ipam` and `macvlan-ipam` for now, and on a plugin tag before v2.2.0, the release that added `ipv6_mode`. A row that still sees a router advertisement after the source stopped sending them is BLOCKED, not judged.
+
+Group F runs today (the plugin's client options, judged by the bytes the container sends and by the source's own table; the source setting changes for the scenario and is put back afterwards):
 
 | ID | Scenario | What it does |
 |---|---|---|
@@ -171,13 +183,13 @@ Group F runs today (IPv4; the plugin's client options, judged by the bytes the c
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
 | F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
 | F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Kea and ISC answer as usual and the normal four messages follow |
-| F4 | rapid commit, IPv6 | N/A on every source until the IPv6 segment exists (#23 group D) |
-| F5 | temporary address | N/A on every source until the IPv6 segment exists (#23 group D) |
-| F6 | prefix delegation | N/A on every source until the IPv6 segment exists (#23 group D) |
-| F7 | NAT64 prefix | N/A on every source until the IPv6 segment exists (#23 group D) |
+| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source grants it, so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
+| F5 | temporary address | with `ipv6_temporary` the client also asks for a temporary address (IA_TA); ISC and dnsmasq grant one, which must be on the link beside the stable address, in the source's table and on `/Plugin.Health`, never in docker inspect. Kea grants none, so there the container must run as without the option |
+| F6 | prefix delegation | N/A on every source until the sources delegate prefixes (#23 group D part 2) |
+| F7 | NAT64 prefix | N/A on every source until the router advertisements carry one (#23 group D part 2) |
 | F8 | FORCERENEW, signed and unsigned | FORCERENEW is a server telling a client "renew your lease now", trusted only when signed with a secret the server put in the lease (RFC 6704); the lab sends the container one unsigned, one wrongly signed and one correctly signed: it must ignore the first two and renew on the third, keeping its address. Before v2.4.0 the client must ignore the unsigned one |
 
-The user class, forced 108 and rapid commit rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class and rapid commit rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send neither option, and a tag that is not a release leaves them BLOCKED. A source VM needs no rebuild for group F; the settings are written at run time.
+The user class, forced 108, rapid commit and temporary address rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class, rapid commit and temporary address rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send none of these options, and a tag that is not a release leaves them BLOCKED. The two IPv6 rows also need v2.2.0 and are N/A before it. A source VM needs no rebuild for group F; the settings are written at run time.
 
 ## Reading a result
 

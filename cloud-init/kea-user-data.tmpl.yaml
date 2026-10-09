@@ -17,10 +17,11 @@ runcmd:
   # DEBIAN_FRONTEND=noninteractive: kea-ctrl-agent's postinst runs a
   # debconf select prompt (auth password choice) with no frontend this
   # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent jq dnsmasq-base iputils-arping
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd jq dnsmasq-base iputils-arping
   - mkdir -p /root/lab-stock-config
   - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
   - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
+  - cp /etc/kea/kea-dhcp6.conf /root/lab-stock-config/kea-dhcp6.conf.stock
   - echo '[]' >/etc/kea/reservations.json
   # lease_cmds hook: lease4-get-all (our adapter's read path, issue #2)
   # is not a core command -- without this the control agent answers
@@ -55,6 +56,51 @@ runcmd:
     }
     }
     KEAEOF
+  # DHCPv6 (#23 group D): IA_NA only, Kea 2.6.3 grants no IA_TA.
+  # "rapid-commit": false is the anchor the DHCPv6 rapid commit feature flips.
+  - |
+    cat >/etc/kea/kea-dhcp6.conf <<'KEAEOF'
+    {
+    "Dhcp6": {
+      "interfaces-config": { "interfaces": [ "eth1" ] },
+      "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket" },
+      "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases6.csv" },
+      "preferred-lifetime": 3600,
+      "valid-lifetime": 7200,
+      "hooks-libraries": [
+        { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
+      ],
+      "subnet6": [
+        {
+          "id": 1,
+          "subnet": "__SEG_SUBNET6__",
+          "interface": "eth1",
+          "rapid-commit": false,
+          "pools": [ { "pool": "__POOL6_START__ - __POOL6_END__" } ]
+        }
+      ]
+    }
+    }
+    KEAEOF
+  # IPv6 RA for the segment (#23 group D): M=1 A=1, router lifetime 1800,
+  # the cell's /64. radvd needs no forwarding (measured with forwarding 0).
+  - |
+    cat >/etc/radvd.conf <<'RADVDEOF'
+    interface eth1 {
+      AdvSendAdvert on;
+      MinRtrAdvInterval 3;
+      MaxRtrAdvInterval 10;
+      AdvManagedFlag on;
+      AdvOtherConfigFlag off;
+      AdvDefaultLifetime 1800;
+      prefix __SEG_SUBNET6__ {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 7200;
+        AdvPreferredLifetime 3600;
+      };
+    };
+    RADVDEOF
   - |
     cat >/etc/kea/kea-ctrl-agent.conf <<'KEAEOF'
     {
@@ -62,7 +108,8 @@ runcmd:
       "http-host": "127.0.0.1",
       "http-port": 8000,
       "control-sockets": {
-        "dhcp4": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" }
+        "dhcp4": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
+        "dhcp6": { "socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket" }
       }
     }
     }
@@ -78,6 +125,6 @@ runcmd:
   # postinst); enable --now is then a no-op that leaves the stock config
   # (subnet 192.0.2.0/24) running instead of ours (measured live,
   # 2026-09-25).
-  - systemctl enable kea-dhcp4-server kea-ctrl-agent
-  - systemctl restart kea-dhcp4-server kea-ctrl-agent
+  - systemctl enable kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd
+  - systemctl restart kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd
   - touch /var/lib/cloud/lab-bootstrap-done

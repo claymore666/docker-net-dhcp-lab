@@ -20,7 +20,7 @@ type ISCDHCPAdapter struct {
 }
 
 func (a *ISCDHCPAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6}
 }
 
 // iscLeaseFile is the on-disk lease table this adapter reads directly
@@ -245,11 +245,11 @@ func (a *ISCDHCPAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *ISCDHCPAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, "isc-dhcp-server", "/etc/dhcp/dhcpd.conf", a.Leases, &a.base)
+	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *ISCDHCPAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, "isc-dhcp-server", "/etc/dhcp/dhcpd.conf", &a.base)
+	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *ISCDHCPAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {

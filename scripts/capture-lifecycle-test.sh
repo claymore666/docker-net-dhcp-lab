@@ -122,6 +122,17 @@ if ! grep -qE "^ip link add veth-obs-${hash1}h type veth peer name veth-obs-${ha
 	cat "$calls1" >&2
 	fail=1
 fi
+# The observer leg is IPv6-off before it comes up, and the capture
+# keeps DHCPv6 and RS/RA (#23 group D).
+legs=$(grep -nE "^nsenter -t 12345 -n (sysctl -qw net.ipv6.conf.eth-obs.disable_ipv6=1|ip link set eth-obs up)\$" "$calls1" | cut -d: -f2- | tr '\n' '|')
+if [ "$legs" != "nsenter -t 12345 -n sysctl -qw net.ipv6.conf.eth-obs.disable_ipv6=1|nsenter -t 12345 -n ip link set eth-obs up|" ]; then
+	echo "capture-lifecycle-test: FAIL -- case 1: eth-obs came up without disable_ipv6 first ($legs)" >&2
+	fail=1
+fi
+if ! grep -qF "udp port 546 or udp port 547 or (icmp6 and (ip6[40] == 133 or ip6[40] == 134))" "$calls1"; then
+	echo "capture-lifecycle-test: FAIL -- case 1: the capture filter drops DHCPv6 or RS/RA" >&2
+	fail=1
+fi
 if ! grep -qE "^build-bridge br-case1 --add-port veth-obs-${hash1}h\$" "$calls1"; then
 	echo "capture-lifecycle-test: FAIL -- case 1: build-bridge.sh was not asked to add the observer's veth to the segment bridge" >&2
 	cat "$calls1" >&2

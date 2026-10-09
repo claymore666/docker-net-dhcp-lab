@@ -81,6 +81,15 @@ type fakeAdapter struct {
 	onSquat, onRogue, onNarrow, onRenumber                func()
 	onNarrowRestore, onRenumberRestore                    func()
 	rogueLeases                                           []sourceadapter.Lease
+
+	// group D (#23): leases6 is the DHCPv6 table, leases6Fn overrides it
+	// per call; raOffs and raRestores count SetRA and its restores.
+	leases6    []sourceadapter.Lease6
+	leases6Fn  func() ([]sourceadapter.Lease6, error)
+	leases6Err error
+	raErr      error
+	raOffs     int
+	raRestores int
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -188,6 +197,19 @@ func (f *fakeAdapter) NarrowPool(_ context.Context, first, last string) (func(co
 }
 func (f *fakeAdapter) Renumber(_ context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
 	return fakeActor(&f.renumbers, subnet+" "+addr+" "+first+"-"+last, f.renumberErr, f.onRenumber, &f.renumberRests, f.onRenumberRestore)
+}
+func (f *fakeAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error) {
+	if f.leases6Fn != nil {
+		return f.leases6Fn()
+	}
+	return f.leases6, f.leases6Err
+}
+func (f *fakeAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
+	if f.raErr != nil {
+		return nil, f.raErr
+	}
+	f.raOffs++
+	return func(context.Context) error { f.raRestores++; return nil }, nil
 }
 func (f *fakeAdapter) SendForceRenew(_ context.Context, _ []byte, p sourceadapter.ForceRenewParams) (string, error) {
 	f.forceRenews = append(f.forceRenews, p)
