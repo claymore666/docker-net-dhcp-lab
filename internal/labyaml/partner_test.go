@@ -60,6 +60,11 @@ func TestPartnerRules(t *testing.T) {
 		{"seg at band start", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.211/24", "group B host band"},
 		{"seg at band end", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.230/24", "group B host band"},
 		{"seg at dns host", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.253/24", "group B host band"},
+		{"seg at narrowed pool", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.201/24", "above the source pool"},
+		{"seg at group F pool", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.205/24", "above the source pool"},
+		{"seg at squat target", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.231/24", "above the source pool"},
+		{"seg at rogue server", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.240/24", "above the source pool"},
+		{"seg at last host", "seg_address: 10.200.8.3/24", "seg_address: 10.200.8.254/24", "above the source pool"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,10 +86,10 @@ func TestPartnerRules(t *testing.T) {
 	}
 }
 
-// The edges of each band stay legal: one below and one above.
+// Below the pool stays legal up to its edge; .201 up is refused above.
 func TestPartnerBandEdgesAccepted(t *testing.T) {
 	i := strings.Index(withPair, "partner:")
-	for _, host := range []string{"99", "201", "210", "231", "252", "254"} {
+	for _, host := range []string{"1", "4", "99"} {
 		ok := withPair[:i] + strings.Replace(withPair[i:], "seg_address: 10.200.8.3/24", "seg_address: 10.200.8."+host+"/24", 1)
 		if _, err := Load(write(t, ok)); err != nil {
 			t.Fatalf(".%s rejected: %v", host, err)
