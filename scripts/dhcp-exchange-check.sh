@@ -187,20 +187,15 @@ dhcp_option_bytes() {
 }
 
 # dhcp6_message_log <pcap> <ident> prints DHCPv6 messages and RAs, one
-# per line (#23 group D), ts in epoch seconds, "-" for an empty field:
+# per line (#23 group D), "-" for an empty field:
 #   ts TYPE xid clientDUID serverDUID rapid NA TA PD src dst
 #   ts RA src M O rtrlife PIOs PREF64
-# rapid is 1 when option 14 is present (RFC 8415 section 18.3.1). NA, TA
-# and PD are comma lists of "iaid|addr|pref|valid", addr "-" for an IA
-# that carries no address; a PD entry's addr is prefix/len. PIOs is a
-# comma list of "prefix/len|A|valid|pref", PREF64 "prefix/len|lifetime"
-# (RFC 8781). ident is "*" or a comma set of the client's MAC, link-local
-# and DUID: a client message matches on any of them (ipvlan shares the
-# parent MAC), a server message on its client DUID or the xid of a
-# matched client message, since Request and Reply carry a new xid. RA
-# lines print whatever the ident. Only a UDP or ICMPv6 next header
-# directly after the fixed IPv6 header is decoded; relay messages and
-# extension headers are skipped. Addresses print in RFC 5952 form.
+# rapid: option 14 present (RFC 8415 section 18.3.1). NA/TA/PD: comma
+# lists of "iaid|addr|pref|valid" (PD addr is prefix/len); PIOs:
+# "prefix/len|A|valid|pref"; PREF64: "prefix/len|lifetime" (RFC 8781).
+# ident is "*" or a comma set of MAC, link-local and DUID; a server
+# message matches on its client DUID or a matched client xid. RAs print
+# always; only UDP or ICMPv6 right after the fixed header is decoded.
 dhcp6_message_log() {
 	local pcap=$1 want errfile outfile rc
 	want=$(printf '%s' "$2" | tr 'A-F' 'a-f')
