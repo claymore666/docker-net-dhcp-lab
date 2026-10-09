@@ -67,6 +67,19 @@ func (f *fakePeer) EnableFeature(context.Context, Feature, FeatureParams) (func(
 func (f *fakePeer) SendForceRenew(context.Context, []byte, ForceRenewParams) (string, error) {
 	return "sent", f.rec("SendForceRenew")
 }
+func (f *fakePeer) Squat(context.Context, string, bool) (func(context.Context) error, error) {
+	return f.restorable("Squat")
+}
+func (f *fakePeer) StartRogue(context.Context, string, string, string) (func(context.Context) error, error) {
+	return f.restorable("StartRogue")
+}
+func (f *fakePeer) RogueLeases(context.Context) ([]Lease, error) { return nil, f.rec("RogueLeases") }
+func (f *fakePeer) NarrowPool(context.Context, string, string) (func(context.Context) error, error) {
+	return f.restorable("NarrowPool")
+}
+func (f *fakePeer) Renumber(context.Context, string, string, string, string) (func(context.Context) error, error) {
+	return f.restorable("Renumber")
+}
 
 type fakePair struct {
 	log    []string
@@ -109,11 +122,13 @@ func (fp *fakePair) calls() string { return strings.Join(fp.log, ",") }
 // the primary's restore, and the error names the partner.
 func TestPairFanOutPartnerFailureRestoresPrimary(t *testing.T) {
 	ctx := context.Background()
-	for _, m := range []string{"SetDNSOption", "ShortenLeaseTime", "EnableFeature"} {
+	for _, m := range []string{"SetDNSOption", "ShortenLeaseTime", "EnableFeature", "NarrowPool"} {
 		fp := newFakePair()
 		fp.b.fail[m] = true
 		var err error
 		switch m {
+		case "NarrowPool":
+			_, err = fp.pair.NarrowPool(ctx, "10.200.8.100", "10.200.8.101")
 		case "SetDNSOption":
 			_, err = fp.pair.SetDNSOption(ctx, "10.200.8.253")
 		case "ShortenLeaseTime":
@@ -353,9 +368,9 @@ func TestPairRecoverRunsBothThenWaits(t *testing.T) {
 
 func TestPairCapabilities(t *testing.T) {
 	fp := newFakePair()
-	fp.b.caps = []Capability{CapV4, CapImpair, CapReserveMAC}
+	fp.b.caps = []Capability{CapV4, CapImpair, CapReserveMAC, CapRenumber, CapNarrowPool}
 	got := fp.pair.Capabilities()
-	want := []Capability{CapV4, CapReserveMAC, CapFailoverPair}
+	want := []Capability{CapV4, CapReserveMAC, CapNarrowPool, CapFailoverPair}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -366,6 +381,12 @@ func TestPairCapabilities(t *testing.T) {
 	}
 	if why, ok := fp.pair.NAReason(CapImpair); !ok || !strings.Contains(why, "split brain") {
 		t.Fatalf("no C10 reason: %q", why)
+	}
+	if why, ok := fp.pair.NAReason(CapRenumber); !ok || !strings.Contains(why, "without the HA hook") {
+		t.Fatalf("no C9 reason: %q", why)
+	}
+	if _, err := fp.pair.Renumber(context.Background(), "10.200.9.0/24", "10.200.9.2", "10.200.9.100", "10.200.9.199"); err == nil || fp.calls() != "" {
+		t.Fatalf("renumber reached a peer: err %v, calls %q", err, fp.calls())
 	}
 	if _, ok := fp.pair.NAReason(CapV6); ok {
 		t.Fatal("explained a capability it does not leave out")
@@ -489,5 +510,23 @@ func TestKeaPairProfile(t *testing.T) {
 	got := NewKeaPair(nil, nil, "a", "b").Profile()
 	if got != (PairProfile{Normal: "hot-standby", Survivor: "partner-down", StandbySilent: true}) {
 		t.Errorf("profile %+v", got)
+	}
+}
+
+// The group C actors are hosts on the segment: one, from the primary's VM.
+func TestPairActorsRunFromThePrimary(t *testing.T) {
+	ctx := context.Background()
+	fp := newFakePair()
+	if _, err := fp.pair.Squat(ctx, "10.200.8.150", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fp.pair.StartRogue(ctx, "10.200.8.254", "10.200.8.240", "10.200.8.245"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fp.pair.RogueLeases(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if want := "primary Squat,primary StartRogue,primary RogueLeases"; fp.calls() != want {
+		t.Fatalf("calls %q, want %q", fp.calls(), want)
 	}
 }

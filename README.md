@@ -250,10 +250,12 @@ The `kea-ha` cell is a failover pair: two Kea VMs on one segment in
 hot-standby, with `max-unacked-clients 0`, so the partner takes over at
 once when the primary stops (issue #12). `up-cell.sh` builds both
 peers and `down-cell.sh` removes both. C5 to C5d run only there. On
-that cell C1 to C4 stop or reset both peers together, while C10 and
-C12 report N/A with the reason: a delay on one peer is split brain,
-and the pair is not a relay. Each scenario's evidence holds both
-peers' failover state before and after it, recorded but not judged.
+that cell C1 to C4 stop or reset both peers together, C8 narrows both
+pools, and C6 and C7 act from the primary's VM. C9, C10 and C12 report
+N/A with the reason: a renumbered peer drops the failover setup, a
+delay on one peer is split brain, and the pair is not a relay. Each
+scenario's evidence holds both peers' failover state before and after
+it, recorded but not judged.
 
 ## Run every scenario on a cell
 

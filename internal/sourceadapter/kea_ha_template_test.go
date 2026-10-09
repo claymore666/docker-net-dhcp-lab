@@ -94,6 +94,7 @@ func TestKeaRegexesAnchorOnTheHAConfig(t *testing.T) {
 	for name, re := range map[string]interface{ FindAllStringIndex(string, int) [][]int }{
 		"valid-lifetime": keaValidLifetimeRE, "routers": keaRoutersOptionRE, "classes": keaClassesRE,
 		"not-b5": keaNotB5RE, "class pool": keaClassPoolRE, "lease_cmds hook": keaLeaseCmdsHookRE,
+		"main pool": keaMainPoolRE,
 	} {
 		nb, nh := len(re.FindAllStringIndex(base, -1)), len(re.FindAllStringIndex(ha, -1))
 		if nb != 1 || nh != 1 {
@@ -119,5 +120,12 @@ func TestKeaHAEditsKeepTheHABlock(t *testing.T) {
 	}
 	if !strings.Contains(r.cfg, "10.200.1.253") || !strings.Contains(r.cfg, "libdhcp_ha.so") {
 		t.Fatalf("DNS option config lost a part:\n%s", r.cfg)
+	}
+	r = baselineRunner(t, "kea-ha")
+	if _, err := (&KeaAdapter{Runner: r}).NarrowPool(ctx, "10.200.1.100", "10.200.1.101"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.cfg, `"pool": "10.200.1.100 - 10.200.1.101"`) || !strings.Contains(r.cfg, "libdhcp_ha.so") {
+		t.Fatalf("narrowed config lost a part:\n%s", r.cfg)
 	}
 }

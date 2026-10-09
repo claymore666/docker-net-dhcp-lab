@@ -623,17 +623,17 @@ func TestOverlappingACKsJudgesTheLeaseWindows(t *testing.T) {
 
 // ---- applicability and the HA samples ---------------------------------
 
-func TestPairCellRunsC5AndLeavesC10AndC12NA(t *testing.T) {
+func TestPairCellRunsC5AndLeavesC9C10AndC12NA(t *testing.T) {
 	pair := sourceadapter.NewKeaPair(nil, nil, "10.200.8.2", "10.200.8.3")
-	want := map[string]string{NameC10: "split brain", NameC12: "docker-net-dhcp-lab#11"}
+	want := map[string]string{NameC9: "without the HA hook", NameC10: "split brain", NameC12: "docker-net-dhcp-lab#11"}
 	for _, s := range Catalog {
 		ok, reason := Applicable(s, pair)
 		switch s.Name {
-		case NameC5, NameC5b, NameC5c, NameC5d, NameC1, NameC2, NameC3, NameC4:
+		case NameC5, NameC5b, NameC5c, NameC5d, NameC1, NameC2, NameC3, NameC4, NameC6, NameC6b, NameC7, NameC8:
 			if !ok {
 				t.Errorf("%s is N/A on the pair: %s", s.Name, reason)
 			}
-		case NameC10, NameC12:
+		case NameC9, NameC10, NameC12:
 			if ok || !strings.Contains(reason, want[s.Name]) {
 				t.Errorf("%s: applicable %v, reason %q, want N/A naming %q", s.Name, ok, reason, want[s.Name])
 			}

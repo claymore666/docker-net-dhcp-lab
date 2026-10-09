@@ -79,7 +79,7 @@ func NewKeaPair(primary, partner Runner, primaryID, partnerID string) *PairAdapt
 }
 
 // Capabilities is what both peers declare, plus CapFailoverPair, minus
-// CapImpair (see NAReason).
+// CapImpair and CapRenumber (see NAReason).
 func (p *PairAdapter) Capabilities() []Capability {
 	second := map[Capability]bool{}
 	for _, c := range p.Peers[1].Adapter.Capabilities() {
@@ -87,20 +87,27 @@ func (p *PairAdapter) Capabilities() []Capability {
 	}
 	var out []Capability
 	for _, c := range p.Peers[0].Adapter.Capabilities() {
-		if second[c] && c != CapImpair && c != CapFailoverPair {
+		if second[c] && !pairWithheld[c] && c != CapFailoverPair {
 			out = append(out, c)
 		}
 	}
 	return append(out, CapFailoverPair)
 }
 
+var pairWithheld = map[Capability]bool{CapImpair: true, CapRenumber: true}
+
 func (p *PairAdapter) NAReason(c Capability) (string, bool) {
-	if c != CapImpair {
-		return "", false
+	switch c {
+	case CapImpair:
+		return "the pair's HA channel shares the segment leg: netem on it delays the heartbeat up to 10 s against " +
+			"max-response-delay 6 s, both peers go partner-down, and the verdict would judge a split brain, " +
+			"not the plugin; the single-server cells carry C10 (claymore666/docker-net-dhcp-lab#12)", true
+	case CapRenumber:
+		return "the renumbered config is a single-server one without the HA hook: both peers would serve the new " +
+			"range with no HA between them, and the verdict would judge the lab's double assignment, not the " +
+			"plugin; the single-server cells carry C9 (claymore666/docker-net-dhcp-lab#12)", true
 	}
-	return "the pair's HA channel shares the segment leg: netem on it delays the heartbeat up to 10 s against " +
-		"max-response-delay 6 s, both peers go partner-down, and the verdict would judge a split brain, " +
-		"not the plugin; the single-server cells carry C10 (claymore666/docker-net-dhcp-lab#12)", true
+	return "", false
 }
 
 // Leases is the union of the peers' tables, one entry per (address,
@@ -300,6 +307,30 @@ func (p *PairAdapter) Recover(ctx context.Context) error {
 
 func (p *PairAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
 	return nil, errors.New("pair: impair is not offered on a failover pair (see NAReason)")
+}
+
+func (p *PairAdapter) Renumber(ctx context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
+	return nil, errors.New("pair: renumber is not offered on a failover pair (see NAReason)")
+}
+
+// NarrowPool narrows both peers, since a hot-standby pair serves one
+// pool between them.
+func (p *PairAdapter) NarrowPool(ctx context.Context, first, last string) (func(context.Context) error, error) {
+	return p.fanOut(ctx, func(a Adapter) (func(context.Context) error, error) { return a.NarrowPool(ctx, first, last) })
+}
+
+// Squat, StartRogue and RogueLeases act from the primary's VM: the
+// actor is a host on the segment, whichever peer serves.
+func (p *PairAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
+	return p.Peers[0].Adapter.Squat(ctx, addr, announce)
+}
+
+func (p *PairAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
+	return p.Peers[0].Adapter.StartRogue(ctx, serverAddr, first, last)
+}
+
+func (p *PairAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
+	return p.Peers[0].Adapter.RogueLeases(ctx)
 }
 
 // SendForceRenew goes out from the peer whose server identifier the
