@@ -71,8 +71,9 @@ if CLIENT_MAC=02:11:00:00:00:66 run; then
 	echo "relay-probe-test: FAIL -- an ACK to another client's MAC passed" >&2
 	fail=1
 fi
-if CLIENT_MAC="" run; then
-	echo "relay-probe-test: FAIL -- an unreadable Docker host MAC passed" >&2
+if out=$(CLIENT_MAC="" PATH="$tmp:$PATH" FRAMES="$FIX" "$REPO_ROOT/scripts/relay-probe.sh" c 10.0.0.1 10.0.0.2 "$tmp" 2>&1) ||
+	[[ $out != *"Docker host segment NIC MAC unreadable"* ]]; then
+	echo "relay-probe-test: FAIL -- an unreadable Docker host MAC was not refused as one: $out" >&2
 	fail=1
 fi
 [ "$fail" -eq 0 ] && echo "relay-probe-test: PASS"
