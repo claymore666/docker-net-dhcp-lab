@@ -714,7 +714,7 @@ func TestHASampleRecordsEachPeerUnjudged(t *testing.T) {
 	}
 }
 
-func TestRunOneAddsHASamplesToAVerdictWithEvidence(t *testing.T) {
+func TestRunOneAddsHASamplesToEveryPassAndFail(t *testing.T) {
 	shortReadyWait(t)
 	c := cSetup(t, ShapeMacvlan)
 	p := newFakePair(c.src)
@@ -726,6 +726,7 @@ func TestRunOneAddsHASamplesToAVerdictWithEvidence(t *testing.T) {
 	}{
 		{Verdict{Result: PASS, Evidence: map[string]string{}}, true},
 		{Verdict{Result: FAIL, Evidence: map[string]string{}}, true},
+		{Verdict{Result: FAIL}, true},
 		{Verdict{Result: BLOCKED}, false},
 		{Verdict{Result: BLOCKED, Evidence: map[string]string{}}, false},
 	} {
