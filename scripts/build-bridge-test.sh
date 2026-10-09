@@ -81,10 +81,36 @@ if [ "$(ageing bridge-e)" != "0" ]; then
 	fail=1
 fi
 
+# Group D (#23): IPv6 off on every bridge the script builds or adopts,
+# and no inet6 address left on it.
+for b in bridge-a bridge-e; do
+	if [ "$(cat "/proc/sys/net/ipv6/conf/$b/disable_ipv6")" != "1" ]; then
+		echo "build-bridge-test: FAIL -- $b disable_ipv6 is not 1" >&2
+		fail=1
+	fi
+	if [ -n "$(ip -6 -o addr show dev "$b")" ]; then
+		echo "build-bridge-test: FAIL -- $b carries an IPv6 address" >&2
+		fail=1
+	fi
+done
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "build-bridge-test: PASS -- all 5 cases behaved as expected"
+echo "build-bridge-test: PASS -- all 6 cases behaved as expected"
 '
+
+# Order check on the source: a new bridge gets IPv6 off before "up".
+# shellcheck disable=SC2016 # literal source text, not an expansion
+add_line=$(grep -n 'ip link add name "$bridge" type bridge' "$BUILD_BRIDGE" | cut -d: -f1)
+# shellcheck disable=SC2016 # literal source text, not an expansion
+off_line=$(grep -n '^	no_ipv6 "$bridge"$' "$BUILD_BRIDGE" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016 # literal source text, not an expansion
+up_line=$(grep -n 'ip link set "$bridge" up' "$BUILD_BRIDGE" | cut -d: -f1)
+if [ -z "$add_line" ] || [ -z "$off_line" ] || [ -z "$up_line" ] ||
+	[ "$add_line" -ge "$off_line" ] || [ "$off_line" -ge "$up_line" ]; then
+	echo "build-bridge-test: FAIL -- build-bridge.sh does not turn IPv6 off between add and up" >&2
+	exit 1
+fi
 
 unshare -rnm bash -c "$inner" bash "$BUILD_BRIDGE"

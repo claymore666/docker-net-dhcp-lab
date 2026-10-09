@@ -92,20 +92,21 @@ func NetworkName(cell string, shape Shape) string {
 }
 
 // forwardRuleAdd, forwardRuleCheck and forwardRuleDel are the exact
-// recipe docs/bridge-mode.md's "Prepare a host bridge" walkthrough gives
-// (line 53): appended (-A, not CI harness's -I), -i only (no -o mirror),
-// IPv4 only. `grep -rn ip6tables docs/` in the plugin repo has zero
-// hits -- the page's only IPv6 content is the unrelated ipv6_mode
-// network option -- so this stays IPv4-only, matching what a user who
-// follows the page verbatim would actually run.
-func forwardRuleAdd(br string) string {
-	return fmt.Sprintf("sudo iptables -A FORWARD -i %s -j ACCEPT", br)
-}
-func forwardRuleCheck(br string) string {
-	return fmt.Sprintf("sudo iptables -C FORWARD -i %s -j ACCEPT", br)
-}
-func forwardRuleDel(br string) string {
-	return fmt.Sprintf("sudo iptables -D FORWARD -i %s -j ACCEPT", br)
+// recipe docs/bridge-mode.md's "build the bridge yourself" walkthrough
+// gives: appended (-A, not CI harness's -I), -i only (no -o mirror).
+// The page adds "For DHCPv6 (`ipv6_mode`), add the same rule with
+// `ip6tables`", so each has a forwardRule6 twin; the segment carries
+// DHCPv6 and RAs (#23).
+func forwardRuleAdd(br string) string   { return forwardRule("iptables", "-A", br) }
+func forwardRuleCheck(br string) string { return forwardRule("iptables", "-C", br) }
+func forwardRuleDel(br string) string   { return forwardRule("iptables", "-D", br) }
+
+func forwardRule6Add(br string) string   { return forwardRule("ip6tables", "-A", br) }
+func forwardRule6Check(br string) string { return forwardRule("ip6tables", "-C", br) }
+func forwardRule6Del(br string) string   { return forwardRule("ip6tables", "-D", br) }
+
+func forwardRule(bin, op, br string) string {
+	return fmt.Sprintf("sudo %s %s FORWARD -i %s -j ACCEPT", bin, op, br)
 }
 
 // writeRemoteFile idempotently overwrites path on r with content via a
@@ -211,6 +212,9 @@ func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 	if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
 		return false
 	}
+	if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
+		return false
+	}
 	return true
 }
 
@@ -261,6 +265,9 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		if _, err := r.Run(ctx, forwardRuleAdd(br)); err != nil {
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, forwardRuleAdd(br), err)
 		}
+		if _, err := r.Run(ctx, forwardRule6Add(br)); err != nil {
+			return "", fmt.Errorf("networkup(%s): %s: %w", shape, forwardRule6Add(br), err)
+		}
 		// The FORWARD rule above is the only thing standing between a
 		// clean create and a bridge that silently drops every DHCP
 		// packet: br_netfilter routes bridged traffic through FORWARD,
@@ -272,6 +279,11 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 			return "", fmt.Errorf(
 				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
 				shape, forwardRuleAdd(br), err)
+		}
+		if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
+			return "", fmt.Errorf(
+				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, DHCPv6); bridge shape cannot pass DHCPv6 or RAs without it: %w",
+				shape, forwardRule6Add(br), err)
 		}
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
 			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
@@ -391,6 +403,7 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		// torn down in below; without it, every run's ACCEPT rule for
 		// its now-deleted bridge name pile up in FORWARD forever.
 		_, _ = r.Run(ctx, forwardRuleDel(br))
+		_, _ = r.Run(ctx, forwardRule6Del(br))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
 		// Symmetric with writeBridgePersistence: without removing the

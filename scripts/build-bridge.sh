@@ -31,12 +31,23 @@ if [ "${1:-}" = "--add-port" ]; then
 	add_port=${2:?--add-port needs an interface name}
 fi
 
+# No IPv6 on the bridge itself (#23 group D): the segment carries the
+# source's RAs, and a host-side address formed from them would put the
+# lab host on the cell's /64. Set before "up", so not even a link-local
+# or a router solicitation leaves it.
+no_ipv6() {
+	echo 1 >"/proc/sys/net/ipv6/conf/$1/disable_ipv6"
+}
+
 if [ ! -d "/sys/class/net/$bridge" ]; then
 	ip link add name "$bridge" type bridge
+	no_ipv6 "$bridge"
 	ip link set "$bridge" up
 elif [ ! -d "/sys/class/net/$bridge/bridge" ]; then
 	echo "build-bridge: $bridge exists and is not a bridge" >&2
 	exit 1
+else
+	no_ipv6 "$bridge"
 fi
 
 # Refuse on what is ALREADY enslaved, before considering any new port: a
