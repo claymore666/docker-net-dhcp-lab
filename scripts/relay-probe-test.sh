@@ -41,7 +41,7 @@ cmd=${*: -1}
 case "$cmd" in
 */sys/class/net/eth1/address*)
 	case "$*" in
-	*lab@10.0.0.2*) echo "${RELAY_MAC-02:11:00:00:00:01}" ;;
+	*lab@10.200.255.112*) echo "${RELAY_MAC-02:11:00:00:00:01}" ;;
 	*) echo "${CLIENT_MAC-02:11:00:00:00:10}" ;;
 	esac
 	;;
@@ -53,7 +53,7 @@ cat >"$tmp/sudo" <<'STUB'
 cat "$FRAMES"
 STUB
 chmod +x "$tmp/ssh" "$tmp/sudo"
-run() { PATH="$tmp:$PATH" FRAMES="${FRAMES:-$FIX}" "$REPO_ROOT/scripts/relay-probe.sh" c 10.0.0.1 10.0.0.2 "$tmp" >/dev/null 2>&1; }
+run() { PATH="$tmp:$PATH" FRAMES="${FRAMES:-$FIX}" "$REPO_ROOT/scripts/relay-probe.sh" c 10.200.255.110 10.200.255.112 "$tmp" >/dev/null 2>&1; }
 run || { echo "relay-probe-test: FAIL -- a healthy relay failed the probe" >&2; fail=1; }
 if UDHCPC_RC=1 run; then
 	echo "relay-probe-test: FAIL -- a probe without a lease passed" >&2
@@ -71,7 +71,7 @@ if CLIENT_MAC=02:11:00:00:00:66 run; then
 	echo "relay-probe-test: FAIL -- an ACK to another client's MAC passed" >&2
 	fail=1
 fi
-if out=$(CLIENT_MAC="" PATH="$tmp:$PATH" FRAMES="$FIX" "$REPO_ROOT/scripts/relay-probe.sh" c 10.0.0.1 10.0.0.2 "$tmp" 2>&1) ||
+if out=$(CLIENT_MAC="" PATH="$tmp:$PATH" FRAMES="$FIX" "$REPO_ROOT/scripts/relay-probe.sh" c 10.200.255.110 10.200.255.112 "$tmp" 2>&1) ||
 	[[ $out != *"Docker host segment NIC MAC unreadable"* ]]; then
 	echo "relay-probe-test: FAIL -- an unreadable Docker host MAC was not refused as one: $out" >&2
 	fail=1
