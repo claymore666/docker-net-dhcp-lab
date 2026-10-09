@@ -36,6 +36,9 @@ type Env struct {
 	// suffix (issue #3, A13 redesign): A13 checks the container's own
 	// default route against this, not against a hardcoded address.
 	SegGateway string
+	// SourceAddr is the source's own segment address; it equals SegGateway
+	// on every cell without a relay (#11, #23).
+	SourceAddr string
 	// SegSubnet, PoolStart and PoolEnd are the cell's /24 and the source's
 	// main pool from lab.yaml (group B, #23): the reservation, class-pool
 	// and DNS-option addresses are chosen from SegSubnet and refused
@@ -135,6 +138,11 @@ const (
 	NameC3  = "C3-source-down-past-expiry"
 	NameC4  = "C4-restart-without-lease-db"
 	NameC5  = "C5-failover-primary-killed"
+	NameC6  = "C6-early-squatter"
+	NameC6b = "C6b-late-squatter"
+	NameC7  = "C7-rogue-server"
+	NameC8  = "C8-pool-exhausted"
+	NameC9  = "C9-subnet-renumbered"
 	NameC10 = "C10-loss-and-latency"
 	NameC11 = "C11-validate-dhcp-create"
 	NameC12 = "C12-relay"
@@ -165,15 +173,18 @@ const (
 // its own second network is Docker's default IPAM, never this pool) +
 // A14(1) + A15(5, peak replica count) + A16(1) = 38, plus group B's 11
 // (poolDemand, counted as if every reservation and the class pool missed),
-// plus group C's 10: C1(2, if a failed run still kept a lease) + C2(1) +
+// plus group C's 17: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
-// second) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
+// second) + C6(1, the squatted address is reserved outside the pool) +
+// C6b(2) + C7(2, the rogue's pool is its own) + C8(1, the fills sit on
+// the narrowed range outside the pool) + C9(1, the renumbered lease is
+// reset) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
 // plus group F's 7: one each for the user class, 108 not asked and rapid commit, two each
 // for 108 forced and FORCERENEW (their control clients, #21); the IPv6 rows never run (#20).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 66
+const MinPoolAddresses = 73
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -183,7 +194,8 @@ var poolDemand = map[string]int{
 	NameA12: 2, NameA13: 1, NameA14: 1, NameA15: 5, NameA16: 1,
 	NameB1: 1, NameB2: 1, NameB3: 1, NameB4: 2, NameB5: 1, NameB6: 1,
 	NameB7: 1, NameB8: 3,
-	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC10: 2,
+	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC6: 1,
+	NameC6b: 2, NameC7: 2, NameC8: 1, NameC9: 1, NameC10: 2,
 	NameC11: 1, NameC12: 0,
 	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 0, NameF5: 0, NameF6: 0, NameF7: 0, NameF8: 2,
@@ -306,6 +318,11 @@ var Catalog = []Scenario{
 	{Name: NameC3, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart}, Run: runC3},
 	{Name: NameC4, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runC4},
 	{Name: NameC5, Needs: []sourceadapter.Capability{sourceadapter.CapFailoverPair}, Run: runNeverReached},
+	{Name: NameC6, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapReserveClientID, sourceadapter.CapSquatter}, Run: runC6},
+	{Name: NameC6b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapSquatter}, Run: runC6b},
+	{Name: NameC7, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRogueServer}, Run: runC7},
+	{Name: NameC8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapNarrowPool}, Run: runC8},
+	{Name: NameC9, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRenumber}, Run: runC9},
 	{Name: NameC10, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapImpair}, Run: runC10},
 	{Name: NameC11, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}, Run: runC11},
 	{Name: NameC12, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runNeverReached},

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"net/netip"
+	"path/filepath"
 	"testing"
 
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
 )
 
@@ -156,5 +159,29 @@ func TestRemainingScenarioNamesAllDoneReturnsEmpty(t *testing.T) {
 	got := remainingScenarioNames(catalog, map[string]bool{"A1": true, "A2": true})
 	if len(got) != 0 {
 		t.Fatalf("got %v, want empty", got)
+	}
+}
+
+// Every lab.yaml cell has no relay yet, so its router and its source are
+// the same seg_address without the CIDR suffix (#11, #23).
+func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
+	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for name, c := range cfg.Cells {
+		if c.Source == nil {
+			continue
+		}
+		seen++
+		gw, src := segAddresses(c.Source)
+		p, err := netip.ParsePrefix(c.Source.SegAddress)
+		if err != nil || gw != p.Addr().String() || gw != src {
+			t.Errorf("%v: router %q, source %q from seg_address %q", name, gw, src, c.Source.SegAddress)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("lab.yaml holds no cell with a source")
 	}
 }

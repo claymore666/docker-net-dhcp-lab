@@ -25,6 +25,7 @@ var cFast = cTiming{
 	stopAfter: 20 * ms, c2Start: 60 * ms, c2Settle: 400 * ms,
 	c3Record: 40 * ms, c3Start: 80 * ms, c3Window: 200 * ms,
 	c4Wait: 40 * ms, c1Settle: 5 * ms, c10Lift: 300 * ms,
+	c6bWindow: 200 * ms, c8Settle: 20 * ms, c8Links: 50 * ms, c9Wait: 300 * ms,
 }
 
 // cRunner is bRunner plus what group C asks the docker host: the timed
@@ -201,6 +202,11 @@ func TestCatalogRegistersGroupCWithTheNeedsOfTheDesign(t *testing.T) {
 		NameC3:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart},
 		NameC4:  {sourceadapter.CapV4, sourceadapter.CapShortLease},
 		NameC5:  {sourceadapter.CapFailoverPair},
+		NameC6:  {sourceadapter.CapV4, sourceadapter.CapReserveClientID, sourceadapter.CapSquatter},
+		NameC6b: {sourceadapter.CapV4, sourceadapter.CapSquatter},
+		NameC7:  {sourceadapter.CapV4, sourceadapter.CapRogueServer},
+		NameC8:  {sourceadapter.CapV4, sourceadapter.CapNarrowPool},
+		NameC9:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRenumber},
 		NameC10: {sourceadapter.CapV4, sourceadapter.CapImpair},
 		NameC11: {sourceadapter.CapV4, sourceadapter.CapRestart},
 		NameC12: {sourceadapter.CapRelay},
