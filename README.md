@@ -191,7 +191,9 @@ Each scenario on each shape and source gets one verdict:
   reason. Before a macvlan or ipvlan shape it waits, at most 30 s, for the
   segment NIC to lose the previous shape's child link and records the wait
   in the evidence bundle (`<cell>-<shape>-parent-ready.txt`); a child that
-  is still there blocks the shape and is named.
+  is still there blocks the shape and is named. A reboot scenario whose
+  docker host never answers ssh again within its 3 min bound is BLOCKED
+  too; a host that answers but stays on the old boot is a FAIL.
 - **N/A**: the scenario does not apply, with the reason. Example: an
   `ipvlan` container shares its parent's MAC, so the fixed-MAC reboot
   cannot run there.
@@ -244,7 +246,12 @@ under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
 `/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
 `(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1; a
-larger `-j` is accepted and reported as an overcommit. Starts are spaced
+larger `-j` is accepted and reported as an overcommit: six cells are 18
+guest vCPUs, and on a 16-vCPU host with three of them rebooting at once
+their guests stopped accepting new ssh connections for about four minutes
+(#38). `labctl run` therefore retries an ssh call whose connection failed
+before the remote command ran, for up to 5 min; once that bound is used up,
+later calls to the same guest try once each until one succeeds. Starts are spaced
 `--stagger` seconds apart (default 60, `0` disables) so that the guests do
 not all boot, install the plugin and open ssh at the same moment. A cell
 that fails does not stop the others, is torn down with `down-cell.sh` as

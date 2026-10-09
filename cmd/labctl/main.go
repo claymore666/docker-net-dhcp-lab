@@ -334,8 +334,11 @@ func cmdRun(args []string) int {
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
 	sourceMgmtIP := strings.SplitN(cell.Source.MgmtAddress, "/", 2)[0]
 
-	hostRunner := sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
-	sourceRunner := sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
+	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
+	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	sourceRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+		Inner: sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
 	source, err := newSourceAdapter(cell.Source.Type, sourceRunner)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
