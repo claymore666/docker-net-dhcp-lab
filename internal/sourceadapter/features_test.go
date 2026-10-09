@@ -100,6 +100,7 @@ var featureCases = []featureCase{
 	{FeatureOffer108, FeatureParams{Seconds: 1800}, CapOption108},
 	{FeatureForce108, FeatureParams{Seconds: 1800, ClientID: f1ID}, CapOption108},
 	{FeatureRapidCommit4, FeatureParams{}, CapRapidCommit4},
+	{FeatureForceRenewNonce, FeatureParams{ClientID: f1ID, Nonce: katNonce}, CapForceRenewNonce},
 }
 
 func hasCap(a Adapter, c Capability) bool {
@@ -245,6 +246,9 @@ func TestEnableFeatureRejectsBadParametersBeforeAnySSH(t *testing.T) {
 		{FeatureOffer108, FeatureParams{}},
 		{FeatureForce108, FeatureParams{Seconds: 1, ClientID: "not-hex"}},
 		{FeatureForce108, FeatureParams{Seconds: 1, ClientID: `00:aa'; id #`}},
+		{FeatureForceRenewNonce, FeatureParams{ClientID: f1ID, Nonce: katNonce[:15]}},
+		{FeatureForceRenewNonce, FeatureParams{ClientID: f1ID}},
+		{FeatureForceRenewNonce, FeatureParams{ClientID: `00:aa" or true`, Nonce: katNonce}},
 		{"bogus", FeatureParams{}},
 	}
 	for name := range baselines {
@@ -359,6 +363,48 @@ func TestClassGuardsAreASingleEquality(t *testing.T) {
 			if strings.Contains(m[1], " or ") || strings.Contains(m[1], " and ") || strings.Contains(m[1], "true") {
 				t.Errorf("isc %s match %q is not a single comparison", name, m[1])
 			}
+		}
+	}
+}
+
+// The F8-forcerenew snippets per source (defeats 9, 16): 145 and 90 only for the
+// client id, 90 = 03 01 00, replay 1, type 1, the nonce; 90 only for a
+// message with option 50, so not in a renewal's ACK (RFC 6704 3.1.3).
+func TestForceRenewSnippetsAreScopedAndCarryTheNonce(t *testing.T) {
+	p := FeatureParams{ClientID: f1ID, Nonce: katNonce}
+	const opt90 = "030100" + "0000000000000001" + "01" + "00112233445566778899aabbccddeeff"
+	colon90 := hexColon(ForceRenewNonceOption(katNonce))
+	if hexPlain(colon90) != opt90 {
+		t.Fatalf("option 90 value %s, want %s", hexPlain(colon90), opt90)
+	}
+	kc := enabled(t, "kea", FeatureForceRenewNonce, p)
+	mustContain(t, "kea f8", kc,
+		`{ "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_flex_option.so"`,
+		`{ "code": 90, "add": "ifelse(option[61].hex == 0x006c61622d663262 and pkt4.msgtype == 3 and option[50].exists, 0x`+opt90+`, '')" }`,
+		`{ "code": 145, "add": "ifelse(option[61].hex == 0x006c61622d663262, 0x01, '')" }`)
+	if strings.Count(kc, "libdhcp_lease_cmds.so") != 1 {
+		t.Error("kea: the lease_cmds hook must stay exactly once")
+	}
+	ic := enabled(t, "isc-dhcp", FeatureForceRenewNonce, p)
+	mustContain(t, "isc f8", ic,
+		"option lab-fr-capable code 145 = unsigned integer 8;", "option lab-fr-auth code 90 = string;",
+		"match if option dhcp-client-identifier = "+f1ID+";", "encode-int(145, 8), encode-int(90, 8)",
+		"if option dhcp-message-type = 3 and exists dhcp-requested-address {\n    option lab-fr-auth "+colon90+";")
+	if strings.Count(ic, "lab-fr-auth") != 2 || strings.Count(ic, "option lab-fr-auth "+colon90) != 1 || strings.Index(ic, "option lab-fr-auth "+colon90) < strings.Index(ic, `class "f8"`) {
+		t.Error("isc: option 90 must sit inside the f8 class only")
+	}
+	dc := enabled(t, "dnsmasq", FeatureForceRenewNonce, p)
+	mustContain(t, "dnsmasq f8", dc, "dhcp-host=id:"+f1ID+",set:f8\n",
+		"dhcp-match=set:f8sel,option:requested-address\n", "dhcp-option-force=tag:f8,145,01\n", "dhcp-option-force=tag:f8,tag:f8sel,90,"+colon90+"\n")
+	if regexp.MustCompile(`(?m)^dhcp-option-force=tag:f8,90,`).MatchString(dc) {
+		t.Error("dnsmasq: 90 without the option 50 tag reaches a renewal's ACK")
+	}
+	if regexp.MustCompile(`(?m)^dhcp-option(-force)?=(145|90),`).MatchString(dc) {
+		t.Error("dnsmasq: an untagged 145 or 90 reaches every client")
+	}
+	for _, m := range regexp.MustCompile(`ifelse\(([^,]*),`).FindAllStringSubmatch(kc, -1) {
+		if !regexp.MustCompile(`^option\[61\]\.hex == 0x[0-9a-f]+( and pkt4\.msgtype == 3 and option\[50\]\.exists)?$`).MatchString(m[1]) {
+			t.Errorf("kea flex_option guard %q is not the client-id equality", m[1])
 		}
 	}
 }

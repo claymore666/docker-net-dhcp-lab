@@ -66,6 +66,11 @@ type fakeAdapter struct {
 	// featureRestoreCtx is ctx.Err() as the last restore saw it: a
 	// cancelled scenario context must not reach the restore.
 	featureRestoreCtx error
+
+	// F8-forcerenew (#21): forceRenews records each SendForceRenew; onForceRenew,
+	// when set, answers it (a test adds the frame to its fake capture).
+	forceRenews  []sourceadapter.ForceRenewParams
+	onForceRenew func(sourceadapter.ForceRenewParams) (string, error)
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -143,6 +148,13 @@ func (f *fakeAdapter) EnableFeature(_ context.Context, ft sourceadapter.Feature,
 	}, nil
 }
 func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
+func (f *fakeAdapter) SendForceRenew(_ context.Context, _ []byte, p sourceadapter.ForceRenewParams) (string, error) {
+	f.forceRenews = append(f.forceRenews, p)
+	if f.onForceRenew != nil {
+		return f.onForceRenew(p)
+	}
+	return fmt.Sprintf("forcerenew mode=%s xid=0x%08x", p.Mode, len(f.forceRenews)), nil
+}
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	if f.shortenErr != nil {
 		return nil, f.shortenErr

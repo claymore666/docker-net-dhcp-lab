@@ -48,10 +48,11 @@ FINDING_CITE_RE='\bF[0-9]+\b'
 SCENARIO_ID_RES=(
 	'\bF1-user-class-pool\b' '\bF2a-option-108-not-asked\b' '\bF2b-option-108-forced\b' '\bF3-rapid-commit-v4\b'
 	'\bF4-rapid-commit-v6\b' '\bF5-temporary-address\b' '\bF6-prefix-delegation\b' '\bF7-pref64\b'
+	'\bF8-forcerenew\b'
 	'^\| F1 \| user class pool \|' '^\| F2a \| IPv6-only preferred, not asked for \|'
 	'^\| F2b \| IPv6-only preferred, sent unasked \|' '^\| F3 \| rapid commit, IPv4 \|'
 	'^\| F4 \| rapid commit, IPv6 \|' '^\| F5 \| temporary address \|'
-	'^\| F6 \| prefix delegation \|' '^\| F7 \| NAT64 prefix \|'
+	'^\| F6 \| prefix delegation \|' '^\| F7 \| NAT64 prefix \|' '^\| F8 \| FORCERENEW, signed and unsigned \|'
 )
 # A `.claude/...` path is never openable by a public reader; matched as
 # a plain fixed string, not a regex, so it needs no escaping and cannot

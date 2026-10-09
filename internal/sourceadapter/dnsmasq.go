@@ -29,7 +29,7 @@ type DnsmasqAdapter struct {
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce}
 }
 
 // dnsmasqLeaseFile is the on-disk lease table this adapter reads

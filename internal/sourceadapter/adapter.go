@@ -58,6 +58,9 @@ const (
 	// source answers a DHCPv4 DISCOVER that carries option 80 with an
 	// ACK (RFC 4039; dnsmasq only, #20).
 	CapRapidCommit4 Capability = "rapid-commit-4"
+	// CapForceRenewNonce declares EnableFeature(FeatureForceRenewNonce)
+	// and SendForceRenew (F8-forcerenew, RFC 6704, #21).
+	CapForceRenewNonce Capability = "forcerenew-nonce"
 	// CapV6 is declared by no adapter until group D's IPv6 segment
 	// exists; the IPv6 rows of group F stay N/A through Applicable until then (#20).
 	CapV6 Capability = "v6"
@@ -155,6 +158,11 @@ type Adapter interface {
 	// that writes the captured bytes back and restarts, and may be
 	// called again after a failure. The caller defers it on every path.
 	EnableFeature(ctx context.Context, f Feature, p FeatureParams) (restore func(ctx context.Context) error, err error)
+	// SendForceRenew sends one FORCERENEW frame from the source's segment
+	// leg with script, the repo's scripts/forcerenew-send.py, and returns
+	// its one-line record (F8-forcerenew, #21). It claims no address and binds no
+	// port, so the server itself is untouched.
+	SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error)
 }
 
 // Runner executes one command on the source VM's own management

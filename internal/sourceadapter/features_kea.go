@@ -12,6 +12,9 @@ var (
 	keaClassesRE   = regexp.MustCompile(`("client-classes": \[)`)
 	keaNotB5RE     = regexp.MustCompile(`(\{ "name": "not-b5", "test": ")not member\('b5'\)(" \})`)
 	keaClassPoolRE = regexp.MustCompile(`(\{ "pool": "[^"]*", "client-class": "b5" \})`)
+	// keaLeaseCmdsHookRE anchors the flex_option hook on the lease_cmds
+	// line and reuses its directory, which is per architecture.
+	keaLeaseCmdsHookRE = regexp.MustCompile(`(\{ "library": "([^"]*/)libdhcp_lease_cmds\.so" \})`)
 )
 
 // EnableFeature rewrites the running kea-dhcp4.conf (#20). Kea 2.6.3
@@ -40,6 +43,15 @@ func (a *KeaAdapter) EnableFeature(ctx context.Context, f Feature, p FeaturePara
 		already = `"name": "f2b"`
 		class := fmt.Sprintf(`${1}`+"\n"+`        { "name": "f2b", "test": "option[61].hex == 0x%s", "option-data": [ { "name": "v6-only-preferred", "data": "%d", "always-send": true } ] },`, hexPlain(v.clientID), v.seconds)
 		edits = []configEdit{{keaClassesRE, class, "the client-classes list"}}
+	case FeatureForceRenewNonce:
+		// Kea refuses an option-def for 90; flex_option adds it, and its
+		// expression sees the query: a REQUEST with option 50 selects the
+		// first ACK, not the renewal's (RFC 6704 3.1.3, RFC 2131 table 5;
+		// MEASURED 2.6.3, lab #21).
+		already = "libdhcp_flex_option"
+		id := hexPlain(v.clientID)
+		hook := fmt.Sprintf(`${1},`+"\n"+`        { "library": "${2}libdhcp_flex_option.so", "parameters": { "options": [ { "code": 90, "add": "ifelse(option[61].hex == 0x%s and pkt4.msgtype == 3 and option[50].exists, 0x%s, '')" }, { "code": 145, "add": "ifelse(option[61].hex == 0x%s, 0x01, '')" } ] } }`, id, hexPlain(v.auth90Hex()), id)
+		edits = []configEdit{{keaLeaseCmdsHookRE, hook, "the lease_cmds hook line"}}
 	default:
 		return nil, fmt.Errorf("kea: %s is not supported by Kea 2.6.3", f)
 	}
