@@ -124,6 +124,21 @@ type d1Obs struct {
 	ExtraTA netip.Addr
 }
 
+// raBefore: some RA carrying prefix p as autonomous was on the wire by t.
+func raBefore(ras []RAMsg, p netip.Prefix, t time.Time) bool {
+	for _, ra := range ras {
+		if ra.At.After(t) {
+			continue
+		}
+		for _, x := range ra.PIOs {
+			if x.Auto && x.Prefix == p {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func leftover(as []addr6, allowed ...netip.Addr) (netip.Addr, bool) {
 	for _, a := range globals(as) {
 		if !slices.Contains(allowed, a.Addr) {
@@ -326,8 +341,9 @@ type d2Obs struct {
 // the address "from a router advertisement's autonomous prefix ... and
 // sends no Solicit", the modified EUI-64 of the MAC by default
 // (ipv6_iid), with the PIO's lifetimes. The prefix must be in an RA this
-// scenario captured, and the address is the container's own MAC's, so a
-// leftover address cannot pass (design defeat 5).
+// scenario captured before the start read, and the address is the
+// container's own MAC's, so a leftover address cannot pass (design
+// defeat 5).
 func judgeD2(o d2Obs) fOutcome {
 	for _, m := range o.Msgs {
 		if isClient6(m.Type) {
@@ -359,6 +375,9 @@ func judgeD2(o d2Obs) fOutcome {
 	}
 	if _, ok := findAddr6(o.Start.Addrs, want); !ok {
 		return fFail("right after docker run returned the container's link has no %s (%s plus the modified EUI-64 of %s)", want, pio.Prefix, o.MAC)
+	}
+	if !raBefore(o.RAs, pio.Prefix, o.Start.At) {
+		return fFail("%s was on the link at the start read, but the capture shows no RA with %s before it", want, pio.Prefix)
 	}
 	for _, r := range []d6Read{o.Start, o.Settled} {
 		if extra, bad := leftover(r.Addrs, want); bad {
@@ -400,8 +419,8 @@ func judgeNoRA(ras []RAMsg) (fOutcome, bool) {
 // the endpoint without a DHCPv6 address". The source's DHCPv6 server
 // keeps running with its RAs off, and the docs add that "a server that is
 // there answers a Solicit whether or not a router advertises", so a Reply
-// on the wire puts the row outside that table: then only the start and
-// "no address beyond the granted one" are judged, the rest recorded.
+// on the wire puts the row outside that table: then the granted address
+// must be on the link and in inspect, with nothing beyond it.
 func judgeD1c(startErr error, msgs []DHCP6Msg, settled []addr6, inspect string) fOutcome {
 	if startErr != nil {
 		return fFail("the container did not start with no RA on the segment: %v", startErr)
@@ -424,7 +443,20 @@ func judgeD1c(startErr error, msgs []DHCP6Msg, settled []addr6, inspect string) 
 		return fFail("with no RA on the segment the container's link carries %s, which no Reply granted", extra)
 	}
 	if len(granted) > 0 {
-		return fOK("no RA on the segment: the endpoint started; the source still answered the Solicit with %v, so the docs' no-advertisement row does not apply (link %v, inspect %q, %d Solicits, recorded)", granted, globals(settled), inspect, solicits)
+		var onLink netip.Addr
+		for _, g := range granted {
+			if _, ok := findAddr6(settled, g); ok {
+				onLink = g
+				break
+			}
+		}
+		if !onLink.IsValid() {
+			return fFail("with no RA on the segment a Reply granted %v, but the container's link carries none of it (link %v)", granted, globals(settled))
+		}
+		if inspect != onLink.String() {
+			return fFail("with no RA on the segment docker inspect reports GlobalIPv6Address %q, the Reply and the link hold %s", inspect, onLink)
+		}
+		return fOK("no RA on the segment: the endpoint started; the source still answered the Solicit with %s, on the link and in inspect, so the docs' no-advertisement row does not apply (%d Solicits, recorded)", onLink, solicits)
 	}
 	if inspect != "" {
 		return fFail("with no RA on the segment docker inspect reports GlobalIPv6Address %s", inspect)

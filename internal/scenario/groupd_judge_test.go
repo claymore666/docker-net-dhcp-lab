@@ -233,6 +233,12 @@ func TestJudgeD2(t *testing.T) {
 				o.RAs[i].At = d6At(30)
 			}
 		}, BLOCKED, "no RA with an autonomous prefix"},
+		"RA only after the start read": {func(o *d2Obs) { o.RAs[0].At = d6At(3) }, FAIL, "no RA with fd42:200:0:100::/64 before it"},
+		"only another prefix before the start read": {func(o *d2Obs) {
+			o.RAs[0].At = d6At(3)
+			o.RAs[1].At = d6At(-5)
+			o.RAs[1].PIOs[0].Prefix = netip.MustParsePrefix("fd42:200:0:300::/64")
+		}, FAIL, "no RA with fd42:200:0:100::/64 before it"},
 		"A flag off": {func(o *d2Obs) {
 			for i := range o.RAs {
 				o.RAs[i].PIOs[0].Auto = false
@@ -283,7 +289,10 @@ func TestJudgeNoRAAndTheNoRARows(t *testing.T) {
 	needF(t, judgeD1c(nil, solicit, naOnLink, ""), FAIL, "which no Reply granted")
 	needF(t, judgeD1c(nil, solicit, []addr6{d6LL}, d6NA.String()), FAIL, "docker inspect")
 	needF(t, judgeD1c(nil, answered, naOnLink, d6NA.String()), PASS, "does not apply")
-	needF(t, judgeD1c(nil, answered, []addr6{d6LL}, ""), PASS, "does not apply")
+	needF(t, judgeD1c(nil, answered, []addr6{d6LL}, ""), FAIL, "carries none of it")
+	needF(t, judgeD1c(nil, answered, []addr6{d6LL}, d6NA.String()), FAIL, "carries none of it")
+	needF(t, judgeD1c(nil, answered, naOnLink, ""), FAIL, "docker inspect")
+	needF(t, judgeD1c(nil, answered, naOnLink, "fd42:200:0:100::99"), FAIL, "docker inspect")
 	other := append(append([]addr6{}, naOnLink...), addr6{Addr: netip.MustParseAddr("fd42:200:0:100::99"), Bits: 128, Scope: "global"})
 	needF(t, judgeD1c(nil, answered, other, d6NA.String()), FAIL, "fd42:200:0:100::99")
 	needF(t, judgeEndpointFails(errors.New("exit 125")), PASS, "endpoint failed")

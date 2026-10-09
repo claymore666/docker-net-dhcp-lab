@@ -94,7 +94,8 @@ func NetworkName(cell string, shape Shape) string {
 // forwardRuleAdd, forwardRuleCheck and forwardRuleDel are the exact
 // recipe docs/bridge-mode.md's "build the bridge yourself" walkthrough
 // gives: appended (-A, not CI harness's -I), -i only (no -o mirror).
-// The page adds "For DHCPv6 (`ipv6_mode`), add the same rule with
+// The walkthrough has no ip6tables line; the page's plugin-made-bridge
+// section says "For DHCPv6 (`ipv6_mode`), add the same rule with
 // `ip6tables`", so each has a forwardRule6 twin; the segment carries
 // DHCPv6 and RAs (#23).
 func forwardRuleAdd(br string) string   { return forwardRule("iptables", "-A", br) }

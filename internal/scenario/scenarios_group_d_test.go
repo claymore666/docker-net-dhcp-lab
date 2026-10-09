@@ -20,6 +20,9 @@ type d6Cap struct {
 	ras   []RAMsg
 	first time.Time
 	reads int
+	// raAt, when set, stamps the RAs instead: an RA heard before the
+	// start read, as SLAAC needs.
+	raAt time.Time
 }
 
 func (c *d6Cap) Messages6(context.Context, string, string) ([]DHCP6Msg, []RAMsg, error) {
@@ -35,6 +38,9 @@ func (c *d6Cap) Messages6(context.Context, string, string) ([]DHCP6Msg, []RAMsg,
 	ras := make([]RAMsg, len(c.ras))
 	for i, r := range c.ras {
 		r.At = c.first
+		if !c.raAt.IsZero() {
+			r.At = c.raAt
+		}
 		ras[i] = r
 	}
 	return msgs, ras, nil
@@ -207,7 +213,7 @@ func TestRunD2PassesOnTheEUI64Address(t *testing.T) {
 	f := newD6Fix(t, ShapeMacvlan, "")
 	o, want := goodD2(t)
 	f.h.forceMAC = d2MAC
-	f.cap.msgs, f.cap.ras = nil, o.RAs[:1]
+	f.cap.msgs, f.cap.ras, f.cap.raAt = nil, o.RAs[:1], time.Now()
 	ll := addrLine(d6LL.Addr.String(), 64, "link", "forever", "forever")
 	f.h.start = ll + addrLine(want.String(), 64, "global", "7200sec", "3600sec")
 	f.h.settled = ll + addrLine(want.String(), 64, "global", "7200sec", "3600sec")
