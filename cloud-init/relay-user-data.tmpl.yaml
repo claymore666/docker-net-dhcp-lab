@@ -1,0 +1,49 @@
+#cloud-config
+# Relay VM of a relay cell (#11). scripts/up-relay.sh substitutes the
+# placeholders; the two config files arrive base64-encoded, rendered by
+# `labctl resolve` from the same Go code the relay's Ready check
+# compares against, so there is no second copy here.
+hostname: __RELAY_HOSTNAME__
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  # A native unit before the package (#11): the Debian init script runs
+  # dhcrelay with -q and no -d, and its postinst starts it against an
+  # empty SERVERS. With a native unit in place invoke-rc.d skips that
+  # start (inferred from invoke-rc.d's SourcePath check, a host row).
+  - |
+    cat >/etc/systemd/system/isc-dhcp-relay.service <<'UNITEOF'
+    [Unit]
+    Description=ISC DHCP relay (lab)
+    Wants=network-online.target
+    After=network-online.target
+
+    [Service]
+    Type=simple
+    EnvironmentFile=/etc/default/isc-dhcp-relay
+    ExecStart=/usr/sbin/dhcrelay -d $OPTIONS $SERVERS
+    Restart=no
+
+    [Install]
+    WantedBy=multi-user.target
+    UNITEOF
+  - systemctl daemon-reload
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-relay nftables
+  # The postinst rewrites SERVERS/INTERFACES/OPTIONS on every configure,
+  # so the stock copy is taken and this cell's file written after it.
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/default/isc-dhcp-relay /root/lab-stock-config/isc-dhcp-relay.stock
+  - cp /etc/nftables.conf /root/lab-stock-config/nftables.conf.stock
+  - echo __RELAY_DEFAULTS_B64__ | base64 -d >/etc/default/isc-dhcp-relay
+  - echo __RELAY_NFT_B64__ | base64 -d >/etc/nftables.conf
+  - echo net.ipv4.ip_forward=1 >/etc/sysctl.d/90-lab-relay.conf
+  - sysctl -qw net.ipv4.ip_forward=1
+  - systemctl enable nftables isc-dhcp-relay
+  - systemctl restart nftables isc-dhcp-relay
+  - touch /var/lib/cloud/lab-bootstrap-done

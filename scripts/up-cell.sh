@@ -40,6 +40,12 @@ echo "== segment bridge =="
 # Without this, a bring-up worked only because some earlier privileged
 # run had already created the bridge, not because this call could.
 sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
+# A relay cell (#11) has a second segment, the source's server segment
+# behind the relay; down-cell.sh reads both names back from $WORK.
+server_bridge=$(jq -r '.cell.relay.server_segment.bridge // empty' <<<"$RESOLVED")
+if [ -n "$server_bridge" ]; then
+	sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$server_bridge"
+fi
 
 echo "== base image cache ($image_name) =="
 base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
@@ -56,6 +62,9 @@ mkdir -p "$WORK"
 # from "not ready yet". Never read or write the personal file for this.
 known_hosts="$WORK/known_hosts"
 : >"$known_hosts"
+if [ -n "$server_bridge" ]; then
+	printf '%s\n' "$bridge" "$server_bridge" >"$WORK/relay-bridges"
+fi
 
 overlay="$WORK/${domain}.qcow2"
 if [ ! -f "$overlay" ]; then
@@ -174,6 +183,12 @@ done
 # If this cell has an IP source in lab.yaml (issue #2), bring it up too,
 # on the segment bridge just built above. A cell with no source (issue
 # #1's ref-only) leaves this a no-op.
+# A relay cell's relay (#11) comes up before its source, so the source's
+# first boot already has its route's next hop.
+if [ -n "$server_bridge" ]; then
+	echo "== relay =="
+	"$REPO_ROOT/scripts/up-relay.sh" "$CELL" "$WORK"
+fi
 has_source=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
 if [ -n "$has_source" ]; then
 	echo "== source ($has_source) =="

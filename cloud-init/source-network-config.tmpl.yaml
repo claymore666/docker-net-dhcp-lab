@@ -26,3 +26,4 @@ ethernets:
     dhcp4: false
     dhcp6: false
     accept-ra: false
+    # __SEG_ROUTES__

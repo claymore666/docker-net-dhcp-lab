@@ -1,0 +1,30 @@
+# Relay VM networking (#11): eth0 management, eth1 on the Docker host's
+# segment (the relay's client leg and the segment's router), eth2 on the
+# source's server segment. Matched by MAC, quoted, no top-level
+# `network:` key, all for the reasons in source-network-config.tmpl.yaml.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "__MGMT_MAC__"
+    set-name: eth0
+    addresses: [__MGMT_ADDR__]
+    gateway4: __MGMT_GW__
+    nameservers:
+      addresses: [__MGMT_GW__]
+  cli0:
+    match:
+      macaddress: "__CLI_MAC__"
+    set-name: eth1
+    addresses: [__CLI_ADDR__]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+  srv0:
+    match:
+      macaddress: "__SRV_MAC__"
+    set-name: eth2
+    addresses: [__SRV_ADDR__]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false

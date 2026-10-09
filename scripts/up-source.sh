@@ -98,6 +98,20 @@ seg_netmask=255.255.255.0
 # Fritz.Box, where the DHCP server and the LAN gateway are the same box.
 # A pair (#12) hands out the primary's address from both peers.
 seg_addr_ip=${primary_seg%%/*}
+gateway_ip=$seg_addr_ip
+
+# A relay cell (#11): the source sits on the relay's server segment, the
+# router a container is handed is the relay's client leg, and the
+# source routes the client segment back through the relay's server leg.
+relay_client=$(jq -r '.cell.relay.client_address // empty' <<<"$RESOLVED")
+bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
+route_args=()
+if [ -n "$relay_client" ]; then
+	gateway_ip=${relay_client%%/*}
+	bridge=$(jq -r '.cell.relay.server_segment.bridge' <<<"$RESOLVED")
+	relay_server=$(jq -r '.cell.relay.server_address' <<<"$RESOLVED")
+	route_args=("$seg_subnet" "${relay_server%%/*}")
+fi
 
 # Group B (#23): the class pool B5 serves to option 60 "lab-class-b5" is
 # a fixed host-octet band above every cell's main pool (.100-.200). The
@@ -125,7 +139,7 @@ mkdir -p "$seed_dir"
 sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__SEG_SUBNET__#$seg_subnet#g" -e "s#__SEG_NETWORK__#$seg_network#g" \
 	-e "s#__SEG_NETMASK__#$seg_netmask#g" \
-	-e "s#__SEG_GATEWAY__#$seg_addr_ip#g" \
+	-e "s#__SEG_GATEWAY__#$gateway_ip#g" \
 	-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
 	-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
 	-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
@@ -133,10 +147,8 @@ sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
 	-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
 	"$tmpl" >"$seed_dir/user-data"
-sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
-	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
-	-e "s#__SEG_ADDR__#$seg_addr#" -e "s#__SEG_ADDR6__#$seg_addr6#" \
-	"$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$seed_dir/network-config"
+"$REPO_ROOT/scripts/render-source-network-config.sh" "$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" \
+	"$mgmt_addr" "$mgmt_gw" "$mgmt_mac" "$seg_mac" "$seg_addr" "$seg_addr6" "${route_args[@]}" >"$seed_dir/network-config"
 echo "instance-id: $domain" >"$seed_dir/meta-data"
 echo "local-hostname: $host_name" >>"$seed_dir/meta-data"
 
@@ -149,7 +161,6 @@ ovmf_code=/usr/share/OVMF/OVMF_CODE_4M.fd
 ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
 nvram="$WORK/${domain}-VARS.fd"
 
-bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
 echo "== source VM ($source_type, $PEER) =="
 if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 	sudo -n virt-install \
