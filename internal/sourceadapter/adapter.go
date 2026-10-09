@@ -48,6 +48,19 @@ const (
 	// and C12 stay N/A through Applicable until then (#23).
 	CapFailoverPair Capability = "failover-pair"
 	CapRelay        Capability = "relay"
+	// CapUserClassPool declares EnableFeature(FeatureUserClassPool): a
+	// pool served only to option 77 clients of one class (F1, #20).
+	CapUserClassPool Capability = "user-class-pool"
+	// CapOption108 declares EnableFeature(FeatureOffer108) and
+	// EnableFeature(FeatureForce108) (RFC 8925, F2a and F2b, #20).
+	CapOption108 Capability = "option-108"
+	// CapRapidCommit4 declares EnableFeature(FeatureRapidCommit4): the
+	// source answers a DHCPv4 DISCOVER that carries option 80 with an
+	// ACK (RFC 4039; dnsmasq only, F3, #20).
+	CapRapidCommit4 Capability = "rapid-commit-4"
+	// CapV6 is declared by no adapter until group D's IPv6 segment
+	// exists; the F4-F7 rows stay N/A through Applicable until then (#20).
+	CapV6 Capability = "v6"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -136,6 +149,12 @@ type Adapter interface {
 	// Impair delays and drops the source's segment egress (its replies);
 	// restore removes the qdisc (C10, #23).
 	Impair(ctx context.Context, delay time.Duration, lossPct int) (restore func(ctx context.Context) error, err error)
+	// EnableFeature changes the running config for one group F scenario
+	// (#20) and restarts the source. A non-nil error means the config was
+	// put back before returning; a nil error hands over a restore func
+	// that writes the captured bytes back and restarts, and may be
+	// called again after a failure. The caller defers it on every path.
+	EnableFeature(ctx context.Context, f Feature, p FeatureParams) (restore func(ctx context.Context) error, err error)
 }
 
 // Runner executes one command on the source VM's own management
