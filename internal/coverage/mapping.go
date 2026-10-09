@@ -24,7 +24,7 @@ type Entry struct {
 const (
 	notCoveredOption  = "not covered yet, planned: no scenario yet sets or varies this driver option"
 	notCoveredSetting = "not covered yet, planned: no scenario yet changes this plugin setting"
-	notCoveredIPv6    = "not covered yet, planned: today's scenarios are IPv4-only; IPv6 scenarios come later"
+	notCoveredIPv6    = "not covered yet, planned: the IPv6 rows of #23 group D part 1 neither set nor vary this option"
 )
 
 // Mapping is the lab's one reviewed record of docs/reference.md's
@@ -44,8 +44,8 @@ var Mapping = map[string]Entry{
 	"network:macvlan_mode":        {Reason: notCoveredOption},
 	"network:vlan":                {Reason: notCoveredOption},
 	"network:gateway":             {Reason: notCoveredOption},
-	"network:ipv6":                {Reason: notCoveredIPv6},
-	"network:ipv6_mode":           {Reason: notCoveredIPv6},
+	"network:ipv6":                {Scenario: scenario.NameD1b},
+	"network:ipv6_mode":           {Scenario: scenario.NameD1},
 	"network:ipv6_main_prefix":    {Reason: notCoveredIPv6},
 	"network:ipv6_auto_strict":    {Reason: notCoveredIPv6},
 	"network:lease_timeout":       {Scenario: scenario.NameC1},

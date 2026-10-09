@@ -42,8 +42,8 @@ runcmd:
     }
     include "/etc/dhcp/lab-reservations.conf";
     DHCPDEOF
-  # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the F4
-  # and F5 features uncomment; the init script runs -4 and -6 together.
+  # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the rapid commit
+  # and temporary address features uncomment; the init script runs -4 and -6 together.
   - |
     cat >/etc/dhcp/dhcpd6.conf <<'DHCPDEOF'
     default-lease-time 7200;

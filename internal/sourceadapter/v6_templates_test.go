@@ -62,6 +62,34 @@ func TestEveryV6CapabilityHasAKnobInTheRenderedConfig(t *testing.T) {
 	}
 }
 
+// The knob table and the declared capabilities agree both ways: a row for
+// an adapter that does not declare the cap is a cap the cell cannot prove,
+// and a declared v6 cap without a row is a claim nothing renders.
+func TestV6KnobRowsMatchDeclaredCapabilities(t *testing.T) {
+	for _, name := range []string{"kea", "isc-dhcp", "dnsmasq"} {
+		for _, d := range featureAdapter(name, nil).Capabilities() {
+			k, isV6Knob := v6Knobs[d]
+			if d != CapRapidCommit6 && d != CapTemporary6 {
+				continue
+			}
+			if _, ok := k.cfg[name]; !isV6Knob || !ok {
+				t.Errorf("%s declares %s but has no knob row", name, d)
+			}
+		}
+	}
+	for c, k := range v6Knobs {
+		for name := range k.cfg {
+			declared := false
+			for _, d := range featureAdapter(name, nil).Capabilities() {
+				declared = declared || d == c
+			}
+			if !declared {
+				t.Errorf("knob row %s/%s but %s does not declare it", c, name, name)
+			}
+		}
+	}
+}
+
 // dnsmasq's SetRA Off must find both of its anchors in the rendered
 // lab-v6.conf, or the scenario runs with RAs still on.
 func TestDnsmasqSetRAOffEditsTheRenderedConfig(t *testing.T) {
@@ -126,7 +154,7 @@ func TestKeaV6SocketAgreesWithTheControlAgent(t *testing.T) {
 		t.Fatalf("agent dhcp6 socket %q, server socket %q", got, d6.Dhcp6.ControlSocket.Name)
 	}
 	if len(d6.Dhcp6.Subnet6) != 1 || d6.Dhcp6.Subnet6[0].RapidCommit == nil || *d6.Dhcp6.Subnet6[0].RapidCommit {
-		t.Fatal("subnet6 must start with rapid-commit false, the F4 baseline")
+		t.Fatal("subnet6 must start with rapid-commit false, the DHCPv6 rapid commit baseline")
 	}
 }
 

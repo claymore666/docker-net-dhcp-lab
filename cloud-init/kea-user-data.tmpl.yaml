@@ -57,7 +57,7 @@ runcmd:
     }
     KEAEOF
   # DHCPv6 (#23 group D): IA_NA only, Kea 2.6.3 grants no IA_TA.
-  # "rapid-commit": false is the anchor the F4 feature flips.
+  # "rapid-commit": false is the anchor the DHCPv6 rapid commit feature flips.
   - |
     cat >/etc/kea/kea-dhcp6.conf <<'KEAEOF'
     {

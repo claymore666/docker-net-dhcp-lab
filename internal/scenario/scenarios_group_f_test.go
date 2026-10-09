@@ -495,8 +495,8 @@ func (a *fakeAdapter) featureEnabled() int { return len(a.features) }
 
 // ---- catalog ----
 
-func TestGroupFIPv6RowsAreNotApplicableOnEveryAdapter(t *testing.T) {
-	for _, name := range []string{NameF4, NameF5, NameF6, NameF7} {
+func TestGroupFPartTwoRowsAreNotApplicableOnEveryAdapter(t *testing.T) {
+	for _, name := range []string{NameF6, NameF7} {
 		for an, a := range map[string]sourceadapter.Adapter{
 			"kea": &sourceadapter.KeaAdapter{}, "isc-dhcp": &sourceadapter.ISCDHCPAdapter{}, "dnsmasq": &sourceadapter.DnsmasqAdapter{},
 		} {
@@ -507,7 +507,7 @@ func TestGroupFIPv6RowsAreNotApplicableOnEveryAdapter(t *testing.T) {
 				}
 				found = true
 				ok, reason := Applicable(s, a)
-				if ok || !strings.Contains(reason, "needs the IPv6 segment, #23 group D") {
+				if ok || !strings.Contains(reason, "#23 group D part 2") {
 					t.Errorf("%s on %s: applicable=%v reason %q", name, an, ok, reason)
 				}
 			}
@@ -524,6 +524,10 @@ func TestCatalogRegistersGroupFWithTheNeedsOfTheDesign(t *testing.T) {
 		NameF2a: {sourceadapter.CapV4, sourceadapter.CapOption108},
 		NameF2b: {sourceadapter.CapV4, sourceadapter.CapOption108},
 		NameF3:  {sourceadapter.CapV4},
+		NameF4:  {sourceadapter.CapV6},
+		NameF5:  {sourceadapter.CapV6},
+		NameF6:  {sourceadapter.CapV6, sourceadapter.CapPD},
+		NameF7:  {sourceadapter.CapV6, sourceadapter.CapPref64},
 	}
 	seen := 0
 	for _, s := range Catalog {
@@ -539,14 +543,15 @@ func TestCatalogRegistersGroupFWithTheNeedsOfTheDesign(t *testing.T) {
 	}
 }
 
-// Every adapter declares what the four runnable rows need; rapid commit
-// needs only IPv4 because Kea and ISC take the "exchange continues" branch.
+// Every adapter declares what the six runnable rows need; rapid commit
+// and the temporary address need no feature cap, since a source without
+// one is judged on its fallback.
 func TestGroupFRunsOnEveryAdapterThatDeclaresItsNeeds(t *testing.T) {
 	for an, a := range map[string]sourceadapter.Adapter{
 		"kea": &sourceadapter.KeaAdapter{}, "isc-dhcp": &sourceadapter.ISCDHCPAdapter{}, "dnsmasq": &sourceadapter.DnsmasqAdapter{},
 	} {
 		for _, s := range Catalog {
-			if s.Name != NameF1 && s.Name != NameF2a && s.Name != NameF2b && s.Name != NameF3 {
+			if s.Name != NameF1 && s.Name != NameF2a && s.Name != NameF2b && s.Name != NameF3 && s.Name != NameF4 && s.Name != NameF5 {
 				continue
 			}
 			if ok, reason := Applicable(s, a); !ok {
