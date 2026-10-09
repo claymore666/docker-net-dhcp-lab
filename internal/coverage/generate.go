@@ -112,12 +112,12 @@ type builder struct {
 	// spelled holds the pair IDs that are another spelling of an alias
 	// group member; the alias variant already stands for them.
 	spelled map[string]bool
-	// modeRefused holds "opt=value@mode" for each value the docs refuse
+	// modeRefused (#35) holds "opt=value@mode" for each value the docs refuse
 	// in one mode; a variant naming it there is decided at create.
 	modeRefused map[string]bool
 }
 
-// createOnly reports whether the docs refuse the variant at network
+// createOnly (#35) reports whether the docs refuse the variant at network
 // creation: a refused pair, or a term whose value is refused in the mode.
 func (b *builder) createOnly(id ID) bool {
 	if id.Kind == KindPair && b.refused[id.String()] {

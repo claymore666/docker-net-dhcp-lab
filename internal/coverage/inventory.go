@@ -45,7 +45,7 @@ type ValueSpec struct {
 	// network creation beside this value. Each becomes a pair variant
 	// decided when the network is created, not read at a container's start.
 	RefusesWith []string `yaml:"refuses_with,omitempty"`
-	// RefusedModes lists the modes in which the docs refuse this value
+	// RefusedModes (#35) lists the modes in which the docs refuse this value
 	// at network creation although it is accepted in the others. Every
 	// variant that names the value in such a mode is decided at create.
 	RefusedModes []string `yaml:"refused_modes,omitempty"`

@@ -96,8 +96,8 @@ options:
     mode_path: per-mode
     values:
       - {v: "unset", class: default, no_token: true, matches: "(first advertised)"}
-      - {v: "2001:db8:1::/64", class: allowed, refuses_with: ["ipv6_mode=dhcp"]}
-      - {v: "2001:db8:ffff::/64", class: allowed, no_token: true, refuses_with: ["ipv6_mode=dhcp"]}
+      - {v: "2001:db8:1::/64", class: allowed, refuses_with: ["ipv6_mode=off", "ipv6_mode=dhcp"]}
+      - {v: "2001:db8:ffff::/64", class: allowed, no_token: true, refuses_with: ["ipv6_mode=off", "ipv6_mode=dhcp"]}
       - {v: "2001:db8:1::1/64", class: refused, no_token: true}
     not_values: ["AddressIPv6", "docker inspect", "ipv6_main_prefix_unmatched", "ipv6_mode=slaac", "ipv6_mode=auto", "ipv6_mode=dhcp", "docker network create"]
   "network:ipv6_temporary":

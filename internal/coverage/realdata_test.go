@@ -41,10 +41,10 @@ func TestPinnedMatrixCountsAreStated(t *testing.T) {
 	if len(l.Rows) != 43 {
 		t.Errorf("v2.5.0 has %d rows, want 43 (35 network, 2 endpoint, 6 settings)", len(l.Rows))
 	}
-	if got := len(l.Variants); got != 821 {
-		t.Errorf("v2.5.0 matrix has %d variants, the PR description says 821", got)
+	if got := len(l.Variants); got != 827 {
+		t.Errorf("v2.5.0 matrix has %d variants, the PR description says 827", got)
 	}
-	want := map[string]int{KindSingle: 244, KindRefused: 33, KindOutOfMode: 17, KindAlias: 103, KindPair: 364, KindEnv: 60}
+	want := map[string]int{KindSingle: 244, KindRefused: 33, KindOutOfMode: 17, KindAlias: 103, KindPair: 370, KindEnv: 60}
 	for kind, n := range Counts(l.Variants) {
 		if want[kind] != n {
 			t.Errorf("v2.5.0 matrix has %d %s variants, the PR description says %d", n, kind, want[kind])
@@ -221,5 +221,30 @@ func TestPinnedMatrixRefusesSlaacAndAutoInIpvlan(t *testing.T) {
 	// The two singles and the env rows (two values, four profiles) must exist.
 	if refusedIn[KindSingle] != 2 || refusedIn[KindEnv] != 8 || refusedIn[KindPair] == 0 {
 		t.Errorf("ipvlan rows naming slaac or auto: %v, want 2 singles, 8 env and some pairs", refusedIn)
+	}
+}
+
+// TestPinnedMatrixRefusesIpv6MainPrefixBesideOff: the docs accept
+// ipv6_main_prefix only with ipv6_mode=slaac and auto (reference.md,
+// ipv6_main_prefix), so beside off it is refused at network creation in
+// every mode (#35); beside slaac and auto the pair stays a runtime read.
+func TestPinnedMatrixRefusesIpv6MainPrefixBesideOff(t *testing.T) {
+	by := realVariants(t)
+	for _, prefix := range []string{"2001:db8:1::/64", "2001:db8:ffff::/64"} {
+		for _, mode := range []string{"bridge", "macvlan", "ipvlan"} {
+			id := "pair:ipv6_main_prefix=" + prefix + "+ipv6_mode=off@" + mode
+			v, ok := by[id]
+			if !ok {
+				t.Errorf("%s is missing", id)
+				continue
+			}
+			if v.Runtime || v.Points() != "create" {
+				t.Errorf("%s is refused by the docs and must be a create-time row: %+v", id, v)
+			}
+		}
+		id := "pair:ipv6_main_prefix=" + prefix + "+ipv6_mode=slaac@bridge"
+		if v, ok := by[id]; !ok || !v.Runtime {
+			t.Errorf("%s is accepted by the docs and must stay a runtime pair: %+v %v", id, v, ok)
+		}
 	}
 }

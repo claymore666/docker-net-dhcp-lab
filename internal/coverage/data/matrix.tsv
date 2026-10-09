@@ -1,4 +1,4 @@
-# variants: 821
+# variants: 827
 # id	kind	mode	families	points
 AWAIT_TIMEOUT=!0	refused			create
 AWAIT_TIMEOUT=10s	single			start,settled
@@ -559,6 +559,9 @@ pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=auto@macvlan	pair	macvlan	ipv6,n
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,named,refused	create
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,named,refused	create
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,named,refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=off@bridge	pair	bridge	refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=off@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=off@macvlan	pair	macvlan	refused	create
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@bridge	pair	bridge	ipv6,named	start,settled
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6,named	create
 pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6,named	start,settled
@@ -577,6 +580,9 @@ pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=auto@macvlan	pair	macvlan	ipv
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,refused	create
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,refused	create
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=off@bridge	pair	bridge	refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=off@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=off@macvlan	pair	macvlan	refused	create
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@bridge	pair	bridge	ipv6	start,settled
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6	create
 pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6	start,settled
