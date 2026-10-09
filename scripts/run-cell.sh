@@ -121,6 +121,14 @@ stop_server_capture() {
 	fi
 }
 
+# The relay's own account of every relayed packet (#11).
+relay_journal() {
+	if [ -n "$relay_mgmt_ip" ]; then
+		ssh_run "$relay_mgmt_ip" "sudo journalctl -u isc-dhcp-relay --no-pager -o short-iso" \
+			>"$EVIDENCE_DIR/${CELL}-relay-log.txt" || true
+	fi
+}
+
 # The relay must carry one lease end to end before any shape runs (#11);
 # a shape run through a broken relay would read as plugin FAILs.
 if [ -n "$relay_mgmt_ip" ]; then
@@ -129,6 +137,8 @@ if [ -n "$relay_mgmt_ip" ]; then
 		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK" || true
 		cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
 		stop_server_capture
+		relay_journal
+		LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK" || true
 		echo "run-cell: FAIL -- the relay probe failed; no shape was run (lab error, not a plugin finding)" >&2
 		exit 1
 	fi
@@ -189,6 +199,8 @@ echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 # the current one's.
 ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
 	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
+
+relay_journal
 
 echo "== source state directory (Kea lease-file cleanup copies, #23) =="
 # Kea's memfile cleanup (lfc-interval, default 3600 s) leaves
