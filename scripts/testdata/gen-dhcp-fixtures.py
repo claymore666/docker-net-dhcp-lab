@@ -208,4 +208,82 @@ with open("dhcp-c-partial.pcap", "r+b") as f:
     f.seek(0, 2)
     f.truncate(f.tell() - 100)
 
-print("wrote 8 fixtures")
+# Group F (#20): the option bytes group F reads. tcpdump prints 80 as SLP-NA
+# and 77, 108 and type 9 as Unknown, so the helper keys on the code.
+MSG_FORCERENEW = 9
+F_MAC = "02:f1:00:00:00:01"
+F_OTHER = "02:f1:00:00:00:02"
+UC = bytes([9]) + b"lab-uc-f1"       # RFC 3004: length byte, then the text
+OPT108 = struct.pack("!I", 1800)     # 00 00 07 08
+PRL = bytes([1, 3, 6])
+
+def plus(payload: bytes, *extra: bytes) -> bytes:
+    # options go before the end option dhcp() appended
+    return payload[:-1] + b"".join(extra) + b"\xff"
+
+def f_discover(mac, xid, *extra, prl=PRL):
+    return plus(dhcp(1, xid, 0x8000, "0.0.0.0", "0.0.0.0", mac,
+                     opt_msgtype(MSG_DISCOVER) + opt(55, prl)), *extra)
+
+def f_request(mac, xid, *extra, prl=PRL):
+    return plus(dhcp(1, xid, 0x8000, "0.0.0.0", "0.0.0.0", mac,
+                     opt_msgtype(MSG_REQUEST) + opt(50, socket.inet_aton(LEASED))
+                     + opt(54, socket.inet_aton(SERVER)) + opt(55, prl)), *extra)
+
+def f_offer(mac, xid, yi, *extra):
+    return plus(offer(mac, xid, yi, SERVER), *extra)
+
+def f_ack(mac, xid, yi, *extra):
+    return plus(ack(mac, xid, yi, SERVER), *extra)
+
+# User class: option 77 in every DISCOVER and REQUEST of the identity; a second
+# client sends no class and is answered from the main pool.
+FX1, FX2 = 0x0f100001, 0x0f100002
+write_pcap("dhcp-f1-userclass.pcap", [
+    (10.0, frame_c2s(F_MAC, f_discover(F_MAC, FX1, opt(77, UC)))),
+    (10.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX1, "10.200.1.203"))),
+    (10.2, frame_c2s(F_MAC, f_request(F_MAC, FX1, opt(77, UC)))),
+    (10.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX1, "10.200.1.203"))),
+    (11.0, frame_c2s(F_OTHER, f_discover(F_OTHER, FX2))),
+    (11.1, frame_s2c(SERVER, F_OTHER, f_offer(F_OTHER, FX2, LEASED))),
+])
+
+# F2b: 108 forced into the OFFER and ACK of one identity, never asked for
+# in its PRL; the other identity gets none. F2a-asked: the same client
+# with 108 in its PRL (the lab's table says "absent" but the wire says
+# otherwise).
+FX3, FX4, FX5 = 0x0f200001, 0x0f200002, 0x0f200003
+write_pcap("dhcp-f2-forced108.pcap", [
+    (20.0, frame_c2s(F_MAC, f_discover(F_MAC, FX3))),
+    (20.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX3, LEASED, opt(108, OPT108)))),
+    (20.2, frame_c2s(F_MAC, f_request(F_MAC, FX3))),
+    (20.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX3, LEASED, opt(108, OPT108)))),
+    (21.0, frame_c2s(F_OTHER, f_discover(F_OTHER, FX4))),
+    (21.1, frame_s2c(SERVER, F_OTHER, f_offer(F_OTHER, FX4, "10.200.1.101"))),
+])
+write_pcap("dhcp-f2-asked108.pcap", [
+    (30.0, frame_c2s(F_MAC, f_discover(F_MAC, FX5, prl=PRL + bytes([108])))),
+    (30.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX5, LEASED, opt(108, OPT108)))),
+])
+
+# Rapid commit: dnsmasq answers a DISCOVER carrying 80 with an ACK carrying 80 (two
+# messages); Kea and ISC answer OFFER without 80 and carry on (four).
+FX6, FX7 = 0x0f300001, 0x0f300002
+write_pcap("dhcp-f3-rapid-commit.pcap", [
+    (40.0, frame_c2s(F_MAC, f_discover(F_MAC, FX6, opt(80, b"")))),
+    (40.1, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX6, LEASED, opt(80, b"")))),
+])
+write_pcap("dhcp-f3-fallback.pcap", [
+    (50.0, frame_c2s(F_MAC, f_discover(F_MAC, FX7, opt(80, b"")))),
+    (50.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX7, LEASED))),
+    (50.2, frame_c2s(F_MAC, f_request(F_MAC, FX7))),
+    (50.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX7, LEASED))),
+])
+
+# DHCPFORCERENEW (type 9): unicast from the server to the client.
+write_pcap("dhcp-f-forcerenew.pcap", [
+    (60.0, frame_s2c(SERVER, F_MAC, dhcp(2, 0x0f400001, 0, "0.0.0.0", "0.0.0.0", F_MAC,
+                                         opt_msgtype(MSG_FORCERENEW) + opt(54, socket.inet_aton(SERVER))))),
+])
+
+print("wrote 14 fixtures")

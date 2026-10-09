@@ -54,6 +54,18 @@ type fakeAdapter struct {
 	resets         int
 	// onStop/onStart/onReset let a test change the table at that call.
 	onStop, onStart, onReset func()
+
+	// group F (#20): features is the order EnableFeature was called in,
+	// featureRestores counts restores run, onFeatureRestore runs inside
+	// each restore (a test cancels or fails there).
+	featureErr       error
+	featureRestoreEr error
+	features         []sourceadapter.Feature
+	featureParams    []sourceadapter.FeatureParams
+	featureRestores  int
+	// featureRestoreCtx is ctx.Err() as the last restore saw it: a
+	// cancelled scenario context must not reach the restore.
+	featureRestoreCtx error
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -117,6 +129,18 @@ func (f *fakeAdapter) Impair(_ context.Context, delay time.Duration, loss int) (
 	}
 	f.impaired = append(f.impaired, fmt.Sprintf("%s/%d", delay, loss))
 	return func(context.Context) error { f.impairRestored++; return nil }, nil
+}
+func (f *fakeAdapter) EnableFeature(_ context.Context, ft sourceadapter.Feature, p sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	if f.featureErr != nil {
+		return nil, f.featureErr
+	}
+	f.features = append(f.features, ft)
+	f.featureParams = append(f.featureParams, p)
+	return func(ctx context.Context) error {
+		f.featureRestores++
+		f.featureRestoreCtx = ctx.Err()
+		return f.featureRestoreEr
+	}, nil
 }
 func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {

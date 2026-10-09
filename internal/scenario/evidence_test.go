@@ -87,6 +87,9 @@ func TestReachableWithRetryDoesNotPassAfterTheWindowElapses(t *testing.T) {
 
 func (a *countingReachAdapter) Ready(_ context.Context) error   { return nil }
 func (a *countingReachAdapter) Recover(_ context.Context) error { return nil }
+func (a *countingReachAdapter) EnableFeature(_ context.Context, _ sourceadapter.Feature, _ sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
 func (a *countingReachAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }

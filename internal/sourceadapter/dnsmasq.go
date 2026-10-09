@@ -14,10 +14,10 @@ import (
 // (start, end, lease-time), capturing everything up to the lease-time
 // field so ShortenLeaseTime can replace only that field (#3, A14).
 //
-// The optional tag:... field is what B5's class ranges carry
-// (dhcp-range=tag:b5,start,end,12h, #23); without it the main range
+// The tag:... fields are what the B5 and user-class ranges carry
+// (dhcp-range=tag:!b5,tag:!f1,start,end,12h, #23, #20); without them the main range
 // would no longer match once the config is tagged and A14 would break.
-var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=(?:tag:[^,\n]+,)?[^,\n]+,[^,\n]+,)[^,\n]+$`)
+var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=(?:tag:[^,\n]+,)*[^,\n]+,[^,\n]+,)[^,\n]+$`)
 
 // DnsmasqAdapter reads dnsmasq's own lease file directly. ReserveMAC's
 // command construction is unit-tested against a fake runner
@@ -29,7 +29,7 @@ type DnsmasqAdapter struct {
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4}
 }
 
 // dnsmasqLeaseFile is the on-disk lease table this adapter reads

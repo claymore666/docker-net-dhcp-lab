@@ -206,7 +206,27 @@ run_case "cut field flag 2, not a finding label" \
 run_case "uppercase F, no digit, not a finding label" \
 	$'note: use -F as the field separator\n' ok || fail=1
 
+# Group F scenario IDs (#20): the catalog name and a README table row's
+# first cell are product names and stay clean; a citation in prose, also
+# one later on a table row, stays caught.
+run_case "scenario name constant, not a finding label" \
+	$'NameF1 = "F1-user-class-pool"\n' ok || fail=1
+run_case "scenario table row, not a finding label" \
+	$'| F2a | IPv6-only preferred, not asked for | what it does |\n' ok || fail=1
+run_case "prose citation beside a scenario name" \
+	$'// see F2 for why "F1-user-class-pool" differs\n' fail || fail=1
+run_case "finding citation inside a table row" \
+	$'| F1 | user class pool | fixed as F3 asked |\n' fail || fail=1
+run_case "hyphenated finding citation in prose" \
+	$'// the F2-finding stays open\n' fail || fail=1
+run_case "finding citation as a table first cell" \
+	$'| F3 | fixed as asked |\n' fail || fail=1
+run_case "a table row head that is not a scenario" \
+	$'| F3 | something else | text |\n' fail || fail=1
+run_case "finding citation after a hyphen-less ID" \
+	$'// the F3 requirement\n' fail || fail=1
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "hygiene-check-test: PASS -- all 44 cases behaved as expected"
+echo "hygiene-check-test: PASS -- all 52 cases behaved as expected"

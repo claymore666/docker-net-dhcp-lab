@@ -1087,6 +1087,8 @@ func TestReadmeGroupBTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCa
 
 func TestReadmeGroupCTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "C") }
 
+func TestReadmeGroupFTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "F") }
+
 func readmeGroupMatchesCatalog(t *testing.T, group string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
@@ -1104,7 +1106,7 @@ func readmeGroupMatchesCatalog(t *testing.T, group string) {
 			section = section[:j+2+k]
 		}
 	}
-	rows := regexp.MustCompile(`(?m)^\| (`+group+`\d+) \|`).FindAllStringSubmatch(section, -1)
+	rows := regexp.MustCompile(`(?m)^\| (`+group+`\d+[a-z]?) \|`).FindAllStringSubmatch(section, -1)
 	inReadme := map[string]bool{}
 	for _, m := range rows {
 		inReadme[m[1]] = true

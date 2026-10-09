@@ -47,6 +47,14 @@ var PlainNames = map[string]string{
 	scenario.NameC10: "reply delay and loss",
 	scenario.NameC11: "validate_dhcp at create",
 	scenario.NameC12: "relay",
+	scenario.NameF1:  "user class pool",
+	scenario.NameF2a: "IPv6-only preferred, not asked for",
+	scenario.NameF2b: "IPv6-only preferred, sent unasked",
+	scenario.NameF3:  "rapid commit, IPv4",
+	scenario.NameF4:  "rapid commit, IPv6",
+	scenario.NameF5:  "temporary IPv6 address",
+	scenario.NameF6:  "IPv6 prefix delegation",
+	scenario.NameF7:  "NAT64 prefix in router advertisements",
 }
 
 // Order is the row order the results page renders in: scenario.Catalog's
