@@ -1,0 +1,376 @@
+package scenario
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
+)
+
+// Group F (#20): the plugin's client-side features, judged by what the
+// client puts on the wire and what the source's own table then shows.
+// Each scenario that changes the source does it through EnableFeature
+// and puts it back in a defer that outlives a cancelled context, on every
+// path including a failed verdict; a restore that fails turns the verdict
+// BLOCKED, never a PASS. F4-F7 need the IPv6 segment (#23 group D).
+
+const (
+	fUserClass  = "lab-uc-f1"
+	f108Seconds = 1800
+	// fCaptureWait bounds how long a scenario waits for the observer's
+	// capture to show the messages of the exchange it just completed.
+	fCaptureWait = 30 * time.Second
+)
+
+// fCapturePoll is how often the capture is re-read; a variable so the
+// tests do not wait.
+var fCapturePoll = 2 * time.Second
+
+// f108Bytes is option 108's value as the wire carries it: four bytes, big endian.
+func f108Bytes() []byte {
+	n := uint32(f108Seconds)
+	return []byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)}
+}
+
+func fClientID(shape Shape) string { return "lab-f2-" + string(shape) }
+
+// fRestoreInto puts the source back and, when that fails, replaces the
+// verdict: a leftover feature config changes every later scenario.
+func fRestoreInto(ctx context.Context, e Env, scenario string, restore func(context.Context) error, v *Verdict) {
+	if restore == nil {
+		return
+	}
+	if err := restore(ctx); err != nil {
+		*v = blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the source could not be put back after the scenario (%v); it must be recovered before anything else runs (scenario result was %s: %s)", err, v.Result, v.Reason), e.GitSHA)
+	}
+}
+
+// fEnable turns one feature on; the returned restore is never nil.
+func fEnable(ctx context.Context, e Env, f sourceadapter.Feature, p sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	restore, err := e.Source.EnableFeature(ctx, f, p)
+	if err != nil || restore == nil {
+		if err == nil {
+			err = errors.New("the adapter returned no restore")
+		}
+		return func(context.Context) error { return nil }, err
+	}
+	return restore, nil
+}
+
+func optsAfter(msgs []OptMsg, from time.Time) []OptMsg {
+	var out []OptMsg
+	for _, m := range msgs {
+		if !m.At.Before(from) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// fOptions reads the option bytes the capture holds for ident since from,
+// re-reading until ready says the exchange is complete or fCaptureWait
+// passes. The decoded log is kept as evidence under label.
+func fOptions(ctx context.Context, e Env, scenario, label, ident string, codes []int, from time.Time, ready func([]OptMsg) bool, ev map[string]string) ([]OptMsg, error) {
+	oc, ok := e.Capture.(OptionReader)
+	if !ok {
+		return nil, errors.New("this run's capture reader cannot read option bytes")
+	}
+	snap := strings.TrimSuffix(evidencePath(e, scenario, label), ".txt") + ".pcap"
+	deadline := time.Now().Add(fCaptureWait)
+	for {
+		all, err := oc.Options(ctx, ident, snap, codes)
+		if err != nil {
+			return nil, err
+		}
+		msgs := optsAfter(all, from)
+		if ready(msgs) || time.Now().After(deadline) {
+			logPath := evidencePath(e, scenario, label)
+			if err := writeOptLog(logPath, msgs); err != nil {
+				return nil, err
+			}
+			ev[label] = logPath
+			return msgs, nil
+		}
+		if err := sleepCtx(ctx, fCapturePoll); err != nil {
+			return nil, err
+		}
+	}
+}
+
+func hasType(msgs []OptMsg, typ string) bool { return len(ofType(msgs, typ)) > 0 }
+
+// fLeaseConfirm checks the container's address against the source's own
+// table and that it answers. ok false returns the finished verdict.
+func fLeaseConfirm(ctx context.Context, e Env, scenario string, lease sourceadapter.Lease, found bool, addr, missing string, ev map[string]string) (Verdict, bool) {
+	if !found {
+		return fail(scenario, e.Cell, e.Shape, missing, ev, e.GitSHA), false
+	}
+	if lease.Address != addr {
+		return fail(scenario, e.Cell, e.Shape, fmt.Sprintf("the source's table shows %s, the container reports %s", lease.Address, addr), ev, e.GitSHA), false
+	}
+	if _, err := reachableWithRetry(ctx, e.Source, addr); err != nil {
+		return fail(scenario, e.Cell, e.Shape, fmt.Sprintf("%s is leased but does not answer: %v", addr, err), ev, e.GitSHA), false
+	}
+	return Verdict{}, true
+}
+
+func fFinish(scenario string, e Env, o fOutcome, extra string, ev map[string]string) Verdict {
+	reason := o.Reason
+	if extra != "" {
+		reason += "; " + extra
+	}
+	switch o.Result {
+	case PASS:
+		return pass(scenario, e.Cell, e.Shape, reason, ev, e.GitSHA)
+	case BLOCKED:
+		return blocked(scenario, e.Cell, e.Shape, reason, e.GitSHA)
+	}
+	return fail(scenario, e.Cell, e.Shape, reason, ev, e.GitSHA)
+}
+
+func clientState(e Env, scenario string) (present bool, blk *Verdict) {
+	present, err := clientHasFeature(e.PluginTag, fSince4)
+	if err != nil {
+		v := blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)
+		return false, &v
+	}
+	return present, nil
+}
+
+// runF1 -- user class: with user_class set the client sends option 77 in
+// every DISCOVER and REQUEST, and the source serves that class from its
+// own pool (.203-.210), outside the main pool. Before v2.4.0 the client
+// sends none and lands in the main pool.
+func runF1(ctx context.Context, e Env) (v Verdict) {
+	if v, ok := bIPAMNA(NameF1, e); ok {
+		return v
+	}
+	present, blk := clientState(e, NameF1)
+	if blk != nil {
+		return *blk
+	}
+	first, last, err := userClassPool(e)
+	if err != nil {
+		return fail(NameF1, e.Cell, e.Shape, fmt.Sprintf("no usable user-class pool: %v", err), nil, e.GitSHA)
+	}
+	t0 := time.Now().Add(-2 * time.Second)
+	restore, err := fEnable(ctx, e, sourceadapter.FeatureUserClassPool, sourceadapter.FeatureParams{
+		Class: fUserClass, PoolStart: first.String(), PoolEnd: last.String()})
+	defer fRestoreInto(bCleanupCtx(ctx), e, NameF1, restore, &v)
+	if err != nil {
+		return blocked(NameF1, e.Cell, e.Shape, fmt.Sprintf("could not set up the user-class pool on the source: %v", err), e.GitSHA)
+	}
+	var opts []string
+	if present {
+		opts = []string{"user_class=" + fUserClass}
+	}
+	net, down, err := cNetwork(ctx, e, "f1", opts)
+	defer down()
+	if err != nil {
+		return fail(NameF1, e.Cell, e.Shape, fmt.Sprintf("could not create the network (user_class=%q): %v", fUserClass, err), nil, e.GitSHA)
+	}
+	name := containerName(e, NameF1)
+	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, net, name)
+	if err != nil {
+		return fail(NameF1, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{}
+	snap := evidencePath(e, NameF1, "leases-after")
+	lease, _, found, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
+	if err != nil {
+		return fail(NameF1, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev["leases-after"] = snap
+	if bad, ok := fLeaseConfirm(ctx, e, NameF1, lease, found, addr, leaseFailReason(e.Shape, mac, addr, endpointID), ev); !ok {
+		return bad
+	}
+	ident, err := cIdent(e.Shape, mac, endpointID)
+	if err != nil {
+		return blocked(NameF1, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	msgs, err := fOptions(ctx, e, NameF1, "capture-options", ident, []int{77}, t0, func(m []OptMsg) bool { return hasType(m, "ACK") }, ev)
+	if err != nil {
+		return blocked(NameF1, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	o := judgeF1Wire(present, fUserClass, msgs)
+	if o.Result != PASS {
+		return fFinish(NameF1, e, o, "", ev)
+	}
+	in, err := inUserClassPool(e, addr)
+	if err != nil {
+		return fail(NameF1, e.Cell, e.Shape, err.Error(), ev, e.GitSHA)
+	}
+	if present && !in {
+		return fail(NameF1, e.Cell, e.Shape, fmt.Sprintf("%s; but the address %s is outside the user-class pool %s-%s", o.Reason, addr, first, last), ev, e.GitSHA)
+	}
+	if !present && in {
+		return blocked(NameF1, e.Cell, e.Shape, fmt.Sprintf("%s sent no option 77 yet got %s from the user-class pool: the source's class match is wrong (lab error)", ident, addr), e.GitSHA)
+	}
+	where := fmt.Sprintf("the user-class pool %s-%s", first, last)
+	if !present {
+		where = "the main pool, as the plugin predates user_class"
+	}
+	return fFinish(NameF1, e, o, fmt.Sprintf("address %s from %s, shown in the source's own table", addr, where), ev)
+}
+
+// runF2a -- IPv6-Only Preferred, not forced: the source has option 108
+// set but sends it only to a client that asks. The client never asks, so
+// no 108 appears in its parameter request list and its IPv4 lease stands.
+func runF2a(ctx context.Context, e Env) (v Verdict) {
+	t0 := time.Now().Add(-2 * time.Second)
+	restore, err := fEnable(ctx, e, sourceadapter.FeatureOffer108, sourceadapter.FeatureParams{Seconds: f108Seconds})
+	defer fRestoreInto(bCleanupCtx(ctx), e, NameF2a, restore, &v)
+	if err != nil {
+		return blocked(NameF2a, e.Cell, e.Shape, fmt.Sprintf("could not set option 108 on the source: %v", err), e.GitSHA)
+	}
+	name := containerName(e, NameF2a)
+	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, name)
+	if err != nil {
+		return fail(NameF2a, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{}
+	snap := evidencePath(e, NameF2a, "leases-after")
+	lease, _, found, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
+	if err != nil {
+		return fail(NameF2a, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev["leases-after"] = snap
+	if bad, ok := fLeaseConfirm(ctx, e, NameF2a, lease, found, addr, leaseFailReason(e.Shape, mac, addr, endpointID), ev); !ok {
+		return bad
+	}
+	ident, err := cIdent(e.Shape, mac, endpointID)
+	if err != nil {
+		return blocked(NameF2a, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	msgs, err := fOptions(ctx, e, NameF2a, "capture-options", ident, []int{55, 108}, t0, func(m []OptMsg) bool { return hasType(m, "ACK") }, ev)
+	if err != nil {
+		return blocked(NameF2a, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	o, note := judgeF2aWire(msgs)
+	return fFinish(NameF2a, e, o, strings.TrimPrefix(note+"; IPv4 lease "+addr+" kept, shown in the source's own table", "; "), ev)
+}
+
+// runF2b -- IPv6-Only Preferred, forced: the source sends option 108 to
+// one client id although it did not ask. RFC 8925 3.2 says such a client
+// must ignore it, so the IPv4 lease still completes.
+func runF2b(ctx context.Context, e Env) (v Verdict) {
+	if v, ok := bIPAMNA(NameF2b, e); ok {
+		return v
+	}
+	id := fClientID(e.Shape)
+	wire := b2WireClientID(id)
+	t0 := time.Now().Add(-2 * time.Second)
+	restore, err := fEnable(ctx, e, sourceadapter.FeatureForce108, sourceadapter.FeatureParams{Seconds: f108Seconds, ClientID: wire})
+	defer fRestoreInto(bCleanupCtx(ctx), e, NameF2b, restore, &v)
+	if err != nil {
+		return blocked(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not force option 108 on the source: %v", err), e.GitSHA)
+	}
+	net, down, err := cNetwork(ctx, e, "f2", []string{"client_id=" + id})
+	defer down()
+	if err != nil {
+		return fail(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not create the client_id network: %v", err), nil, e.GitSHA)
+	}
+	name := containerName(e, NameF2b)
+	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
+	_, addr, _, err := runContainer(ctx, e.Host, e.Shape, net, name)
+	if err != nil {
+		return fail(NameF2b, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{}
+	snap := evidencePath(e, NameF2b, "leases-after")
+	lease, _, found, err := lookupLeaseByClientID(ctx, e.Source, wire, snap)
+	if err != nil {
+		return fail(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev["leases-after"] = snap
+	if bad, ok := fLeaseConfirm(ctx, e, NameF2b, lease, found, addr, fmt.Sprintf("no lease under client id %s (address %s) in the source's own table", wire, addr), ev); !ok {
+		return bad
+	}
+	ready := func(m []OptMsg) bool { return hasType(m, "ACK") }
+	msgs, err := fOptions(ctx, e, NameF2b, "capture-options", wire, []int{55, 108}, t0, ready, ev)
+	if err != nil {
+		return blocked(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	all, err := fOptions(ctx, e, NameF2b, "capture-all-108", "*", []int{108}, t0, func([]OptMsg) bool { return true }, ev)
+	if err != nil {
+		return blocked(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	o := judgeF2bWire(msgs, all, f108Bytes())
+	return fFinish(NameF2b, e, o, "IPv4 lease "+addr+" kept, shown in the source's own table", ev)
+}
+
+// serverHas reports whether the source declares c.
+func serverHas(s sourceadapter.Adapter, c sourceadapter.Capability) bool {
+	for _, have := range s.Capabilities() {
+		if have == c {
+			return true
+		}
+	}
+	return false
+}
+
+// runF3 -- DHCPv4 rapid commit: with rapid_commit set the client sends
+// option 80 in its DISCOVER. dnsmasq (rapid commit on) answers with an ACK
+// and the lease takes two messages; Kea and ISC have none and answer an
+// OFFER, and the exchange continues as four, which is what the plugin's
+// docs promise ("the exchange continues unchanged").
+func runF3(ctx context.Context, e Env) (v Verdict) {
+	if v, ok := bIPAMNA(NameF3, e); ok {
+		return v
+	}
+	present, blk := clientState(e, NameF3)
+	if blk != nil {
+		return *blk
+	}
+	serverRapid := serverHas(e.Source, sourceadapter.CapRapidCommit4)
+	t0 := time.Now().Add(-2 * time.Second)
+	restore := func(context.Context) error { return nil }
+	if serverRapid {
+		var err error
+		restore, err = fEnable(ctx, e, sourceadapter.FeatureRapidCommit4, sourceadapter.FeatureParams{})
+		defer fRestoreInto(bCleanupCtx(ctx), e, NameF3, restore, &v)
+		if err != nil {
+			return blocked(NameF3, e.Cell, e.Shape, fmt.Sprintf("could not turn rapid commit on at the source: %v", err), e.GitSHA)
+		}
+	}
+	var opts []string
+	if present {
+		opts = []string{"rapid_commit=true"}
+	}
+	net, down, err := cNetwork(ctx, e, "f3", opts)
+	defer down()
+	if err != nil {
+		return fail(NameF3, e.Cell, e.Shape, fmt.Sprintf("could not create the network (rapid_commit=true): %v", err), nil, e.GitSHA)
+	}
+	name := containerName(e, NameF3)
+	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
+	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, net, name)
+	if err != nil {
+		return fail(NameF3, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{}
+	snap := evidencePath(e, NameF3, "leases-after")
+	lease, _, found, err := lookupLease(ctx, e.Source, e.Shape, mac, addr, endpointID, snap)
+	if err != nil {
+		return fail(NameF3, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev["leases-after"] = snap
+	if bad, ok := fLeaseConfirm(ctx, e, NameF3, lease, found, addr, leaseFailReason(e.Shape, mac, addr, endpointID), ev); !ok {
+		return bad
+	}
+	ident, err := cIdent(e.Shape, mac, endpointID)
+	if err != nil {
+		return blocked(NameF3, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	msgs, err := fOptions(ctx, e, NameF3, "capture-options", ident, []int{80}, t0, func(m []OptMsg) bool { return hasType(m, "ACK") }, ev)
+	if err != nil {
+		return blocked(NameF3, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	o := judgeF3Wire(present, serverRapid, msgs)
+	return fFinish(NameF3, e, o, "lease "+addr+" shown in the source's own table", ev)
+}

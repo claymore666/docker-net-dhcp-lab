@@ -46,19 +46,8 @@ type ObserverCapture struct {
 }
 
 func (o ObserverCapture) Messages(ctx context.Context, ident, snapshotPath string) ([]DHCPMsg, error) {
-	f, err := os.Create(snapshotPath)
-	if err != nil {
-		return nil, fmt.Errorf("capture snapshot: %w", err)
-	}
-	cp := exec.CommandContext(ctx, "sudo", "-n", "docker", "exec", "lab-observer-"+o.Cell, "cat", "/tmp/obs.pcap")
-	cp.Stdout = f
-	runErr := cp.Run()
-	closeErr := f.Close()
-	if runErr != nil {
-		return nil, fmt.Errorf("capture snapshot from lab-observer-%s: %w", o.Cell, runErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("capture snapshot: %w", closeErr)
+	if err := o.snapshot(ctx, snapshotPath); err != nil {
+		return nil, err
 	}
 	script := o.RepoRoot + "/scripts/dhcp-exchange-check.sh"
 	cmd := exec.CommandContext(ctx, "bash", "-c", `. "$1"; dhcp_message_log "$2" "$3"`,
@@ -68,6 +57,25 @@ func (o ObserverCapture) Messages(ctx context.Context, ident, snapshotPath strin
 		return nil, fmt.Errorf("dhcp_message_log: %w", err)
 	}
 	return parseMessageLog(string(out))
+}
+
+// snapshot copies the live capture out of the observer to path.
+func (o ObserverCapture) snapshot(ctx context.Context, path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("capture snapshot: %w", err)
+	}
+	cp := exec.CommandContext(ctx, "sudo", "-n", "docker", "exec", "lab-observer-"+o.Cell, "cat", "/tmp/obs.pcap")
+	cp.Stdout = f
+	runErr := cp.Run()
+	closeErr := f.Close()
+	if runErr != nil {
+		return fmt.Errorf("capture snapshot from lab-observer-%s: %w", o.Cell, runErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("capture snapshot: %w", closeErr)
+	}
+	return nil
 }
 
 // parseMessageLog reads dhcp_message_log's lines: ts TYPE xid chaddr cid

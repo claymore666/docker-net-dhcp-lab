@@ -17,6 +17,11 @@ const (
 	classPoolFirstHost = 221
 	classPoolLastHost  = 230
 	dnsOptionHost      = 253
+	// Group F's user-class pool (F1, #20) is added to the source at run
+	// time, not baked in; it sits below the reservations and clear of the
+	// main pool and the class pool.
+	userClassFirstHost = 203
+	userClassLastHost  = 210
 )
 
 // shapeIndex is the shape's position in Shapes, so two shapes of one
@@ -94,6 +99,32 @@ func classPool(e Env) (first, last netip.Addr, err error) {
 // inClassPool reports whether addr is one of B5's class pool addresses.
 func inClassPool(e Env, addr string) (bool, error) {
 	first, last, err := classPool(e)
+	if err != nil {
+		return false, err
+	}
+	a, err := netip.ParseAddr(addr)
+	if err != nil {
+		return false, fmt.Errorf("address %q: %w", addr, err)
+	}
+	return a.Compare(first) >= 0 && a.Compare(last) <= 0, nil
+}
+
+// userClassPool returns the first and last address of F1's pool.
+func userClassPool(e Env) (first, last netip.Addr, err error) {
+	f, err := groupBAddr(e, userClassFirstHost)
+	if err != nil {
+		return first, last, err
+	}
+	l, err := groupBAddr(e, userClassLastHost)
+	if err != nil {
+		return first, last, err
+	}
+	return netip.MustParseAddr(f), netip.MustParseAddr(l), nil
+}
+
+// inUserClassPool reports whether addr is one of F1's pool addresses.
+func inUserClassPool(e Env, addr string) (bool, error) {
+	first, last, err := userClassPool(e)
 	if err != nil {
 		return false, err
 	}
