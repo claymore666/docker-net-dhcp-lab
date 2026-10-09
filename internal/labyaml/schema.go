@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +16,10 @@ import (
 // maxIfnameLen is IFNAMSIZ-1: the kernel's Linux network interface name
 // limit (16 bytes including a terminating NUL).
 const maxIfnameLen = 15
+
+// bridgePrefix is lab-seg-firewall.sh's `lab-br+` match (#11): bridged
+// traffic on any other bridge is not forwarded.
+const bridgePrefix = "lab-br-"
 
 // Every field also carries a json tag, matching the yaml name: `labctl
 // resolve` emits JSON and the provisioning shell scripts read it with jq
@@ -191,6 +196,9 @@ func (c *Config) Validate() error {
 		if len(cell.Segment.Bridge) > maxIfnameLen {
 			return fmt.Errorf("cell %s: segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", cell.Name, cell.Segment.Bridge, len(cell.Segment.Bridge), maxIfnameLen)
 		}
+		if !strings.HasPrefix(cell.Segment.Bridge, bridgePrefix) {
+			return fmt.Errorf("cell %s: segment.bridge %q does not start with %s, the only bridges lab-seg-firewall.sh forwards", cell.Name, cell.Segment.Bridge, bridgePrefix)
+		}
 		if seenBridge[cell.Segment.Bridge] {
 			return fmt.Errorf("cell %s: bridge %s reused by another cell", cell.Name, cell.Segment.Bridge)
 		}
@@ -314,6 +322,9 @@ func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge ma
 	}
 	if len(b) > maxIfnameLen {
 		return fail("server_segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", b, len(b), maxIfnameLen)
+	}
+	if !strings.HasPrefix(b, bridgePrefix) {
+		return fail("server_segment.bridge %q does not start with %s, the only bridges lab-seg-firewall.sh forwards", b, bridgePrefix)
 	}
 	if seenBridge[b] {
 		return fail("server_segment.bridge %s reused by another segment", b)
