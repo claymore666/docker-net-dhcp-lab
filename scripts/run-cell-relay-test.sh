@@ -1,8 +1,9 @@
 #!/bin/bash
 # shellcheck disable=SC2016 # stub bodies expand when each stub runs
 # run-cell.sh in a relay cell (#11), against a copy of the script in a
-# stub repo: a failed relay probe runs no shape and still keeps both
-# pcaps; a passing probe runs every shape and copies the server pcap.
+# stub repo: a failed relay probe runs no shape, keeps both pcaps and
+# the relay's journal and tears the cell down; a passing probe runs every
+# shape and copies the server pcap and the relay's journal.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 fail=0
@@ -16,14 +17,18 @@ stub() {
 	printf '#!/bin/bash\n%s\n' "$2" >"$1"
 	chmod +x "$1"
 }
-for s in up-cell.sh capture-source-config-diff.sh capture-check-regenerate.sh down-cell.sh; do
+stub "$fake/scripts/down-cell.sh" 'echo down >>"$CALLS"'
+for s in up-cell.sh capture-source-config-diff.sh capture-check-regenerate.sh; do
 	stub "$fake/scripts/$s" 'exit 0'
 done
 stub "$fake/scripts/capture-start.sh" ': >"$3/observer.ready"'
 stub "$fake/scripts/capture-stop.sh" 'echo "$1" >"$2/observer.pcap"'
 stub "$fake/scripts/relay-probe.sh" 'echo probe >>"$CALLS"; exit "${PROBE_RC:-0}"'
 stub "$tmp/bin/git" 'echo 0000000'
-stub "$tmp/bin/ssh" 'echo stub'
+stub "$tmp/bin/ssh" 'case "$*" in
+*"journalctl -u isc-dhcp-relay"*) echo relay-journal ;;
+*) echo stub ;;
+esac'
 stub "$tmp/bin/go" 'case "$3" in
 resolve) cat "$RESOLVED_FILE" ;;
 remaining) echo A1 ;;
@@ -59,7 +64,10 @@ for f in t-relay.pcap t-relay-server.pcap; do
 		fail=1
 	}
 done
-
+if ! grep -qx down "$tmp/probe-fails/calls"; then
+	echo "run-cell-relay-test: FAIL -- a failed probe left the cell up" >&2
+	fail=1
+fi
 run probe-passes PROBE_RC=0 || {
 	echo "run-cell-relay-test: FAIL -- run-cell failed with a passing probe" >&2
 	cat "$tmp/probe-passes/out" >&2
@@ -74,5 +82,11 @@ if [ "$(cat "$tmp/probe-passes/evidence/t-relay-server.pcap" 2>/dev/null)" != t-
 	echo "run-cell-relay-test: FAIL -- the server pcap is not the t-relay-srv observer's" >&2
 	fail=1
 fi
+for case in probe-fails probe-passes; do
+	if [ "$(cat "$tmp/$case/evidence/t-relay-relay-log.txt" 2>/dev/null)" != relay-journal ]; then
+		echo "run-cell-relay-test: FAIL -- $case: the relay journal is not in the evidence" >&2
+		fail=1
+	fi
+done
 [ "$fail" -eq 0 ] && echo "run-cell-relay-test: PASS"
 exit "$fail"
