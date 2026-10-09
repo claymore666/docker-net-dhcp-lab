@@ -254,8 +254,9 @@ that cell C1 to C4 stop or reset both peers together, C8 narrows both
 pools, and C6 and C7 act from the primary's VM. C9, C10 and C12 report
 N/A with the reason: a renumbered peer drops the failover setup, a
 delay on one peer is split brain, and the pair is not a relay. Each
-scenario's evidence holds both peers' failover state before and after
-it, recorded but not judged.
+PASS or FAIL lists both peers' failover state before and after the
+scenario, recorded but not judged. A BLOCKED verdict lists no evidence,
+so its two state files sit in the cell's evidence directory unlisted.
 
 ## Run every scenario on a cell
 

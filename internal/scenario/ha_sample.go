@@ -39,10 +39,14 @@ func haSample(ctx context.Context, e Env, scenario, label string) string {
 	return path
 }
 
-// withHASamples adds the two samples to a verdict that carries evidence.
+// withHASamples adds the two samples to a PASS or FAIL; a BLOCKED or
+// N/A verdict carries no evidence by the verdict rules (#4).
 func withHASamples(v Verdict, before, after string) Verdict {
-	if (v.Result != PASS && v.Result != FAIL) || v.Evidence == nil {
+	if v.Result != PASS && v.Result != FAIL {
 		return v
+	}
+	if v.Evidence == nil {
+		v.Evidence = map[string]string{}
 	}
 	for k, p := range map[string]string{"ha-state-before": before, "ha-state-after": after} {
 		if p != "" {
