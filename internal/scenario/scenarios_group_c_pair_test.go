@@ -667,6 +667,20 @@ func TestHASampleRecordsEachPeerUnjudged(t *testing.T) {
 	if haSample(context.Background(), cSetup(t, ShapeMacvlan).e, "probe", "x") != "" {
 		t.Error("a single source got a sample")
 	}
+	p.stateFn = func(n string) (sourceadapter.HAState, error) {
+		if n == "primary" {
+			return sourceadapter.HAState{State: "hot-standby", Clock: time.Now().Add(5 * time.Second)}, nil
+		}
+		return sourceadapter.HAState{State: "hot-standby"}, nil
+	}
+	b, err = os.ReadFile(haSample(context.Background(), c.e, "probe", "ha-state-after"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = string(b)
+	if !strings.Contains(got, "primary state=hot-standby clock=") || !strings.Contains(got, "skew=5s") || !strings.Contains(got, "partner state=hot-standby clock=unknown\n") {
+		t.Fatalf("sample %q", got)
+	}
 }
 
 func TestRunOneAddsHASamplesToAVerdictWithEvidence(t *testing.T) {
@@ -691,6 +705,10 @@ func TestRunOneAddsHASamplesToAVerdictWithEvidence(t *testing.T) {
 		if b != tc.want || a != tc.want {
 			t.Errorf("%s: before %v after %v, want %v", tc.v.Result, b, a, tc.want)
 		}
+	}
+	v := withHASamples(Verdict{Result: PASS, Evidence: map[string]string{}}, "", "after.txt")
+	if _, ok := v.Evidence["ha-state-before"]; ok || v.Evidence["ha-state-after"] != "after.txt" {
+		t.Errorf("a missing sample was recorded: %v", v.Evidence)
 	}
 }
 
