@@ -378,15 +378,17 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 // (#23) adds CapImpair to all three; none declares a failover pair or a
 // relay, so C5 and C12 stay N/A. Group F (#20) adds the three feature
 // capabilities (rapid commit only on dnsmasq); none declares CapV6.
+// #21 adds CapForceRenewNonce to all three (each nonce snippet passed the
+// daemon's own syntax check and a local wire exchange).
 func TestDeclaredCapabilities(t *testing.T) {
 	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
 	cases := map[string]struct {
 		got  []Capability
 		want []Capability
 	}{
-		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108)},
-		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108)},
-		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4)},
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce)},
 	}
 	for name, c := range cases {
 		if len(c.got) != len(c.want) {

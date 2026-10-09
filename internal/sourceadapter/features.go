@@ -24,7 +24,15 @@ const (
 	FeatureForce108 Feature = "force-108"
 	// FeatureRapidCommit4 turns DHCPv4 rapid commit on (group F, RFC 4039).
 	FeatureRapidCommit4 Feature = "rapid-commit-4"
+	// FeatureForceRenewNonce hands ClientID's client option 145 and, in
+	// the ACK, an option 90 carrying Nonce, so a FORCERENEW signed with
+	// it can be checked (F8-forcerenew, RFC 6704 section 4).
+	FeatureForceRenewNonce Feature = "forcerenew-nonce"
 )
+
+// ForceRenewNonceLen is the nonce length RFC 6704 section 4 fixes for
+// HMAC-MD5 (algorithm 1).
+const ForceRenewNonceLen = 16
 
 // FeatureParams carries what a Feature needs; unused fields stay zero.
 type FeatureParams struct {
@@ -35,6 +43,8 @@ type FeatureParams struct {
 	Seconds uint32
 	// ClientID is the option 61 value as colon-hex, type byte included.
 	ClientID string
+	// Nonce is the FORCERENEW key, ForceRenewNonceLen bytes.
+	Nonce []byte
 }
 
 var userClassRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -45,6 +55,7 @@ type validatedFeature struct {
 	Feature
 	class, start, end, clientID string
 	seconds                     uint32
+	nonce                       []byte
 }
 
 func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
@@ -79,6 +90,15 @@ func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
 			v.clientID = id
 		}
 	case FeatureRapidCommit4:
+	case FeatureForceRenewNonce:
+		if len(p.Nonce) != ForceRenewNonceLen {
+			return v, fmt.Errorf("forcerenew nonce is %d bytes, want %d", len(p.Nonce), ForceRenewNonceLen)
+		}
+		id, err := validateClientID(p.ClientID)
+		if err != nil {
+			return v, err
+		}
+		v.clientID, v.nonce = id, append([]byte(nil), p.Nonce...)
 	default:
 		return v, fmt.Errorf("unknown feature %q", f)
 	}
@@ -89,6 +109,18 @@ func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
 func (v validatedFeature) hex108() string {
 	return fmt.Sprintf("%02x:%02x:%02x:%02x", byte(v.seconds>>24), byte(v.seconds>>16), byte(v.seconds>>8), byte(v.seconds))
 }
+
+// ForceRenewNonceOption is the option 90 value a server hands out with
+// nonce: protocol 3, algorithm 1 (HMAC-MD5), RDM 0, replay 1, type 1
+// (nonce), the nonce (RFC 6704 section 4). The replay value 1 is the
+// floor a FORCERENEW must exceed (RFC 3118 section 2).
+func ForceRenewNonceOption(nonce []byte) []byte {
+	b := []byte{3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1}
+	return append(b, nonce...)
+}
+
+// auth90Hex is option 90's value for v.nonce as colon-hex.
+func (v validatedFeature) auth90Hex() string { return hexColon(ForceRenewNonceOption(v.nonce)) }
 
 // classHex is option 77 as RFC 3004 encodes one instance: a length byte,
 // then the text.

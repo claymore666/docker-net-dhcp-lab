@@ -2,8 +2,13 @@ package scenario
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
+	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -398,3 +403,177 @@ func runF3(ctx context.Context, e Env) (v Verdict) {
 	o := judgeF3Wire(present, serverRapid, msgs)
 	return fFinish(NameF3, e, o, "lease "+addr+" shown in the source's own table", ev)
 }
+
+// f8Gap is the wait after each dropped FORCERENEW and f8SignedWait the
+// one after the signed send (design F8-forcerenew row, #21); f8Rand draws the
+// nonce. Variables so the tests do not wait and can pin the nonce.
+var (
+	f8Gap        = 15 * time.Second
+	f8SignedWait = 10 * time.Second
+	f8Rand       = rand.Read
+)
+
+var f8XIDRE = regexp.MustCompile(`xid=0x([0-9a-f]{8})`)
+
+// fReadyInto (defeat 13) checks the source after F8-forcerenew's restore: a raw
+// sender that disturbed the server must not leak into the next scenario.
+func fReadyInto(ctx context.Context, e Env, scenario string, v *Verdict) {
+	if err := e.Source.Ready(ctx); err != nil {
+		*v = blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the source is not ready after F8-forcerenew (%v) (scenario result was %s: %s)", err, v.Result, v.Reason), e.GitSHA)
+	}
+}
+
+// f8Expiry reads the identity's lease from the source's own table.
+func f8Expiry(ctx context.Context, e Env, wire, label string, ev map[string]string) (sourceadapter.Lease, error) {
+	snap := evidencePath(e, NameF8, label)
+	lease, _, found, err := lookupLeaseByClientID(ctx, e.Source, wire, snap)
+	if err != nil {
+		return lease, err
+	}
+	ev[label] = snap
+	if !found {
+		return lease, fmt.Errorf("no lease under client id %s in the source's own table", wire)
+	}
+	return lease, nil
+}
+
+// runF8 -- FORCERENEW (RFC 3203, RFC 6704): the source hands F8-forcerenew's client
+// a nonce in its ACK; the lab then sends an unsigned, a wrongly signed
+// and a signed FORCERENEW from the source VM and reads what the client
+// does with each. Before v2.4.0 the client has no 145 and renews on none.
+func runF8(ctx context.Context, e Env) (v Verdict) {
+	if v, ok := bIPAMNA(NameF8, e); ok {
+		return v
+	}
+	present, blk := clientState(e, NameF8)
+	if blk != nil {
+		return *blk
+	}
+	script, err := os.ReadFile(e.RepoRoot + "/scripts/forcerenew-send.py")
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the FORCERENEW sender: %v", err), e.GitSHA)
+	}
+	nonce := make([]byte, sourceadapter.ForceRenewNonceLen)
+	if _, err := f8Rand(nonce); err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not draw a nonce: %v", err), e.GitSHA)
+	}
+	id := "lab-f8-" + string(e.Shape)
+	wire := b2WireClientID(id)
+	t0 := time.Now().Add(-2 * time.Second)
+	defer fReadyInto(bCleanupCtx(ctx), e, NameF8, &v)
+	restore, err := fEnable(ctx, e, sourceadapter.FeatureForceRenewNonce, sourceadapter.FeatureParams{ClientID: wire, Nonce: nonce})
+	defer fRestoreInto(bCleanupCtx(ctx), e, NameF8, restore, &v)
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not give the source the FORCERENEW nonce: %v", err), e.GitSHA)
+	}
+	net, down, err := cNetwork(ctx, e, "f8", []string{"client_id=" + id})
+	defer down()
+	if err != nil {
+		return fail(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not create the client_id network: %v", err), nil, e.GitSHA)
+	}
+	name := containerName(e, NameF8)
+	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
+	_, addr, _, err := runContainer(ctx, e.Host, e.Shape, net, name)
+	if err != nil {
+		return fail(NameF8, e.Cell, e.Shape, fmt.Sprintf("container did not start: %v", err), nil, e.GitSHA)
+	}
+	ev := map[string]string{}
+	snap := evidencePath(e, NameF8, "leases-after")
+	lease, _, found, err := lookupLeaseByClientID(ctx, e.Source, wire, snap)
+	if err != nil {
+		return fail(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read source lease table: %v", err), nil, e.GitSHA)
+	}
+	ev["leases-after"] = snap
+	if bad, ok := fLeaseConfirm(ctx, e, NameF8, lease, found, addr, fmt.Sprintf("no lease under client id %s (address %s) in the source's own table", wire, addr), ev); !ok {
+		return bad
+	}
+	hasACK := func(m []OptMsg) bool { return hasType(m, "ACK") }
+	opts, err := fOptions(ctx, e, NameF8, "capture-options", wire, []int{54, 90, 145}, t0, hasACK, ev)
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	ack, o := judgeF8Ack(present, opts, sourceadapter.ForceRenewNonceOption(nonce))
+	if o.Result != PASS {
+		return fFinish(NameF8, e, o, "", ev)
+	}
+	msgs, err := e.Capture.Messages(ctx, wire, evidencePath(e, NameF8, "capture-ack"))
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	ackMsg, ok := f8Find(msgs, "ACK", ack.XID)
+	if !ok || ackMsg.CHAddr == "" {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("the message log has no ACK %s with a chaddr to address the FORCERENEW to", ack.XID), e.GitSHA)
+	}
+	obs := f8Obs{present: present, lease: lease.Address, addr: addr, bind: ackMsg.At, signedWait: f8SignedWait}
+	obs.expires[0] = lease.Expires
+	p := sourceadapter.ForceRenewParams{
+		Addr: lease.Address, CHAddr: ackMsg.CHAddr, ClientID: wire, Server: net4(ack.Opts[54]),
+		Nonce: nonce, AckReplay: binary.BigEndian.Uint64(ack.Opts[90][3:11]),
+	}
+	for i, mode := range []string{"unsigned", "badkey", "signed"} {
+		p.Mode = mode
+		obs.sends[i] = f8Send{Mode: mode, At: time.Now()}
+		out, err := e.Source.SendForceRenew(ctx, script, p)
+		if err != nil {
+			return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("the %s FORCERENEW could not be sent: %v", mode, err), e.GitSHA)
+		}
+		m := f8XIDRE.FindStringSubmatch(out)
+		if m == nil {
+			return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("the sender reported no xid for the %s FORCERENEW: %q", mode, out), e.GitSHA)
+		}
+		obs.sends[i].XID = m[1]
+		wait := f8Gap
+		if mode == "signed" {
+			wait = f8SignedWait
+		}
+		if err := sleepCtx(ctx, wait); err != nil {
+			return blocked(NameF8, e.Cell, e.Shape, err.Error(), e.GitSHA)
+		}
+		l, err := f8Expiry(ctx, e, wire, "leases-after-"+mode, ev)
+		if err != nil {
+			return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the lease after the %s FORCERENEW: %v", mode, err), e.GitSHA)
+		}
+		obs.expires[i+1], obs.addrAfter = l.Expires, l.Address
+	}
+	sentAll := func(m []OptMsg) bool {
+		for _, s := range obs.sends {
+			if _, ok := f8Opt(m, "FORCERENEW", s.XID); !ok {
+				return false
+			}
+		}
+		return true
+	}
+	if obs.opts, err = fOptions(ctx, e, NameF8, "capture-forcerenew", wire, []int{90}, obs.bind, sentAll, ev); err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	msnap := evidencePath(e, NameF8, "capture-messages")
+	if obs.msgs, err = e.Capture.Messages(ctx, wire, msnap); err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	ev["capture-messages"] = msnap
+	o = judgeF8(obs)
+	if o.Result != PASS {
+		return fFinish(NameF8, e, o, "", ev)
+	}
+	// The control: another client takes a lease while the nonce is on.
+	ctl := name + "-ctl"
+	defer removeContainer(bCleanupCtx(ctx), e.Host, ctl)
+	cmac, caddr, cep, err := runContainer(ctx, e.Host, e.Shape, e.Network, ctl)
+	if err != nil {
+		return fail(NameF8, e.Cell, e.Shape, fmt.Sprintf("the control container did not start: %v", err), nil, e.GitSHA)
+	}
+	cident, err := cIdent(e.Shape, cmac, cep)
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	cmsgs, err := fOptions(ctx, e, NameF8, "capture-control", cident, []int{90, 145}, t0, hasACK, ev)
+	if err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	if c := judgeF8Control(cmsgs); c.Result != PASS {
+		return fFinish(NameF8, e, c, "", ev)
+	}
+	return fFinish(NameF8, e, o, fmt.Sprintf("lease %s; the control client (%s) got %s with no option 145 or 90", addr, cident, caddr), ev)
+}
+
+func net4(b []byte) string { return net.IP(b).To4().String() }

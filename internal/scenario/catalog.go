@@ -147,6 +147,7 @@ const (
 	NameF5  = "F5-temporary-address"
 	NameF6  = "F6-prefix-delegation"
 	NameF7  = "F7-pref64"
+	NameF8  = "F8-forcerenew"
 )
 
 // MinPoolAddresses is the most pool addresses one full pass under one
@@ -167,12 +168,12 @@ const (
 // plus group C's 10: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
 // second) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
-// plus group F's 5: one each for the user class, 108 not asked and rapid commit, two for
-// 108 forced (its control client); the IPv6 rows never run (#20).
+// plus group F's 7: one each for the user class, 108 not asked and rapid commit, two each
+// for 108 forced and FORCERENEW (their control clients, #21); the IPv6 rows never run (#20).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 64
+const MinPoolAddresses = 66
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -185,7 +186,7 @@ var poolDemand = map[string]int{
 	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC10: 2,
 	NameC11: 1, NameC12: 0,
 	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
-	NameF4: 0, NameF5: 0, NameF6: 0, NameF7: 0,
+	NameF4: 0, NameF5: 0, NameF6: 0, NameF7: 0, NameF8: 2,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -316,4 +317,5 @@ var Catalog = []Scenario{
 	{Name: NameF5, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
 	{Name: NameF6, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
 	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runNeverReached},
+	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
 }

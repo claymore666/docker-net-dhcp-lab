@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The group F wire judges (#20) take the decoded option bytes of one
@@ -276,4 +277,177 @@ func judgeF3Wire(present, serverRapid bool, msgs []OptMsg) fOutcome {
 		return fBlocked("OFFER %s carries option 80: this source does answer rapid commit, but the lab expected it not to", ackXID)
 	}
 	return fOK("DISCOVER carried option 80, the source answered OFFER without it and the exchange ran as four messages on xid %s", ackXID)
+}
+
+// f8Send is one FORCERENEW the sender put on the wire: its mode, when
+// labctl ran it, and the xid the sender reported.
+type f8Send struct {
+	Mode string
+	At   time.Time
+	XID  string
+}
+
+// f8Obs is what F8-forcerenew judges after the three sends: the identity's messages
+// and option bytes (54, 90, 145) since its ACK, the source table's lease
+// expiry read after the ACK and after each wait, and the lease address
+// before and after.
+type f8Obs struct {
+	present     bool
+	lease, addr string
+	bind        time.Time
+	sends       [3]f8Send // unsigned, badkey, signed
+	msgs        []DHCPMsg
+	opts        []OptMsg
+	expires     [4]time.Time
+	addrAfter   string
+	signedWait  time.Duration
+}
+
+// judgeF8Ack (defeat 9): the identity's last ACK must carry option 90 as
+// the lab wrote it, else the nonce never reached the client and nothing
+// can be judged. The client's DISCOVER/REQUEST carry 145 iff present.
+func judgeF8Ack(present bool, opts []OptMsg, want []byte) (OptMsg, fOutcome) {
+	acks := ofType(opts, "ACK")
+	if len(acks) == 0 {
+		return OptMsg{}, fBlocked("no ACK of this identity in the capture, so the nonce cannot be read")
+	}
+	ack := acks[len(acks)-1]
+	if !ack.Has(90) {
+		return ack, fBlocked("ACK %s carries no option 90: the source did not hand out the FORCERENEW nonce (lab error)", ack.XID)
+	}
+	if !bytes.Equal(ack.Opts[90], want) {
+		return ack, fBlocked("ACK %s option 90 is %x, the lab wrote %x (lab error)", ack.XID, ack.Opts[90], want)
+	}
+	if len(ack.Opts[54]) != 4 {
+		return ack, fBlocked("ACK %s carries no server identifier (option 54) to send the FORCERENEW from", ack.XID)
+	}
+	cm := clientMsgs(opts)
+	if len(cm) == 0 {
+		return ack, fBlocked("no DISCOVER or REQUEST of this identity in the capture, so option 145 cannot be judged")
+	}
+	for _, m := range cm {
+		has := m.Has(145) && bytes.Equal(m.Opts[145], []byte{1})
+		if present && !has {
+			return ack, fFail("%s %s carries no option 145 = 01, which the plugin documents on every DISCOVER and REQUEST (RFC 6704 3.1.1)", m.Type, m.XID)
+		}
+		if !present && m.Has(145) {
+			return ack, fBlocked("%s %s carries option 145 although the plugin tag predates FORCERENEW support: the lab's version table is wrong", m.Type, m.XID)
+		}
+	}
+	return ack, fOK("option 145 as documented; the ACK carried the nonce")
+}
+
+func f8Find(msgs []DHCPMsg, typ, xid string) (DHCPMsg, bool) {
+	for _, m := range msgs {
+		if m.Type == typ && m.XID == xid {
+			return m, true
+		}
+	}
+	return DHCPMsg{}, false
+}
+
+func f8Opt(opts []OptMsg, typ, xid string) (OptMsg, bool) {
+	for _, m := range opts {
+		if m.Type == typ && m.XID == xid {
+			return m, true
+		}
+	}
+	return OptMsg{}, false
+}
+
+// f8Requests is the identity's REQUESTs in [from, to).
+func f8Requests(msgs []DHCPMsg, from, to time.Time) []DHCPMsg {
+	var out []DHCPMsg
+	for _, m := range msgs {
+		if m.Type == "REQUEST" && !m.At.Before(from) && m.At.Before(to) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// judgeF8: RFC 3203 and RFC 6704 3.1.4 -- a client drops a FORCERENEW
+// without option 90 and one whose HMAC fails, and answers a valid one by
+// entering RENEWING (a unicast REQUEST, ciaddr set, RFC 2131 4.3.2). The
+// drops count only next to an obeyed signed send through the same code
+// path (defeat 12); a send past T1 could be a natural renewal (defeat 11).
+func judgeF8(o f8Obs) fOutcome {
+	names := [3]string{"unsigned", "wrongly signed", "signed"}
+	if o.expires[0].IsZero() {
+		return fBlocked("the source's table gives no expiry for %s, so a renewal cannot be shown in it", o.lease)
+	}
+	half := o.bind.Add(o.expires[0].Sub(o.bind) / 2)
+	if last := o.sends[2].At; last.After(half) {
+		return fBlocked("the last FORCERENEW went out at %s, after half the lease (%s), where a natural renewal could answer it", last.UTC().Format("15:04:05"), half.UTC().Format("15:04:05"))
+	}
+	for i, s := range o.sends {
+		m, ok := f8Find(o.msgs, "FORCERENEW", s.XID)
+		if !ok {
+			return fBlocked("the observer did not see the %s FORCERENEW (xid %s), so the client's answer to it cannot be judged", names[i], s.XID)
+		}
+		if m.Dst != o.lease || m.CIAddr != o.lease {
+			return fBlocked("the %s FORCERENEW (xid %s) went to %s with ciaddr %s, not to the lease %s (lab error)", names[i], s.XID, m.Dst, m.CIAddr, o.lease)
+		}
+		om, ok := f8Opt(o.opts, "FORCERENEW", s.XID)
+		if !ok || om.Has(90) != (s.Mode != "unsigned") {
+			return fBlocked("the %s FORCERENEW (xid %s) does not carry option 90 as its mode says (lab error)", names[i], s.XID)
+		}
+	}
+	judged := 1
+	if o.present {
+		judged = 2
+	}
+	for i := 0; i < judged; i++ {
+		if r := f8Requests(o.msgs, o.sends[i].At, o.sends[i+1].At); len(r) > 0 {
+			return fFail("the client sent REQUEST %s after the %s FORCERENEW (xid %s), which RFC 6704 3.1.4 says it must discard", r[0].XID, names[i], o.sends[i].XID)
+		}
+		if !o.expires[i+1].Equal(o.expires[0]) {
+			return fFail("the lease expiry moved from %s to %s after the %s FORCERENEW, which must be discarded", o.expires[0].UTC().Format(time.RFC3339), o.expires[i+1].UTC().Format(time.RFC3339), names[i])
+		}
+	}
+	s := o.sends[2]
+	reqs := f8Requests(o.msgs, s.At, s.At.Add(o.signedWait))
+	if !o.present {
+		return fOK("the plugin predates FORCERENEW support: no renewal after the unsigned FORCERENEW; the signed one drew %d REQUEST(s), recorded, not judged", len(reqs))
+	}
+	if len(reqs) == 0 {
+		return fBlocked("no REQUEST within %s of the signed FORCERENEW (xid %s) the observer saw reach %s, so the two drops cannot count (design defeat 12): a plugin that ignores it and a frame the client cannot verify look the same here", o.signedWait, s.XID, o.lease)
+	}
+	r := reqs[0]
+	if r.CIAddr != o.lease || r.Dst == "" || r.Dst == "255.255.255.255" {
+		return fFail("REQUEST %s after the signed FORCERENEW went to %s with ciaddr %q, not the unicast RENEWING request RFC 2131 4.3.2 describes", r.XID, r.Dst, r.CIAddr)
+	}
+	acked := false
+	for _, m := range o.msgs {
+		if m.Type == "ACK" && m.XID == r.XID && !m.At.Before(r.At) {
+			acked = true
+		}
+	}
+	if !acked {
+		return fFail("REQUEST %s after the signed FORCERENEW drew no ACK in the capture", r.XID)
+	}
+	if !o.expires[3].After(o.expires[0]) {
+		return fFail("the client renewed (REQUEST/ACK %s) but the source's table still shows the expiry %s", r.XID, o.expires[0].UTC().Format(time.RFC3339))
+	}
+	if o.addrAfter != o.addr {
+		return fFail("the address changed from %s to %s across the forced renewal", o.addr, o.addrAfter)
+	}
+	return fOK("the unsigned and the wrongly signed FORCERENEW were dropped (no REQUEST, expiry unchanged); the signed one drew the unicast REQUEST %s within %s, an ACK, and moved the expiry to %s", r.XID, r.At.Sub(s.At).Round(time.Second), o.expires[3].UTC().Format(time.RFC3339))
+}
+
+// judgeF8Control (defeat 16): a client outside F8-forcerenew's client id gets its
+// lease with neither 145 nor 90, else the snippet is not scoped.
+func judgeF8Control(control []OptMsg) fOutcome {
+	if len(ofType(control, "ACK")) == 0 {
+		return fBlocked("no ACK for the control client in the capture, so the nonce's scope was not exercised")
+	}
+	for _, m := range control {
+		if m.Type != "OFFER" && m.Type != "ACK" {
+			continue
+		}
+		if m.Has(145) || m.Has(90) {
+			return fBlocked("%s %s to the control client carries option 145 or 90: the FORCERENEW snippet is not scoped to the one client id (lab error)", m.Type, m.XID)
+		}
+	}
+	return fOK("the control client got its lease with no option 145 or 90")
 }

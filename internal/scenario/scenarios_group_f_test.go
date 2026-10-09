@@ -643,16 +643,16 @@ func TestGroupFNamesAreInTheHygieneGate(t *testing.T) {
 			}
 		}
 	}
-	if n != 8 {
-		t.Errorf("catalog holds %d group F names, want 8", n)
+	if n != 9 {
+		t.Errorf("catalog holds %d group F names, want 9", n)
 	}
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	heads := regexp.MustCompile(`(?m)^\| (F\d+[a-z]?) \| ([^|]+?) \|`).FindAllStringSubmatch(string(readme), -1)
-	if len(heads) != 8 {
-		t.Errorf("README holds %d group F rows, want 8", len(heads))
+	if len(heads) != 9 {
+		t.Errorf("README holds %d group F rows, want 9", len(heads))
 	}
 	for _, m := range heads {
 		if want := `'^\| ` + m[1] + ` \| ` + m[2] + ` \|'`; !strings.Contains(gate, want) {

@@ -629,6 +629,9 @@ func TestRunA16FailsWhenLeaseIsGoneAfterForceRemove(t *testing.T) {
 
 func (a *sequencedLeaseAdapter) Ready(_ context.Context) error   { return nil }
 func (a *sequencedLeaseAdapter) Recover(_ context.Context) error { return nil }
+func (a *sequencedLeaseAdapter) SendForceRenew(_ context.Context, _ []byte, _ sourceadapter.ForceRenewParams) (string, error) {
+	return "", nil
+}
 func (a *sequencedLeaseAdapter) EnableFeature(_ context.Context, _ sourceadapter.Feature, _ sourceadapter.FeatureParams) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }

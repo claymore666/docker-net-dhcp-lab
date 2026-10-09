@@ -55,6 +55,7 @@ var PlainNames = map[string]string{
 	scenario.NameF5:  "temporary IPv6 address",
 	scenario.NameF6:  "IPv6 prefix delegation",
 	scenario.NameF7:  "NAT64 prefix in router advertisements",
+	scenario.NameF8:  "FORCERENEW, signed and unsigned",
 }
 
 // Order is the row order the results page renders in: scenario.Catalog's

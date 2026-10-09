@@ -101,6 +101,7 @@ Group F runs today (IPv4; the plugin's client options, judged by the bytes the c
 | F5 | temporary address | N/A on every source until the IPv6 segment exists (#23 group D) |
 | F6 | prefix delegation | N/A on every source until the IPv6 segment exists (#23 group D) |
 | F7 | NAT64 prefix | N/A on every source until the IPv6 segment exists (#23 group D) |
+| F8 | FORCERENEW, signed and unsigned | FORCERENEW is a server telling a client "renew your lease now", trusted only when signed with a secret the server put in the lease (RFC 6704); the lab sends the container one unsigned, one wrongly signed and one correctly signed: it must ignore the first two and renew on the third, keeping its address. Before v2.4.0 the client must ignore the unsigned one |
 
 The user class, forced 108 and rapid commit rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class and rapid commit rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send neither option, and a tag that is not a release leaves them BLOCKED. A source VM needs no rebuild for group F; the settings are written at run time.
 
