@@ -65,7 +65,7 @@ var (
 // NewKeaPair builds the kea-ha cell's adapter from one runner per peer.
 func NewKeaPair(primary, partner Runner, primaryID, partnerID string) *PairAdapter {
 	peer := func(name string, r Runner, id string) PairPeer {
-		return PairPeer{Name: name, Adapter: &KeaAdapter{Runner: r}, ServerID: id,
+		return PairPeer{Name: name, Adapter: &KeaAdapter{Runner: r, V4Only: name != "primary"}, ServerID: id,
 			State: func(ctx context.Context) (HAState, error) { return KeaHAState(ctx, r) }}
 	}
 	return &PairAdapter{
@@ -78,8 +78,8 @@ func NewKeaPair(primary, partner Runner, primaryID, partnerID string) *PairAdapt
 	}
 }
 
-// Capabilities is what both peers declare, plus CapFailoverPair, minus
-// CapImpair and CapRenumber (see NAReason).
+// Capabilities is what both peers declare, plus the primary's v6
+// capabilities and CapFailoverPair, minus CapImpair and CapRenumber (see NAReason).
 func (p *PairAdapter) Capabilities() []Capability {
 	second := map[Capability]bool{}
 	for _, c := range p.Peers[1].Adapter.Capabilities() {
@@ -87,7 +87,7 @@ func (p *PairAdapter) Capabilities() []Capability {
 	}
 	var out []Capability
 	for _, c := range p.Peers[0].Adapter.Capabilities() {
-		if second[c] && !pairWithheld[c] && c != CapFailoverPair {
+		if (second[c] || v6Capabilities[c]) && !pairWithheld[c] && c != CapFailoverPair {
 			out = append(out, c)
 		}
 	}
@@ -215,6 +215,13 @@ func (p *PairAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(c
 }
 
 func (p *PairAdapter) EnableFeature(ctx context.Context, f Feature, fp FeatureParams) (func(context.Context) error, error) {
+	if v6Features[f] {
+		r, err := p.Peers[0].Adapter.EnableFeature(ctx, f, fp)
+		if err != nil {
+			return nil, fmt.Errorf("pair: %s: %w", p.Peers[0].Name, err)
+		}
+		return r, nil
+	}
 	return p.fanOut(ctx, func(a Adapter) (func(context.Context) error, error) { return a.EnableFeature(ctx, f, fp) })
 }
 
@@ -443,10 +450,25 @@ func (p *PairAdapter) Profile() PairProfile {
 	return PairProfile{Normal: p.Normal, Survivor: p.Survivor, StandbySilent: p.StandbySilent}
 }
 
+// v6Capabilities and v6Features belong to the primary alone: on a pair
+// it is the one v6 server (lab #12).
+var (
+	v6Capabilities = map[Capability]bool{CapV6: true, CapRapidCommit6: true, CapTemporary6: true, CapPD: true, CapPref64: true}
+	v6Features     = map[Feature]bool{FeatureRapidCommit6: true, FeatureTemporary6: true}
+)
+
 func (p *PairAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
-	return nil, errors.New("pair: v6 is not wired")
+	l, err := p.Peers[0].Adapter.Leases6(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("pair: %s: %w", p.Peers[0].Name, err)
+	}
+	return l, nil
 }
 
 func (p *PairAdapter) SetRA(ctx context.Context, rp RAParams) (func(context.Context) error, error) {
-	return nil, errors.New("pair: v6 is not wired")
+	r, err := p.Peers[0].Adapter.SetRA(ctx, rp)
+	if err != nil {
+		return nil, fmt.Errorf("pair: %s: %w", p.Peers[0].Name, err)
+	}
+	return r, nil
 }

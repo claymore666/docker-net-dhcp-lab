@@ -393,7 +393,8 @@ func TestPairCapabilities(t *testing.T) {
 	fp := newFakePair()
 	fp.b.caps = []Capability{CapV4, CapImpair, CapReserveMAC, CapRenumber, CapNarrowPool}
 	got := fp.pair.Capabilities()
-	want := []Capability{CapV4, CapReserveMAC, CapNarrowPool, CapFailoverPair}
+	// The partner is v4-only, so v6 comes from the primary alone (lab #12).
+	want := []Capability{CapV4, CapReserveMAC, CapNarrowPool, CapV6, CapRapidCommit6, CapFailoverPair}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

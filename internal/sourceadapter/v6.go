@@ -107,6 +107,9 @@ func (a *DnsmasqAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Co
 // units are each adapter's Ready and Recover inputs (readiness.go): the
 // v4 unit and config, then the v6 configs and the units serving them.
 func (a *KeaAdapter) units() sourceUnits {
+	if a.V4Only {
+		return sourceUnits{service: "kea-dhcp4-server", cfgPath: "/etc/kea/kea-dhcp4.conf"}
+	}
 	return sourceUnits{service: "kea-dhcp4-server", cfgPath: "/etc/kea/kea-dhcp4.conf", leases6: a.Leases6,
 		extra: []extraConf{{keaDHCP6Conf, "kea-dhcp6-server"}, {radvdConf, "radvd"}}}
 }

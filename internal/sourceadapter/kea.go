@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -29,6 +30,13 @@ type KeaAdapter struct {
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
+	if a.V4Only {
+		return slices.DeleteFunc(a.allCapabilities(), func(c Capability) bool { return v6Capabilities[c] })
+	}
+	return a.allCapabilities()
+}
+
+func (a *KeaAdapter) allCapabilities() []Capability {
 	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6}
 }
 
