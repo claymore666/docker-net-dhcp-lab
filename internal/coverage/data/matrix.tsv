@@ -1,0 +1,823 @@
+# variants: 821
+# id	kind	mode	families	points
+AWAIT_TIMEOUT=!0	refused			create
+AWAIT_TIMEOUT=10s	single			start,settled
+AWAIT_TIMEOUT=45s	single			start,settled
+DHCPV6_ABSENCE_MEMORY=!-1s	refused			create
+DHCPV6_ABSENCE_MEMORY=0	single			start,settled
+DHCPV6_ABSENCE_MEMORY=10m	single			start,settled
+DOCKER_HOST=proxy	single			start,settled
+DOCKER_HOST=unset	single			start,settled
+LOG_LEVEL=debug	single			start,settled
+LOG_LEVEL=error	single			start,settled
+LOG_LEVEL=info	single			start,settled
+LOG_LEVEL=trace	single			start,settled
+LOG_LEVEL=warn	single			start,settled
+METRICS_ADDR=!notanaddress	refused			create
+METRICS_ADDR=127.0.0.1:9099	single			start,settled
+METRICS_ADDR=unset	single			start,settled
+STATE_DIR=/srv/net-dhcp	single			start,settled
+STATE_DIR=/var/lib/net-dhcp	single			start,settled
+alias:audit_log=0~audit_log=false	alias			create
+alias:audit_log=1~audit_log=true	alias			create
+alias:audit_log=empty~audit_log=unset	alias			create
+alias:audit_log=false~audit_log=unset	alias			create
+alias:bridge=empty~bridge=unset	alias			create
+alias:client_id=empty~client_id=unset	alias			create
+alias:conflict_check=empty~conflict_check=unset	alias			create
+alias:conflict_check=wait~conflict_check=unset	alias			create
+alias:dhcp_deny_servers=empty~dhcp_deny_servers=unset	alias			create
+alias:dhcp_servers=empty~dhcp_servers=unset	alias			create
+alias:force_create=0~force_create=false	alias			create
+alias:force_create=1~force_create=true	alias			create
+alias:force_create=empty~force_create=unset	alias			create
+alias:force_create=false~force_create=unset	alias			create
+alias:gateway=empty~gateway=unset	alias			create
+alias:host_ifname=empty~host_ifname=unset	alias			create
+alias:ifname=eth5~ifname=interface_name@bridge	alias	bridge		create
+alias:ifname=eth5~ifname=interface_name@ipvlan	alias	ipvlan		create
+alias:ifname=eth5~ifname=interface_name@macvlan	alias	macvlan		create
+alias:ignore_conflicts=0~ignore_conflicts=false	alias			create
+alias:ignore_conflicts=1~ignore_conflicts=true	alias			create
+alias:ignore_conflicts=empty~ignore_conflicts=unset	alias			create
+alias:ignore_conflicts=false~ignore_conflicts=unset	alias			create
+alias:ip=192.0.2.50~ip=run-ip@bridge	alias	bridge		create
+alias:ip=192.0.2.50~ip=run-ip@ipvlan	alias	ipvlan		create
+alias:ip=192.0.2.50~ip=run-ip@macvlan	alias	macvlan		create
+alias:ipv6=empty~ipv6=unset	alias			create
+alias:ipv6=true~ipv6=true+ipv6_mode=dhcp@bridge	alias	bridge		start,settled
+alias:ipv6=true~ipv6=true+ipv6_mode=dhcp@ipvlan	alias	ipvlan		start,settled
+alias:ipv6=true~ipv6=true+ipv6_mode=dhcp@macvlan	alias	macvlan		start,settled
+alias:ipv6=true~ipv6_mode=dhcp@bridge	alias	bridge		start,settled
+alias:ipv6=true~ipv6_mode=dhcp@ipvlan	alias	ipvlan		start,settled
+alias:ipv6=true~ipv6_mode=dhcp@macvlan	alias	macvlan		start,settled
+alias:ipv6=unset~ipv6=false+ipv6_mode=off@bridge	alias	bridge		create
+alias:ipv6=unset~ipv6=false+ipv6_mode=off@ipvlan	alias	ipvlan		create
+alias:ipv6=unset~ipv6=false+ipv6_mode=off@macvlan	alias	macvlan		create
+alias:ipv6=unset~ipv6=false@bridge	alias	bridge		create
+alias:ipv6=unset~ipv6=false@ipvlan	alias	ipvlan		create
+alias:ipv6=unset~ipv6=false@macvlan	alias	macvlan		create
+alias:ipv6=unset~ipv6_mode=off@bridge	alias	bridge		create
+alias:ipv6=unset~ipv6_mode=off@ipvlan	alias	ipvlan		create
+alias:ipv6=unset~ipv6_mode=off@macvlan	alias	macvlan		create
+alias:ipv6_auto_strict=0~ipv6_auto_strict=false	alias			create
+alias:ipv6_auto_strict=1~ipv6_auto_strict=true	alias			create
+alias:ipv6_auto_strict=empty~ipv6_auto_strict=unset	alias			create
+alias:ipv6_auto_strict=false~ipv6_auto_strict=unset	alias			create
+alias:ipv6_iid=empty~ipv6_iid=unset	alias			create
+alias:ipv6_iid=eui64~ipv6_iid=unset	alias			create
+alias:ipv6_main_prefix=empty~ipv6_main_prefix=unset	alias			create
+alias:ipv6_mode=empty~ipv6_mode=unset	alias			create
+alias:ipv6_mode=off~ipv6_mode=unset	alias			create
+alias:ipv6_pd=empty~ipv6_pd=unset	alias			create
+alias:ipv6_temporary=0~ipv6_temporary=false	alias			create
+alias:ipv6_temporary=1~ipv6_temporary=true	alias			create
+alias:ipv6_temporary=empty~ipv6_temporary=unset	alias			create
+alias:ipv6_temporary=false~ipv6_temporary=unset	alias			create
+alias:ipvlan_mode=empty~ipvlan_mode=unset	alias			create
+alias:ipvlan_mode=l2~ipvlan_mode=unset	alias			create
+alias:lease_timeout=empty~lease_timeout=unset	alias			create
+alias:lease_timeout=unset~lease_timeout=0	alias			create
+alias:link_local_fallback=0~link_local_fallback=false	alias			create
+alias:link_local_fallback=1~link_local_fallback=true	alias			create
+alias:link_local_fallback=empty~link_local_fallback=unset	alias			create
+alias:link_local_fallback=false~link_local_fallback=unset	alias			create
+alias:macvlan_mode=bridge~macvlan_mode=unset	alias			create
+alias:macvlan_mode=empty~macvlan_mode=unset	alias			create
+alias:mode=empty~mode=unset	alias			create
+alias:mtu=empty~mtu=unset	alias			create
+alias:parent=empty~parent=unset	alias			create
+alias:propagate_dns=0~propagate_dns=false	alias			create
+alias:propagate_dns=1~propagate_dns=true	alias			create
+alias:propagate_dns=empty~propagate_dns=unset	alias			create
+alias:propagate_dns=false~propagate_dns=unset	alias			create
+alias:propagate_mtu=0~propagate_mtu=false	alias			create
+alias:propagate_mtu=1~propagate_mtu=true	alias			create
+alias:propagate_mtu=empty~propagate_mtu=unset	alias			create
+alias:propagate_mtu=false~propagate_mtu=unset	alias			create
+alias:rapid_commit=0~rapid_commit=false	alias			create
+alias:rapid_commit=1~rapid_commit=true	alias			create
+alias:rapid_commit=empty~rapid_commit=unset	alias			create
+alias:rapid_commit=false~rapid_commit=unset	alias			create
+alias:register_dns=0~register_dns=false	alias			create
+alias:register_dns=1~register_dns=true	alias			create
+alias:register_dns=empty~register_dns=unset	alias			create
+alias:register_dns=false~register_dns=unset	alias			create
+alias:release_lease=empty~release_lease=unset	alias			create
+alias:release_lease=never~release_lease=unset	alias			create
+alias:require_mac=0~require_mac=false	alias			create
+alias:require_mac=1~require_mac=true	alias			create
+alias:require_mac=empty~require_mac=unset	alias			create
+alias:require_mac=false~require_mac=unset	alias			create
+alias:skip_routes=0~skip_routes=false	alias			create
+alias:skip_routes=1~skip_routes=true	alias			create
+alias:skip_routes=empty~skip_routes=unset	alias			create
+alias:skip_routes=false~skip_routes=unset	alias			create
+alias:user_class=empty~user_class=unset	alias			create
+alias:validate_dhcp=0~validate_dhcp=false	alias			create
+alias:validate_dhcp=1~validate_dhcp=true	alias			create
+alias:validate_dhcp=empty~validate_dhcp=unset	alias			create
+alias:validate_dhcp=false~validate_dhcp=unset	alias			create
+alias:vendor_class=docker-net-dhcp~vendor_class=unset	alias			create
+alias:vendor_class=empty~vendor_class=unset	alias			create
+alias:vlan=empty~vlan=unset	alias			create
+audit_log=false@bridge	single	bridge		start,settled
+audit_log=false@ipvlan	single	ipvlan		start,settled
+audit_log=false@macvlan	single	macvlan		start,settled
+audit_log=true@bridge	single	bridge		start,settled
+audit_log=true@ipvlan	single	ipvlan		start,settled
+audit_log=true@macvlan	single	macvlan		start,settled
+bridge=br0@bridge	single	bridge		start,settled
+bridge@!ipvlan	outofmode	ipvlan		create
+bridge@!macvlan	outofmode	macvlan		create
+client_id=!octets255	refused			create
+client_id=octets254@bridge	single	bridge		start,settled
+client_id=octets254@ipvlan	single	ipvlan		start,settled
+client_id=octets254@macvlan	single	macvlan		start,settled
+client_id=text@bridge	single	bridge		start,settled
+client_id=text@ipvlan	single	ipvlan		start,settled
+client_id=text@macvlan	single	macvlan		start,settled
+client_id=unset@bridge	single	bridge		start,settled
+client_id=unset@ipvlan	single	ipvlan		start,settled
+client_id=unset@macvlan	single	macvlan		start,settled
+conflict_check=!bogus	refused			create
+conflict_check=async@bridge	single	bridge		start,settled
+conflict_check=async@ipvlan	single	ipvlan		start,settled
+conflict_check=async@macvlan	single	macvlan		start,settled
+conflict_check=off@bridge	single	bridge		start,settled
+conflict_check=off@ipvlan	single	ipvlan		start,settled
+conflict_check=off@macvlan	single	macvlan		start,settled
+conflict_check=wait@bridge	single	bridge		start,settled
+conflict_check=wait@ipvlan	single	ipvlan		start,settled
+conflict_check=wait@macvlan	single	macvlan		start,settled
+dhcp_deny_servers=!2001:db8::1	refused			create
+dhcp_deny_servers=3.3.3.3,4.4.4.4@bridge	single	bridge		start,settled
+dhcp_deny_servers=3.3.3.3,4.4.4.4@ipvlan	single	ipvlan		start,settled
+dhcp_deny_servers=3.3.3.3,4.4.4.4@macvlan	single	macvlan		start,settled
+dhcp_deny_servers=3.3.3.3@bridge	single	bridge		start,settled
+dhcp_deny_servers=3.3.3.3@ipvlan	single	ipvlan		start,settled
+dhcp_deny_servers=3.3.3.3@macvlan	single	macvlan		start,settled
+dhcp_deny_servers=unset@bridge	single	bridge		start,settled
+dhcp_deny_servers=unset@ipvlan	single	ipvlan		start,settled
+dhcp_deny_servers=unset@macvlan	single	macvlan		start,settled
+dhcp_servers=!2001:db8::1	refused			create
+dhcp_servers=1.1.1.1,2.2.2.2@bridge	single	bridge		start,settled
+dhcp_servers=1.1.1.1,2.2.2.2@ipvlan	single	ipvlan		start,settled
+dhcp_servers=1.1.1.1,2.2.2.2@macvlan	single	macvlan		start,settled
+dhcp_servers=1.1.1.1@bridge	single	bridge		start,settled
+dhcp_servers=1.1.1.1@ipvlan	single	ipvlan		start,settled
+dhcp_servers=1.1.1.1@macvlan	single	macvlan		start,settled
+dhcp_servers=unset@bridge	single	bridge		start,settled
+dhcp_servers=unset@ipvlan	single	ipvlan		start,settled
+dhcp_servers=unset@macvlan	single	macvlan		start,settled
+env:ipv6=true@bridge#E1	env	bridge	env	start,settled
+env:ipv6=true@bridge#E2	env	bridge	env	start,settled
+env:ipv6=true@bridge#E3	env	bridge	env	start,settled
+env:ipv6=true@bridge#E4	env	bridge	env	start,settled
+env:ipv6=true@ipvlan#E1	env	ipvlan	env	start,settled
+env:ipv6=true@ipvlan#E2	env	ipvlan	env	start,settled
+env:ipv6=true@ipvlan#E3	env	ipvlan	env	start,settled
+env:ipv6=true@ipvlan#E4	env	ipvlan	env	start,settled
+env:ipv6=true@macvlan#E1	env	macvlan	env	start,settled
+env:ipv6=true@macvlan#E2	env	macvlan	env	start,settled
+env:ipv6=true@macvlan#E3	env	macvlan	env	start,settled
+env:ipv6=true@macvlan#E4	env	macvlan	env	start,settled
+env:ipv6_mode=auto@bridge#E1	env	bridge	env	start,settled
+env:ipv6_mode=auto@bridge#E2	env	bridge	env	start,settled
+env:ipv6_mode=auto@bridge#E3	env	bridge	env	start,settled
+env:ipv6_mode=auto@bridge#E4	env	bridge	env	start,settled
+env:ipv6_mode=auto@ipvlan#E1	env	ipvlan	env	create
+env:ipv6_mode=auto@ipvlan#E2	env	ipvlan	env	create
+env:ipv6_mode=auto@ipvlan#E3	env	ipvlan	env	create
+env:ipv6_mode=auto@ipvlan#E4	env	ipvlan	env	create
+env:ipv6_mode=auto@macvlan#E1	env	macvlan	env	start,settled
+env:ipv6_mode=auto@macvlan#E2	env	macvlan	env	start,settled
+env:ipv6_mode=auto@macvlan#E3	env	macvlan	env	start,settled
+env:ipv6_mode=auto@macvlan#E4	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@bridge#E1	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E2	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E3	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E4	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E1	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E2	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E3	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E4	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E1	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E2	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E3	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E4	env	macvlan	env	start,settled
+env:ipv6_mode=slaac@bridge#E1	env	bridge	env	start,settled
+env:ipv6_mode=slaac@bridge#E2	env	bridge	env	start,settled
+env:ipv6_mode=slaac@bridge#E3	env	bridge	env	start,settled
+env:ipv6_mode=slaac@bridge#E4	env	bridge	env	start,settled
+env:ipv6_mode=slaac@ipvlan#E1	env	ipvlan	env	create
+env:ipv6_mode=slaac@ipvlan#E2	env	ipvlan	env	create
+env:ipv6_mode=slaac@ipvlan#E3	env	ipvlan	env	create
+env:ipv6_mode=slaac@ipvlan#E4	env	ipvlan	env	create
+env:ipv6_mode=slaac@macvlan#E1	env	macvlan	env	start,settled
+env:ipv6_mode=slaac@macvlan#E2	env	macvlan	env	start,settled
+env:ipv6_mode=slaac@macvlan#E3	env	macvlan	env	start,settled
+env:ipv6_mode=slaac@macvlan#E4	env	macvlan	env	start,settled
+env:skip_routes=false@bridge#E1	env	bridge	env	start,settled
+env:skip_routes=false@bridge#E3	env	bridge	env	start,settled
+env:skip_routes=false@ipvlan#E1	env	ipvlan	env	start,settled
+env:skip_routes=false@ipvlan#E3	env	ipvlan	env	start,settled
+env:skip_routes=false@macvlan#E1	env	macvlan	env	start,settled
+env:skip_routes=false@macvlan#E3	env	macvlan	env	start,settled
+env:skip_routes=true@bridge#E1	env	bridge	env	start,settled
+env:skip_routes=true@bridge#E3	env	bridge	env	start,settled
+env:skip_routes=true@ipvlan#E1	env	ipvlan	env	start,settled
+env:skip_routes=true@ipvlan#E3	env	ipvlan	env	start,settled
+env:skip_routes=true@macvlan#E1	env	macvlan	env	start,settled
+env:skip_routes=true@macvlan#E3	env	macvlan	env	start,settled
+force_create=false@bridge	single	bridge		start,settled
+force_create=true@bridge	single	bridge		start,settled
+force_create@!ipvlan	outofmode	ipvlan		create
+force_create@!macvlan	outofmode	macvlan		create
+gateway=!0.0.0.0	refused			create
+gateway=!127.0.0.1	refused			create
+gateway=!192.0.2.1/24	refused			create
+gateway=!2001:db8::1	refused			create
+gateway=!224.0.0.1	refused			create
+gateway=!255.255.255.255	refused			create
+gateway=192.0.2.1@bridge	single	bridge		start,settled
+gateway=192.0.2.1@ipvlan	single	ipvlan		start,settled
+gateway=192.0.2.1@macvlan	single	macvlan		start,settled
+gateway=unset@bridge	single	bridge		start,settled
+gateway=unset@ipvlan	single	ipvlan		start,settled
+gateway=unset@macvlan	single	macvlan		start,settled
+host_ifname=!bogus	refused			create
+host_ifname=container_name@bridge	single	bridge		start,settled
+host_ifname=hostname@bridge	single	bridge		start,settled
+host_ifname=unset@bridge	single	bridge		start,settled
+host_ifname@!ipvlan	outofmode	ipvlan		create
+host_ifname@!macvlan	outofmode	macvlan		create
+ifname=!ifname-longer-than-15	refused			create
+ifname=eth5@bridge	single	bridge		start,settled
+ifname=eth5@ipvlan	single	ipvlan		start,settled
+ifname=eth5@macvlan	single	macvlan		start,settled
+ifname=unset@bridge	single	bridge		start,settled
+ifname=unset@ipvlan	single	ipvlan		start,settled
+ifname=unset@macvlan	single	macvlan		start,settled
+ignore_conflicts=false@bridge	single	bridge		start,settled
+ignore_conflicts=true@bridge	single	bridge		start,settled
+ignore_conflicts@!ipvlan	outofmode	ipvlan		create
+ignore_conflicts@!macvlan	outofmode	macvlan		create
+ip=!192.0.2.50/24	refused			create
+ip=192.0.2.50@bridge	single	bridge		start,settled
+ip=192.0.2.50@ipvlan	single	ipvlan		start,settled
+ip=192.0.2.50@macvlan	single	macvlan		start,settled
+ip=unset@bridge	single	bridge		start,settled
+ip=unset@ipvlan	single	ipvlan		start,settled
+ip=unset@macvlan	single	macvlan		start,settled
+ipv6=false@bridge	single	bridge		start,settled
+ipv6=false@ipvlan	single	ipvlan		start,settled
+ipv6=false@macvlan	single	macvlan		start,settled
+ipv6=true@bridge	single	bridge		start,settled
+ipv6=true@ipvlan	single	ipvlan		start,settled
+ipv6=true@macvlan	single	macvlan		start,settled
+ipv6_auto_strict=false@bridge	single	bridge		start,settled
+ipv6_auto_strict=false@ipvlan	single	ipvlan		start,settled
+ipv6_auto_strict=false@macvlan	single	macvlan		start,settled
+ipv6_auto_strict=true@bridge	single	bridge		start,settled
+ipv6_auto_strict=true@ipvlan	single	ipvlan		start,settled
+ipv6_auto_strict=true@macvlan	single	macvlan		start,settled
+ipv6_iid=!bogus	refused			create
+ipv6_iid=eui64@bridge	single	bridge		start,settled
+ipv6_iid=eui64@ipvlan	single	ipvlan		start,settled
+ipv6_iid=eui64@macvlan	single	macvlan		start,settled
+ipv6_iid=stable-privacy@bridge	single	bridge		start,settled
+ipv6_iid=stable-privacy@ipvlan	single	ipvlan		start,settled
+ipv6_iid=stable-privacy@macvlan	single	macvlan		start,settled
+ipv6_main_prefix=!2001:db8:1::1/64	refused			create
+ipv6_main_prefix=2001:db8:1::/64@bridge	single	bridge		start,settled
+ipv6_main_prefix=2001:db8:1::/64@ipvlan	single	ipvlan		start,settled
+ipv6_main_prefix=2001:db8:1::/64@macvlan	single	macvlan		start,settled
+ipv6_main_prefix=2001:db8:ffff::/64@bridge	single	bridge		start,settled
+ipv6_main_prefix=2001:db8:ffff::/64@ipvlan	single	ipvlan		start,settled
+ipv6_main_prefix=2001:db8:ffff::/64@macvlan	single	macvlan		start,settled
+ipv6_main_prefix=unset@bridge	single	bridge		start,settled
+ipv6_main_prefix=unset@ipvlan	single	ipvlan		start,settled
+ipv6_main_prefix=unset@macvlan	single	macvlan		start,settled
+ipv6_mode=!bogus	refused			create
+ipv6_mode=auto@bridge	single	bridge		start,settled
+ipv6_mode=auto@ipvlan	single	ipvlan		create
+ipv6_mode=auto@macvlan	single	macvlan		start,settled
+ipv6_mode=dhcp@bridge	single	bridge		start,settled
+ipv6_mode=dhcp@ipvlan	single	ipvlan		start,settled
+ipv6_mode=dhcp@macvlan	single	macvlan		start,settled
+ipv6_mode=off@bridge	single	bridge		start,settled
+ipv6_mode=off@ipvlan	single	ipvlan		start,settled
+ipv6_mode=off@macvlan	single	macvlan		start,settled
+ipv6_mode=slaac@bridge	single	bridge		start,settled
+ipv6_mode=slaac@ipvlan	single	ipvlan		create
+ipv6_mode=slaac@macvlan	single	macvlan		start,settled
+ipv6_pd=!129	refused			create
+ipv6_pd=128@bridge	single	bridge		start,settled
+ipv6_pd=128@macvlan	single	macvlan		start,settled
+ipv6_pd=1@bridge	single	bridge		start,settled
+ipv6_pd=1@macvlan	single	macvlan		start,settled
+ipv6_pd=64@bridge	single	bridge		start,settled
+ipv6_pd=64@macvlan	single	macvlan		start,settled
+ipv6_pd=unset@bridge	single	bridge		start,settled
+ipv6_pd=unset@macvlan	single	macvlan		start,settled
+ipv6_pd@!ipvlan	outofmode	ipvlan		create
+ipv6_temporary=!maybe	refused			create
+ipv6_temporary=false@bridge	single	bridge		start,settled
+ipv6_temporary=false@ipvlan	single	ipvlan		start,settled
+ipv6_temporary=false@macvlan	single	macvlan		start,settled
+ipv6_temporary=true@bridge	single	bridge		start,settled
+ipv6_temporary=true@ipvlan	single	ipvlan		start,settled
+ipv6_temporary=true@macvlan	single	macvlan		start,settled
+ipvlan_mode=!l3	refused			create
+ipvlan_mode=!l3s	refused			create
+ipvlan_mode=l2@ipvlan	single	ipvlan		start,settled
+ipvlan_mode@!bridge	outofmode	bridge		create
+ipvlan_mode@!macvlan	outofmode	macvlan		create
+lease_timeout=!-5s	refused			create
+lease_timeout=12s@bridge	single	bridge		start,settled
+lease_timeout=12s@ipvlan	single	ipvlan		start,settled
+lease_timeout=12s@macvlan	single	macvlan		start,settled
+lease_timeout=34s@bridge	single	bridge		start,settled
+lease_timeout=34s@ipvlan	single	ipvlan		start,settled
+lease_timeout=34s@macvlan	single	macvlan		start,settled
+lease_timeout=60s@bridge	single	bridge		start,settled
+lease_timeout=60s@ipvlan	single	ipvlan		start,settled
+lease_timeout=60s@macvlan	single	macvlan		start,settled
+link_local_fallback=false@bridge	single	bridge		start,settled
+link_local_fallback=false@macvlan	single	macvlan		start,settled
+link_local_fallback=true@bridge	single	bridge		start,settled
+link_local_fallback=true@macvlan	single	macvlan		start,settled
+link_local_fallback@!ipvlan	outofmode	ipvlan		create
+macvlan_mode=!bogus	refused			create
+macvlan_mode=bridge@macvlan	single	macvlan		start,settled
+macvlan_mode=passthru@macvlan	single	macvlan		start,settled
+macvlan_mode=private@macvlan	single	macvlan		start,settled
+macvlan_mode=vepa@macvlan	single	macvlan		start,settled
+macvlan_mode@!bridge	outofmode	bridge		create
+macvlan_mode@!ipvlan	outofmode	ipvlan		create
+mode=!bogus	refused			create
+mode=bridge@bridge	single	bridge		start,settled
+mode=ipvlan@ipvlan	single	ipvlan		start,settled
+mode=macvlan@macvlan	single	macvlan		start,settled
+mtu=!67	refused			create
+mtu=1500@bridge	single	bridge		start,settled
+mtu=1500@ipvlan	single	ipvlan		start,settled
+mtu=1500@macvlan	single	macvlan		start,settled
+mtu=65535@bridge	single	bridge		start,settled
+mtu=65535@ipvlan	single	ipvlan		start,settled
+mtu=65535@macvlan	single	macvlan		start,settled
+mtu=68@bridge	single	bridge		start,settled
+mtu=68@ipvlan	single	ipvlan		start,settled
+mtu=68@macvlan	single	macvlan		start,settled
+mtu=unset@bridge	single	bridge		start,settled
+mtu=unset@ipvlan	single	ipvlan		start,settled
+mtu=unset@macvlan	single	macvlan		start,settled
+pair:client_id=octets254+ipv6_iid=stable-privacy@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+ipv6_iid=stable-privacy@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+ipv6_iid=stable-privacy@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+register_dns=true@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+register_dns=true@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+register_dns=true@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+require_mac=true@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+require_mac=true@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+user_class=custom@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+user_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+user_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+user_class=octets254@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+user_class=octets254@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+user_class=octets254@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+vendor_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=octets254+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:client_id=octets254+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=octets254+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+ipv6_iid=stable-privacy@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+ipv6_iid=stable-privacy@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=text+ipv6_iid=stable-privacy@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+register_dns=true@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+register_dns=true@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=text+register_dns=true@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+require_mac=true@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+require_mac=true@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+user_class=custom@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+user_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=text+user_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+user_class=octets254@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+user_class=octets254@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=text+user_class=octets254@macvlan	pair	macvlan	identity	start,settled
+pair:client_id=text+vendor_class=custom@bridge	pair	bridge	identity,named	start,settled
+pair:client_id=text+vendor_class=custom@ipvlan	pair	ipvlan	identity,named	start,settled
+pair:client_id=text+vendor_class=custom@macvlan	pair	macvlan	identity,named	start,settled
+pair:client_id=text+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:client_id=text+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:client_id=text+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:conflict_check=async+ignore_conflicts=true@bridge	pair	bridge	conflict,named	start,settled
+pair:conflict_check=async+lease_timeout=12s@bridge	pair	bridge	conflict,named	start,settled
+pair:conflict_check=async+lease_timeout=12s@ipvlan	pair	ipvlan	conflict,named	start,settled
+pair:conflict_check=async+lease_timeout=12s@macvlan	pair	macvlan	conflict,named	start,settled
+pair:conflict_check=async+lease_timeout=60s@bridge	pair	bridge	conflict	start,settled
+pair:conflict_check=async+lease_timeout=60s@ipvlan	pair	ipvlan	conflict	start,settled
+pair:conflict_check=async+lease_timeout=60s@macvlan	pair	macvlan	conflict	start,settled
+pair:conflict_check=async+link_local_fallback=true@bridge	pair	bridge	conflict	start,settled
+pair:conflict_check=async+link_local_fallback=true@macvlan	pair	macvlan	conflict	start,settled
+pair:conflict_check=async+validate_dhcp=true@ipvlan	pair	ipvlan	conflict,named	start,settled
+pair:conflict_check=async+validate_dhcp=true@macvlan	pair	macvlan	conflict,named	start,settled
+pair:conflict_check=off+ignore_conflicts=true@bridge	pair	bridge	conflict	start,settled
+pair:conflict_check=off+lease_timeout=12s@bridge	pair	bridge	conflict,named	start,settled
+pair:conflict_check=off+lease_timeout=12s@ipvlan	pair	ipvlan	conflict,named	start,settled
+pair:conflict_check=off+lease_timeout=12s@macvlan	pair	macvlan	conflict,named	start,settled
+pair:conflict_check=off+lease_timeout=60s@bridge	pair	bridge	conflict	start,settled
+pair:conflict_check=off+lease_timeout=60s@ipvlan	pair	ipvlan	conflict	start,settled
+pair:conflict_check=off+lease_timeout=60s@macvlan	pair	macvlan	conflict	start,settled
+pair:conflict_check=off+link_local_fallback=true@bridge	pair	bridge	conflict	start,settled
+pair:conflict_check=off+link_local_fallback=true@macvlan	pair	macvlan	conflict	start,settled
+pair:conflict_check=off+validate_dhcp=true@ipvlan	pair	ipvlan	conflict	start,settled
+pair:conflict_check=off+validate_dhcp=true@macvlan	pair	macvlan	conflict	start,settled
+pair:dhcp_deny_servers=3.3.3.3+dhcp_servers=1.1.1.1@bridge	pair	bridge	named	start,settled
+pair:dhcp_deny_servers=3.3.3.3+dhcp_servers=1.1.1.1@ipvlan	pair	ipvlan	named	start,settled
+pair:dhcp_deny_servers=3.3.3.3+dhcp_servers=1.1.1.1@macvlan	pair	macvlan	named	start,settled
+pair:dhcp_servers=1.1.1.1+lease_timeout=12s@bridge	pair	bridge	named	start,settled
+pair:dhcp_servers=1.1.1.1+lease_timeout=12s@ipvlan	pair	ipvlan	named	start,settled
+pair:dhcp_servers=1.1.1.1+lease_timeout=12s@macvlan	pair	macvlan	named	start,settled
+pair:force_create=true+parent=eth0@bridge	pair	bridge	named	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=auto@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=auto@ipvlan	pair	ipvlan	routes	create
+pair:gateway=192.0.2.1+ipv6_mode=auto@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=dhcp@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=dhcp@ipvlan	pair	ipvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=dhcp@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=slaac@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_mode=slaac@ipvlan	pair	ipvlan	routes	create
+pair:gateway=192.0.2.1+ipv6_mode=slaac@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=128@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=128@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=1@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=1@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=64@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+ipv6_pd=64@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+link_local_fallback=true@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+link_local_fallback=true@macvlan	pair	macvlan	routes	start,settled
+pair:gateway=192.0.2.1+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:gateway=192.0.2.1+skip_routes=true@ipvlan	pair	ipvlan	routes	start,settled
+pair:gateway=192.0.2.1+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ignore_conflicts=true+lease_timeout=12s@bridge	pair	bridge	conflict	start,settled
+pair:ignore_conflicts=true+lease_timeout=60s@bridge	pair	bridge	conflict	start,settled
+pair:ignore_conflicts=true+link_local_fallback=true@bridge	pair	bridge	conflict	start,settled
+pair:ipv6=false+ipv6_mode=auto@bridge	pair	bridge	refused	create
+pair:ipv6=false+ipv6_mode=auto@ipvlan	pair	ipvlan	refused	create
+pair:ipv6=false+ipv6_mode=auto@macvlan	pair	macvlan	refused	create
+pair:ipv6=false+ipv6_mode=dhcp@bridge	pair	bridge	refused	create
+pair:ipv6=false+ipv6_mode=dhcp@ipvlan	pair	ipvlan	refused	create
+pair:ipv6=false+ipv6_mode=dhcp@macvlan	pair	macvlan	refused	create
+pair:ipv6=false+ipv6_mode=slaac@bridge	pair	bridge	refused	create
+pair:ipv6=false+ipv6_mode=slaac@ipvlan	pair	ipvlan	refused	create
+pair:ipv6=false+ipv6_mode=slaac@macvlan	pair	macvlan	refused	create
+pair:ipv6=true+ipv6_mode=off@bridge	pair	bridge	refused	create
+pair:ipv6=true+ipv6_mode=off@ipvlan	pair	ipvlan	refused	create
+pair:ipv6=true+ipv6_mode=off@macvlan	pair	macvlan	refused	create
+pair:ipv6=true+link_local_fallback=true@bridge	pair	bridge	refused	create
+pair:ipv6=true+link_local_fallback=true@macvlan	pair	macvlan	refused	create
+pair:ipv6=true+mtu=68@bridge	pair	bridge	named,refused	create
+pair:ipv6=true+mtu=68@ipvlan	pair	ipvlan	named,refused	create
+pair:ipv6=true+mtu=68@macvlan	pair	macvlan	named,refused	create
+pair:ipv6_auto_strict=true+ipv6_iid=stable-privacy@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_iid=stable-privacy@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_iid=stable-privacy@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:1::/64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:1::/64@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:1::/64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:ffff::/64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:ffff::/64@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_main_prefix=2001:db8:ffff::/64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=auto@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=auto@ipvlan	pair	ipvlan	ipv6,named	create
+pair:ipv6_auto_strict=true+ipv6_mode=auto@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,named	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=slaac@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6	create
+pair:ipv6_auto_strict=true+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=128@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=128@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=1@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=1@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_pd=64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_auto_strict=true+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:1::/64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:1::/64@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:1::/64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:ffff::/64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:ffff::/64@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_main_prefix=2001:db8:ffff::/64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_mode=auto@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_mode=auto@ipvlan	pair	ipvlan	ipv6,named	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=auto@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,named,refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,named,refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,named,refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=off@bridge	pair	bridge	refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=off@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=off@macvlan	pair	macvlan	refused	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=slaac@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6	create
+pair:ipv6_iid=stable-privacy+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=128@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=128@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=1@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=1@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_pd=64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_iid=stable-privacy+register_dns=true@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+register_dns=true@ipvlan	pair	ipvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+register_dns=true@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+require_mac=true@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+require_mac=true@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=custom@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=octets254@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=octets254@ipvlan	pair	ipvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+user_class=octets254@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:ipv6_iid=stable-privacy+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=auto@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=auto@ipvlan	pair	ipvlan	ipv6,named	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=auto@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,named,refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,named,refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,named,refused	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6,named	create
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=128@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=128@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=1@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=1@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_pd=64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:1::/64+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=auto@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=auto@ipvlan	pair	ipvlan	ipv6	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=auto@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@bridge	pair	bridge	ipv6,refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@ipvlan	pair	ipvlan	ipv6,refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=dhcp@macvlan	pair	macvlan	ipv6,refused	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@ipvlan	pair	ipvlan	ipv6	create
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_mode=slaac@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=128@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=128@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=1@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=1@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=64@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_pd=64@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_main_prefix=2001:db8:ffff::/64+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_mode=auto+ipv6_pd=128@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=auto+ipv6_pd=128@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=auto+ipv6_pd=1@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=auto+ipv6_pd=1@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=auto+ipv6_pd=64@bridge	pair	bridge	ipv6,named,routes	start,settled
+pair:ipv6_mode=auto+ipv6_pd=64@macvlan	pair	macvlan	ipv6,named,routes	start,settled
+pair:ipv6_mode=auto+ipv6_temporary=true@bridge	pair	bridge	ipv6,named	start,settled
+pair:ipv6_mode=auto+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6,named	create
+pair:ipv6_mode=auto+ipv6_temporary=true@macvlan	pair	macvlan	ipv6,named	start,settled
+pair:ipv6_mode=auto+link_local_fallback=true@bridge	pair	bridge	refused,routes	create
+pair:ipv6_mode=auto+link_local_fallback=true@macvlan	pair	macvlan	refused,routes	create
+pair:ipv6_mode=auto+mtu=68@bridge	pair	bridge	refused	create
+pair:ipv6_mode=auto+mtu=68@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_mode=auto+mtu=68@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=auto+register_dns=true@bridge	pair	bridge	named	start,settled
+pair:ipv6_mode=auto+register_dns=true@ipvlan	pair	ipvlan	named	create
+pair:ipv6_mode=auto+register_dns=true@macvlan	pair	macvlan	named	start,settled
+pair:ipv6_mode=auto+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_mode=auto+skip_routes=true@ipvlan	pair	ipvlan	routes	create
+pair:ipv6_mode=auto+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=128@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=128@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=1@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=1@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=64@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=64@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_mode=dhcp+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6	start,settled
+pair:ipv6_mode=dhcp+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_mode=dhcp+link_local_fallback=true@bridge	pair	bridge	refused,routes	create
+pair:ipv6_mode=dhcp+link_local_fallback=true@macvlan	pair	macvlan	refused,routes	create
+pair:ipv6_mode=dhcp+mtu=68@bridge	pair	bridge	named,refused	create
+pair:ipv6_mode=dhcp+mtu=68@ipvlan	pair	ipvlan	named,refused	create
+pair:ipv6_mode=dhcp+mtu=68@macvlan	pair	macvlan	named,refused	create
+pair:ipv6_mode=dhcp+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_mode=dhcp+skip_routes=true@ipvlan	pair	ipvlan	routes	start,settled
+pair:ipv6_mode=dhcp+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_mode=off+ipv6_pd=128@bridge	pair	bridge	refused	create
+pair:ipv6_mode=off+ipv6_pd=128@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=off+ipv6_pd=1@bridge	pair	bridge	refused	create
+pair:ipv6_mode=off+ipv6_pd=1@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=off+ipv6_pd=64@bridge	pair	bridge	refused	create
+pair:ipv6_mode=off+ipv6_pd=64@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=off+ipv6_temporary=true@bridge	pair	bridge	refused	create
+pair:ipv6_mode=off+ipv6_temporary=true@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_mode=off+ipv6_temporary=true@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=slaac+ipv6_pd=128@bridge	pair	bridge	ipv6,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_pd=128@macvlan	pair	macvlan	ipv6,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_pd=1@bridge	pair	bridge	ipv6,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_pd=1@macvlan	pair	macvlan	ipv6,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_pd=64@bridge	pair	bridge	ipv6,named,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_pd=64@macvlan	pair	macvlan	ipv6,named,refused,routes	create
+pair:ipv6_mode=slaac+ipv6_temporary=true@bridge	pair	bridge	ipv6,named,refused	create
+pair:ipv6_mode=slaac+ipv6_temporary=true@ipvlan	pair	ipvlan	ipv6,named,refused	create
+pair:ipv6_mode=slaac+ipv6_temporary=true@macvlan	pair	macvlan	ipv6,named,refused	create
+pair:ipv6_mode=slaac+link_local_fallback=true@bridge	pair	bridge	refused,routes	create
+pair:ipv6_mode=slaac+link_local_fallback=true@macvlan	pair	macvlan	refused,routes	create
+pair:ipv6_mode=slaac+mtu=68@bridge	pair	bridge	refused	create
+pair:ipv6_mode=slaac+mtu=68@ipvlan	pair	ipvlan	refused	create
+pair:ipv6_mode=slaac+mtu=68@macvlan	pair	macvlan	refused	create
+pair:ipv6_mode=slaac+rapid_commit=true@bridge	pair	bridge	named	start,settled
+pair:ipv6_mode=slaac+rapid_commit=true@ipvlan	pair	ipvlan	named	create
+pair:ipv6_mode=slaac+rapid_commit=true@macvlan	pair	macvlan	named	start,settled
+pair:ipv6_mode=slaac+register_dns=true@bridge	pair	bridge	named	start,settled
+pair:ipv6_mode=slaac+register_dns=true@ipvlan	pair	ipvlan	named	create
+pair:ipv6_mode=slaac+register_dns=true@macvlan	pair	macvlan	named	start,settled
+pair:ipv6_mode=slaac+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_mode=slaac+skip_routes=true@ipvlan	pair	ipvlan	routes	create
+pair:ipv6_mode=slaac+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=1+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_pd=1+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_pd=1+link_local_fallback=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=1+link_local_fallback=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=1+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=1+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=128+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_pd=128+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_pd=128+link_local_fallback=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=128+link_local_fallback=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=128+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=128+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=64+ipv6_temporary=true@bridge	pair	bridge	ipv6	start,settled
+pair:ipv6_pd=64+ipv6_temporary=true@macvlan	pair	macvlan	ipv6	start,settled
+pair:ipv6_pd=64+link_local_fallback=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=64+link_local_fallback=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=64+release_lease=on_stop@bridge	pair	bridge	named	start,settled
+pair:ipv6_pd=64+release_lease=on_stop@macvlan	pair	macvlan	named	start,settled
+pair:ipv6_pd=64+skip_routes=true@bridge	pair	bridge	named,routes	start,settled
+pair:ipv6_pd=64+skip_routes=true@macvlan	pair	macvlan	named,routes	start,settled
+pair:ipv6_temporary=true+release_lease=on_stop@bridge	pair	bridge	named	start,settled
+pair:ipv6_temporary=true+release_lease=on_stop@ipvlan	pair	ipvlan	named	start,settled
+pair:ipv6_temporary=true+release_lease=on_stop@macvlan	pair	macvlan	named	start,settled
+pair:lease_timeout=12s+link_local_fallback=true@bridge	pair	bridge	conflict,named	start,settled
+pair:lease_timeout=12s+link_local_fallback=true@macvlan	pair	macvlan	conflict,named	start,settled
+pair:lease_timeout=12s+validate_dhcp=true@ipvlan	pair	ipvlan	conflict	start,settled
+pair:lease_timeout=12s+validate_dhcp=true@macvlan	pair	macvlan	conflict	start,settled
+pair:lease_timeout=60s+link_local_fallback=true@bridge	pair	bridge	conflict,refused	create
+pair:lease_timeout=60s+link_local_fallback=true@macvlan	pair	macvlan	conflict,refused	create
+pair:lease_timeout=60s+validate_dhcp=true@ipvlan	pair	ipvlan	conflict	start,settled
+pair:lease_timeout=60s+validate_dhcp=true@macvlan	pair	macvlan	conflict	start,settled
+pair:link_local_fallback=true+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:link_local_fallback=true+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:link_local_fallback=true+validate_dhcp=true@macvlan	pair	macvlan	conflict	start,settled
+pair:macvlan_mode=passthru+require_mac=true@macvlan	pair	macvlan	named,refused	create
+pair:macvlan_mode=passthru+validate_dhcp=true@macvlan	pair	macvlan	named	start,settled
+pair:mtu=68+propagate_mtu=true@bridge	pair	bridge	named,refused	create
+pair:mtu=68+propagate_mtu=true@ipvlan	pair	ipvlan	named,refused	create
+pair:mtu=68+propagate_mtu=true@macvlan	pair	macvlan	named,refused	create
+pair:rapid_commit=true+validate_dhcp=true@ipvlan	pair	ipvlan	named	start,settled
+pair:rapid_commit=true+validate_dhcp=true@macvlan	pair	macvlan	named	start,settled
+pair:register_dns=true+require_mac=true@bridge	pair	bridge	identity	start,settled
+pair:register_dns=true+require_mac=true@macvlan	pair	macvlan	identity	start,settled
+pair:register_dns=true+user_class=custom@bridge	pair	bridge	identity	start,settled
+pair:register_dns=true+user_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:register_dns=true+user_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:register_dns=true+user_class=octets254@bridge	pair	bridge	identity	start,settled
+pair:register_dns=true+user_class=octets254@ipvlan	pair	ipvlan	identity	start,settled
+pair:register_dns=true+user_class=octets254@macvlan	pair	macvlan	identity	start,settled
+pair:register_dns=true+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:register_dns=true+vendor_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:register_dns=true+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:register_dns=true+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:register_dns=true+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:register_dns=true+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:release_lease=on_stop+vlan=1@ipvlan	pair	ipvlan	named	start,settled
+pair:release_lease=on_stop+vlan=1@macvlan	pair	macvlan	named	start,settled
+pair:require_mac=true+user_class=custom@bridge	pair	bridge	identity	start,settled
+pair:require_mac=true+user_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:require_mac=true+user_class=octets254@bridge	pair	bridge	identity	start,settled
+pair:require_mac=true+user_class=octets254@macvlan	pair	macvlan	identity	start,settled
+pair:require_mac=true+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:require_mac=true+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:require_mac=true+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:require_mac=true+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:user_class=custom+validate_dhcp=true@ipvlan	pair	ipvlan	named	start,settled
+pair:user_class=custom+validate_dhcp=true@macvlan	pair	macvlan	named	start,settled
+pair:user_class=custom+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:user_class=custom+vendor_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:user_class=custom+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:user_class=custom+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:user_class=custom+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:user_class=custom+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+pair:user_class=octets254+vendor_class=custom@bridge	pair	bridge	identity	start,settled
+pair:user_class=octets254+vendor_class=custom@ipvlan	pair	ipvlan	identity	start,settled
+pair:user_class=octets254+vendor_class=custom@macvlan	pair	macvlan	identity	start,settled
+pair:user_class=octets254+vendor_class=octets255@bridge	pair	bridge	identity	start,settled
+pair:user_class=octets254+vendor_class=octets255@ipvlan	pair	ipvlan	identity	start,settled
+pair:user_class=octets254+vendor_class=octets255@macvlan	pair	macvlan	identity	start,settled
+parent=eth0@bridge	single	bridge		start,settled
+parent=eth0@ipvlan	single	ipvlan		start,settled
+parent=eth0@macvlan	single	macvlan		start,settled
+parent=unset@bridge	single	bridge		start,settled
+propagate_dns=false@bridge	single	bridge		start,settled
+propagate_dns=false@ipvlan	single	ipvlan		start,settled
+propagate_dns=false@macvlan	single	macvlan		start,settled
+propagate_dns=true@bridge	single	bridge		start,settled
+propagate_dns=true@ipvlan	single	ipvlan		start,settled
+propagate_dns=true@macvlan	single	macvlan		start,settled
+propagate_mtu=false@bridge	single	bridge		start,settled
+propagate_mtu=false@ipvlan	single	ipvlan		start,settled
+propagate_mtu=false@macvlan	single	macvlan		start,settled
+propagate_mtu=true@bridge	single	bridge		start,settled
+propagate_mtu=true@ipvlan	single	ipvlan		start,settled
+propagate_mtu=true@macvlan	single	macvlan		start,settled
+rapid_commit=!maybe	refused			create
+rapid_commit=false@bridge	single	bridge		start,settled
+rapid_commit=false@ipvlan	single	ipvlan		start,settled
+rapid_commit=false@macvlan	single	macvlan		start,settled
+rapid_commit=true@bridge	single	bridge		start,settled
+rapid_commit=true@ipvlan	single	ipvlan		start,settled
+rapid_commit=true@macvlan	single	macvlan		start,settled
+register_dns=false@bridge	single	bridge		start,settled
+register_dns=false@ipvlan	single	ipvlan		start,settled
+register_dns=false@macvlan	single	macvlan		start,settled
+register_dns=true@bridge	single	bridge		start,settled
+register_dns=true@ipvlan	single	ipvlan		start,settled
+register_dns=true@macvlan	single	macvlan		start,settled
+release_lease=!bogus	refused			create
+release_lease=never@bridge	single	bridge		start,settled
+release_lease=never@ipvlan	single	ipvlan		start,settled
+release_lease=never@macvlan	single	macvlan		start,settled
+release_lease=on_remove@bridge	single	bridge		start,settled
+release_lease=on_remove@ipvlan	single	ipvlan		start,settled
+release_lease=on_remove@macvlan	single	macvlan		start,settled
+release_lease=on_stop@bridge	single	bridge		start,settled
+release_lease=on_stop@ipvlan	single	ipvlan		start,settled
+release_lease=on_stop@macvlan	single	macvlan		start,settled
+require_mac=!maybe	refused			create
+require_mac=false@bridge	single	bridge		start,settled
+require_mac=false@macvlan	single	macvlan		start,settled
+require_mac=true@bridge	single	bridge		start,settled
+require_mac=true@macvlan	single	macvlan		start,settled
+require_mac@!ipvlan	outofmode	ipvlan		create
+skip_routes=false@bridge	single	bridge		start,settled
+skip_routes=false@ipvlan	single	ipvlan		start,settled
+skip_routes=false@macvlan	single	macvlan		start,settled
+skip_routes=true@bridge	single	bridge		start,settled
+skip_routes=true@ipvlan	single	ipvlan		start,settled
+skip_routes=true@macvlan	single	macvlan		start,settled
+user_class=!octets255	refused			create
+user_class=custom@bridge	single	bridge		start,settled
+user_class=custom@ipvlan	single	ipvlan		start,settled
+user_class=custom@macvlan	single	macvlan		start,settled
+user_class=octets254@bridge	single	bridge		start,settled
+user_class=octets254@ipvlan	single	ipvlan		start,settled
+user_class=octets254@macvlan	single	macvlan		start,settled
+user_class=unset@bridge	single	bridge		start,settled
+user_class=unset@ipvlan	single	ipvlan		start,settled
+user_class=unset@macvlan	single	macvlan		start,settled
+validate_dhcp=false@ipvlan	single	ipvlan		start,settled
+validate_dhcp=false@macvlan	single	macvlan		start,settled
+validate_dhcp=true@ipvlan	single	ipvlan		start,settled
+validate_dhcp=true@macvlan	single	macvlan		start,settled
+validate_dhcp@!bridge	outofmode	bridge		create
+vendor_class=!octets256	refused			create
+vendor_class=custom@bridge	single	bridge		start,settled
+vendor_class=custom@ipvlan	single	ipvlan		start,settled
+vendor_class=custom@macvlan	single	macvlan		start,settled
+vendor_class=docker-net-dhcp@bridge	single	bridge		start,settled
+vendor_class=docker-net-dhcp@ipvlan	single	ipvlan		start,settled
+vendor_class=docker-net-dhcp@macvlan	single	macvlan		start,settled
+vendor_class=octets255@bridge	single	bridge		start,settled
+vendor_class=octets255@ipvlan	single	ipvlan		start,settled
+vendor_class=octets255@macvlan	single	macvlan		start,settled
+vlan=!4095	refused			create
+vlan=1@ipvlan	single	ipvlan		start,settled
+vlan=1@macvlan	single	macvlan		start,settled
+vlan=4094@ipvlan	single	ipvlan		start,settled
+vlan=4094@macvlan	single	macvlan		start,settled
+vlan=unset@ipvlan	single	ipvlan		start,settled
+vlan=unset@macvlan	single	macvlan		start,settled
+vlan@!bridge	outofmode	bridge		create

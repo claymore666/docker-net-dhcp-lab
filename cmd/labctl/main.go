@@ -58,7 +58,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
 	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
-	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)")
+	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md | --pinned vX.Y.Z) [--regen]")
+	fmt.Fprintln(os.Stderr, "       labctl coverage pin --plugin-tree <dir> --tag vX.Y.Z")
 	os.Exit(2)
 }
 

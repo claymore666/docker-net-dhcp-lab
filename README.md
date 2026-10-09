@@ -348,17 +348,45 @@ unchanged without it. The plain-word names live in one place,
 
 ## Coverage check
 
-`labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)` reads the
-plugin repo's `docs/reference.md` at a tag (or a local file, for tests or
-a pinned copy) and checks its three option tables (driver options,
-per-endpoint options, plugin settings) against `internal/coverage/mapping.go`,
-this lab's own reviewed record of which option a scenario actually
-exercises. An option with neither a scenario nor a recorded reason
-("not covered yet, planned", for example) fails the check and is named
-in its output. It is a `labctl` subcommand, not a `verify.sh` step:
-`verify.sh` is deliberately network-free (its own header comment), and
-there is no pinned local copy of `docs/reference.md` in this repo to run
-it against instead.
+The plugin documents its options in three tables in `docs/reference.md`
+(driver options, per-endpoint options, plugin settings). The check
+reads those tables and holds the lab to them.
+
+`labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)` parses the
+tables and fails when a row is missing from `internal/coverage/data/inventory.yaml`,
+when a backticked value in a row is not classed there, when a row changed
+since a person last reviewed it, or when an option has neither a scenario
+nor a recorded reason in `internal/coverage/mapping.go`. It exits 0 on the
+pinned v2.5.0 reference. `--tag` fetches the file and compares it with the
+pinned copy (a tag with no pinned copy prints a notice; a pinned copy that
+cannot be read is a problem); `--file` needs no network. Exit codes: 0
+clean, 1 problems found, 2 usage, 3 the docs could not be fetched or read,
+so a network outage is not mistaken for a finding.
+
+`labctl coverage --pinned vX.Y.Z [--regen]` goes further. From the pinned
+`docs/reference.md` and the inventory it generates the option matrix
+(`internal/coverage/data/matrix.tsv`: every value, alias spelling, refused
+value, option pair and IPv6 environment profile the docs imply, including
+the option combinations and the value-in-mode combinations the docs say
+the plugin refuses at network create, such as `ipv6_mode=slaac` in
+`mode=ipvlan`, which are placed as create-time checks) and checks
+that each variant has exactly one placement in
+`internal/coverage/data/placements.yaml`: a plugin test, a lab scenario, a
+gap with an issue, or an N/A with a reason. It exits 1 and names every
+unplaced variant. The placements file is empty for now, so `--pinned
+v2.5.0` fails until it is filled. `--regen` rewrites `matrix.tsv` instead
+of comparing with it.
+
+`labctl coverage pin --plugin-tree DIR --tag vX.Y.Z` copies `docs/reference.md`
+and the list of plugin test names from a clean checkout of that tag into
+`internal/coverage/data/pinned/vX.Y.Z/`. It refuses a tree whose HEAD is
+not the tag.
+
+`TestPinnedMatrixIsCurrent` regenerates the matrix from the pinned
+reference and requires it to equal the checked-in `matrix.tsv`. It needs
+no network, so it runs in `verify.sh` as part of `go test ./...`. The
+network-facing parts (`--tag`) stay out of `verify.sh`, which is
+network-free by design.
 
 ## Packing a bundle for release
 

@@ -1,0 +1,434 @@
+# Hand-kept (issue #35). One entry per docs row of the pinned reference; the check in
+# internal/coverage fails when a row, a token or a review hash disagrees.
+options:
+  "network:mode":
+    reviewed: "710460643371"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      - {v: "bridge", class: default, modes: ["bridge"]}
+      - {v: "macvlan", class: allowed, modes: ["macvlan"]}
+      - {v: "ipvlan", class: allowed, modes: ["ipvlan"]}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["macvlan_mode", "ipvlan_mode"]
+  "network:bridge":
+    reviewed: "fdb16ee19ead"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      - {v: "br0", class: default, modes: ["bridge"], no_token: true, matches: "*(required)*"}
+  "network:parent":
+    reviewed: "30888219b4b4"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, modes: ["bridge"], no_token: true, matches: "*(required)* in macvlan and ipvlan; unset in bridge"}
+      - {v: "eth0", class: allowed}
+    not_values: ["ens18", "UP", "bridge"]
+  "network:macvlan_mode":
+    reviewed: "7b5ad550caeb"
+    mode_path: per-mode
+    values:
+      - {v: "bridge", class: default}
+      - {v: "vepa", class: allowed}
+      - {v: "private", class: allowed}
+      # The docs name passthru beside require_mac=true, and refuse it. (#35)
+      - {v: "passthru", class: allowed, partner: true, refuses_with: ["require_mac=true"]}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["--mac-address", "require_mac=true", "docker network create"]
+  "network:ipvlan_mode":
+    reviewed: "033b5b0c2fb2"
+    mode_path: per-mode
+    values:
+      - {v: "l2", class: default}
+      - {v: "l3", class: refused}
+      - {v: "l3s", class: refused}
+    not_values: ["docker network create"]
+  "network:vlan":
+    reviewed: "2392868c479a"
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true}
+      - {v: "1", class: boundary, no_token: true}
+      - {v: "4094", class: boundary, no_token: true}
+      - {v: "4095", class: refused, no_token: true}
+    not_values: ["<parent>.<id>"]
+  "network:gateway":
+    reviewed: "9753163e6b8e"
+    families: ["routes"]
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "from DHCP"}
+      - {v: "192.0.2.1", class: allowed, no_token: true}
+      # The docs' example of a refused prefix length is accounted for by
+      # its shape, so no address is written here. (#35)
+      - {v: "192.0.2.1/24", class: refused, no_token: true, token_kind: ipv4-prefix-length}
+      - {v: "2001:db8::1", class: refused, no_token: true}
+      - {v: "0.0.0.0", class: refused, no_token: true}
+      - {v: "127.0.0.1", class: refused, no_token: true}
+      - {v: "224.0.0.1", class: refused, no_token: true}
+      - {v: "255.255.255.255", class: refused, no_token: true}
+    not_values: ["docker network create"]
+  "network:ipv6":
+    reviewed: "cbcd48540434"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      # The docs refuse ipv6=false written beside an IPv6 mode, and
+      # ipv6=true beside ipv6_mode=off. (#35)
+      - {v: "false", class: default, no_token: true, tokens: ["ipv6=false"], refuses_with: ["ipv6_mode=dhcp", "ipv6_mode=slaac", "ipv6_mode=auto"]}
+      - {v: "true", class: allowed, no_token: true, tokens: ["ipv6=true"], refuses_with: ["ipv6_mode=off"]}
+    not_values: ["GlobalIPv6Address", "/128", "ipv6_mode=dhcp", "ipv6_mode=off", "docker network create", "slaac", "auto", "ipv6_mode"]
+  "network:ipv6_mode":
+    reviewed: "bd542a8ce046"
+    families: ["ipv6", "routes"]
+    mode_path: per-mode
+    values:
+      - {v: "off", class: default}
+      - {v: "dhcp", class: allowed, tokens: ["ipv6_mode=dhcp"]}
+      - {v: "slaac", class: allowed, refused_modes: ["ipvlan"]}
+      - {v: "auto", class: allowed, refused_modes: ["ipvlan"]}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["ipv6=true", "docker network create", "dhcpv6_auto_fallbacks", "-o ipv6_auto_strict=true", "DHCPV6_ABSENCE_MEMORY", "10m", "0", "dhcpv6_absence_remembered", "ipv6_auto_strict=true", "mode=ipvlan", "-o ipv6=...", "preferred_ipv6", "preferred_lft 0", "ip -6 addr show", "CreateEndpoint", "valid_lft forever preferred_lft forever", "ipv6_slaac_addresses", "ipv6_addresses_withdrawn", "ipv6_slaac_prefixes_ignored", "ipv6_main_prefix", "AddressIPv6", "docker inspect"]
+  "network:ipv6_main_prefix":
+    reviewed: "9bdec01b4ec6"
+    families: ["ipv6"]
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "(first advertised)"}
+      - {v: "2001:db8:1::/64", class: allowed, refuses_with: ["ipv6_mode=dhcp"]}
+      - {v: "2001:db8:ffff::/64", class: allowed, no_token: true, refuses_with: ["ipv6_mode=dhcp"]}
+      - {v: "2001:db8:1::1/64", class: refused, no_token: true}
+    not_values: ["AddressIPv6", "docker inspect", "ipv6_main_prefix_unmatched", "ipv6_mode=slaac", "ipv6_mode=auto", "ipv6_mode=dhcp", "docker network create"]
+  "network:ipv6_temporary":
+    reviewed: "5612f7d0fea3"
+    boolean: true
+    families: ["ipv6"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default}
+      - {v: "true", class: allowed, refuses_with: ["ipv6_mode=off", "ipv6_mode=slaac"]}
+      - {v: "maybe", class: refused, no_token: true}
+    not_values: ["GlobalIPv6Address", "release_lease=on_stop", "/Plugin.Health", "ipv6_temporary_address", "1", "0", "docker network create", "ipv6_mode=off", "ipv6_mode=slaac", "ipv6_mode=auto", "temporary"]
+  "network:ipv6_pd":
+    reviewed: "408728b46c47"
+    families: ["ipv6", "routes"]
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true}
+      - {v: "64", class: allowed, refuses_with: ["ipv6_mode=off", "ipv6_mode=slaac"]}
+      - {v: "1", class: boundary, no_token: true, refuses_with: ["ipv6_mode=off", "ipv6_mode=slaac"]}
+      - {v: "128", class: boundary, no_token: true, refuses_with: ["ipv6_mode=off", "ipv6_mode=slaac"]}
+      - {v: "129", class: refused, no_token: true}
+    not_values: ["docker network create", "unreachable <prefix> proto dhcp", "lo", "docker network disconnect", "docker stop", "release_lease=on_stop", "skip_routes", "ipv6_mode=off", "ipv6_mode=slaac", "ipv6_mode=auto", "mode=ipvlan"]
+  "network:ipv6_iid":
+    reviewed: "9fbabc94af85"
+    families: ["ipv6", "identity"]
+    mode_path: per-mode
+    values:
+      - {v: "eui64", class: default}
+      - {v: "stable-privacy", class: allowed, refuses_with: ["ipv6_mode=off", "ipv6_mode=dhcp"]}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["ipv6-iid-secret", "STATE_DIR", "--ipam-driver null", "docker restart", "--mac-address", "ff:fe", "router_advert_guard_failures", "docker network create", "ipv6_mode=off", "ipv6_mode=dhcp", "ipv6_mode=auto"]
+  "network:ipv6_auto_strict":
+    reviewed: "6e7589e990c0"
+    boolean: true
+    families: ["ipv6"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default}
+      - {v: "true", class: allowed}
+    not_values: ["ipv6_mode=auto", "ipv6_mode"]
+  "network:lease_timeout":
+    reviewed: "3157b05948ed"
+    no_written_default: true
+    families: ["conflict"]
+    mode_path: per-mode
+    values:
+      - {v: "34s", class: default, no_token: true}
+      - {v: "12s", class: allowed, no_token: true, tokens: ["-o lease_timeout=12s"]}
+      - {v: "60s", class: allowed, no_token: true, tokens: ["-o lease_timeout=60s"]}
+      - {v: "-5s", class: refused, no_token: true}
+    not_values: ["docker network create", "conflict_check", "conflict_check=wait", "docker run", "conflict_check=off", "lease_timeout", "async", "off", "dhcp_servers", "CreateEndpoint", "Client.Timeout exceeded"]
+  "network:conflict_check":
+    reviewed: "4ca8322fd6a3"
+    families: ["conflict"]
+    mode_path: per-mode
+    values:
+      - {v: "wait", class: default}
+      - {v: "async", class: allowed}
+      - {v: "off", class: allowed}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["docker run", "address_conflicts_v4", "acd_conflicts_detected", "acd_probes_sent", "address_conflicts_v6", "address_conflicts", "docker network create", "-o validate_dhcp=true", "ignore_conflicts", "conflict_check"]
+  "network:ignore_conflicts":
+    reviewed: "db1e4abd1355"
+    boolean: true
+    families: ["conflict"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["conflict_check"]
+  "network:force_create":
+    reviewed: "3dc92a8a35fb"
+    boolean: true
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["parent", "docker network create", "bridge-nf-call-iptables", "ip filter FORWARD", "DOCKER-USER"]
+  "network:skip_routes":
+    reviewed: "8721ddccd307"
+    boolean: true
+    families: ["routes"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed}
+  "network:propagate_dns":
+    reviewed: "b7a0520c8546"
+    boolean: true
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["/etc/resolv.conf", "search", "nameserver fe80::1%eth0"]
+  "network:propagate_mtu":
+    reviewed: "0d90bfdc5d97"
+    boolean: true
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["[576, 65535]", "mtu_refused", "mtu"]
+  "network:mtu":
+    reviewed: "054900c98ac8"
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true}
+      # Refused beside propagate_mtu=true, and below 1280 beside IPv6. (#35)
+      - {v: "68", class: boundary, no_token: true, refuses_with: ["propagate_mtu=true", "ipv6=true", "ipv6_mode=dhcp", "ipv6_mode=slaac", "ipv6_mode=auto"]}
+      - {v: "1500", class: allowed, no_token: true}
+      - {v: "65535", class: boundary, no_token: true}
+      - {v: "67", class: refused, no_token: true}
+    not_values: ["mtu_refused", "propagate_mtu=true", "ipv6_mode", "dhcp", "slaac", "auto", "ipv6=true"]
+  "network:client_id":
+    reviewed: "dd4af26b7094"
+    families: ["identity"]
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "per-endpoint id"}
+      - {v: "text", class: allowed, no_token: true}
+      - {v: "octets254", class: boundary, no_token: true}
+      - {v: "octets255", class: refused, no_token: true}
+    not_values: ["0x00", "client_id", "docker network create", "vendor_class"]
+  "network:vendor_class":
+    reviewed: "5d43841c6838"
+    families: ["identity"]
+    mode_path: per-mode
+    values:
+      - {v: "docker-net-dhcp", class: default, no_token: true}
+      - {v: "custom", class: allowed, no_token: true}
+      - {v: "octets255", class: boundary, no_token: true}
+      - {v: "octets256", class: refused, no_token: true}
+    not_values: ["docker network create"]
+  "network:user_class":
+    reviewed: "c06f35ee2003"
+    families: ["identity"]
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "_(none)_"}
+      - {v: "custom", class: allowed, no_token: true}
+      - {v: "octets254", class: boundary, no_token: true}
+      - {v: "octets255", class: refused, no_token: true}
+    not_values: ["dhcp-userclass", "user-class", "docker network create", "validate_dhcp"]
+  "network:rapid_commit":
+    reviewed: "68d19f087028"
+    boolean: true
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default}
+      - {v: "true", class: allowed}
+      - {v: "maybe", class: refused, no_token: true}
+    not_values: ["dhcp-rapid-commit", "rapid-commit", "1", "0", "docker network create", "ipv6_mode=slaac", "validate_dhcp"]
+  "network:validate_dhcp":
+    reviewed: "57547c2bdce6"
+    boolean: true
+    families: ["conflict"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["docker network create", "macvlan_mode", "ipvlan_mode", "validate_dhcp", "chaddr", "macvlan_mode=passthru"]
+  "network:dhcp_servers":
+    reviewed: "f971fd7268f4"
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "_(none)_"}
+      - {v: "1.1.1.1", class: allowed, no_token: true}
+      - {v: "1.1.1.1,2.2.2.2", class: allowed}
+      - {v: "2001:db8::1", class: refused, no_token: true}
+    not_values: ["lease_timeout", "docker run", "docker network create"]
+  "network:dhcp_deny_servers":
+    reviewed: "7c34b35f7ccc"
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "_(none)_"}
+      - {v: "3.3.3.3", class: allowed}
+      - {v: "3.3.3.3,4.4.4.4", class: allowed, no_token: true}
+      - {v: "2001:db8::1", class: refused, no_token: true}
+    not_values: ["dhcp_servers"]
+  "network:register_dns":
+    reviewed: "676b8e874587"
+    boolean: true
+    families: ["identity"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["register_dns", "ipv6_mode=slaac", "ipv6_mode=auto"]
+  "network:audit_log":
+    reviewed: "d654fe406144"
+    boolean: true
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed, no_token: true}
+    not_values: ["bound", "renew", "stopped", "stop_failed", "config", "routeradvert", "withdrawn", "STATE_DIR/leases.jsonl", "source", "slaac", "ledger_write_failures", "/Plugin.Health"]
+  "network:release_lease":
+    reviewed: "7d4d23badf4c"
+    mode_path: per-mode
+    values:
+      - {v: "never", class: default}
+      - {v: "on_stop", class: allowed}
+      - {v: "on_remove", class: allowed}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["docker stop", "docker rm", "docker network disconnect", "vlan", "CreateEndpoint", "Leave", "releases_sent", "release_failures", "releases_reclaimed", "docker network rm", "info", "release_lease=on_remove: keeping this endpoint's addresses for the restart window", "No container claimed this address back inside the restart window, so release_lease=on_remove is handing it back", "debug", "A container is running on this address, so it was claimed back inside the restart window and nothing is handed back", "A newer record holds this same address with its own deadline, so this record is closed and the newer one decides when the address goes back", "An address acquisition is in flight under this endpoint's key, so this address is left to expire instead of being handed back from under it", "A container resumed this held record and its bind could not be written, so nothing is handed back while it runs", "A held address belongs to a network whose options cannot be read; leaving the record as it is", "release_lease", "These held addresses belong to a network Docker no longer has, so their records are closed and nothing is sent", "warning", "This network's stored options could not be read while it was being removed, so its held addresses could not be handed back", "docker network create"]
+  "network:host_ifname":
+    reviewed: "056549fc81ea"
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "*(off)*"}
+      - {v: "container_name", class: allowed}
+      - {v: "hostname", class: allowed}
+      - {v: "bogus", class: refused, no_token: true}
+    not_values: ["ip link", "brctl show", "dh-", "docker ps", "docker run --hostname", "docker network create", "macvlan", "ipvlan", "EBUSY", "host_ifname_failures"]
+  "network:require_mac":
+    reviewed: "3cb120d7ad2f"
+    boolean: true
+    families: ["identity"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      - {v: "true", class: allowed}
+      - {v: "maybe", class: refused, no_token: true}
+    not_values: ["docker run --mac-address", "mac_address", "--ipam-driver null", "com.docker.network.endpoint.macaddress", "--driver-opt", "docker network connect", "docker inspect", "docker restart", "docker network disconnect", "docker start", "ipvlan", "docker network create", "--mac-address"]
+  "network:link_local_fallback":
+    reviewed: "52a586d99012"
+    boolean: true
+    families: ["routes", "conflict"]
+    mode_path: per-mode
+    values:
+      - {v: "false", class: default, no_token: true}
+      # Refused with IPv6, and with a lease_timeout longer than 16s. (#35)
+      - {v: "true", class: allowed, no_token: true, refuses_with: ["ipv6_mode=dhcp", "ipv6_mode=slaac", "ipv6_mode=auto", "ipv6=true", "lease_timeout=60s"]}
+    not_values: ["lease_timeout", "16s", "ipvlan"]
+  "endpoint:ip":
+    id: "ip"
+    reviewed: "e4da9a1cdb89"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true}
+      - {v: "192.0.2.50", class: allowed, no_token: true}
+      - {v: "192.0.2.50/24", class: refused, no_token: true}
+    not_values: ["docker run --ip", "IP", "Ip", "ip: \"${IP}\""]
+  "endpoint:com.docker.network.endpoint.ifname":
+    id: "ifname"
+    reviewed: "b0bdc37d23b0"
+    no_written_default: true
+    mode_path: per-mode
+    values:
+      - {v: "unset", class: default, no_token: true}
+      - {v: "eth5", class: allowed, no_token: true}
+      - {v: "ifname-longer-than-15", class: refused, no_token: true}
+    not_values: ["interface_name", "driver_opts", "drivers/remote/driver.go", "DstName", "CreateEndpoint", "ifname_unsupported"]
+  "setting:LOG_LEVEL":
+    reviewed: "e959092520d5"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "info", class: default}
+      - {v: "trace", class: allowed}
+      - {v: "debug", class: allowed}
+      - {v: "warn", class: allowed}
+      - {v: "error", class: allowed}
+  "setting:AWAIT_TIMEOUT":
+    reviewed: "2edd67584b22"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "10s", class: default, no_token: true}
+      - {v: "45s", class: allowed, no_token: true}
+      - {v: "0", class: refused, no_token: true}
+  "setting:DHCPV6_ABSENCE_MEMORY":
+    reviewed: "5b7eab66a39e"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "10m", class: default, no_token: true}
+      - {v: "0", class: boundary}
+      - {v: "-1s", class: refused, no_token: true}
+    not_values: ["ipv6_mode=auto", "ipv6_mode"]
+  "setting:STATE_DIR":
+    reviewed: "3895cdb56c3c"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "/var/lib/net-dhcp", class: default, no_token: true}
+      - {v: "/srv/net-dhcp", class: allowed, no_token: true}
+    not_values: ["audit_log", "docker plugin rm"]
+  "setting:METRICS_ADDR":
+    reviewed: "791cc0a51095"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "*(empty)*"}
+      - {v: "127.0.0.1:9099", class: allowed}
+      - {v: "notanaddress", class: refused, no_token: true}
+    not_values: ["/metrics", "0.0.0.0", ":9099", "0.0.0.0:…", "[::]:…"]
+  "setting:DOCKER_HOST":
+    reviewed: "7cd1418afadd"
+    no_written_default: true
+    mode_path: n/a
+    values:
+      - {v: "unset", class: default, no_token: true, matches: "*(empty)*"}
+      - {v: "proxy", class: allowed, no_token: true}
+    not_values: ["config.json", "GET", "HEAD", "docker_api_non_get_refusals", "DOCKER_CERT_PATH"]
+
+# Spellings the docs say mean the same thing. The first member is the
+# canonical one; every other member is generated against it. (#35)
+alias_groups:
+  - name: "ipv6-on"
+    modes: ["bridge", "macvlan", "ipvlan"]
+    runtime: true
+    members: ["ipv6=true", "ipv6_mode=dhcp", "ipv6=true+ipv6_mode=dhcp"]
+  - name: "ipv6-off"
+    modes: ["bridge", "macvlan", "ipvlan"]
+    members: ["ipv6=unset", "ipv6=false", "ipv6_mode=off", "ipv6=false+ipv6_mode=off"]
+  - name: "lease-timeout-zero"
+    free: true
+    members: ["lease_timeout=unset", "lease_timeout=0"]
+  - name: "endpoint-ip-run-flag"
+    modes: ["bridge", "macvlan", "ipvlan"]
+    free: true
+    members: ["ip=192.0.2.50", "ip=run-ip"]
+  - name: "endpoint-ifname-compose-key"
+    modes: ["bridge", "macvlan", "ipvlan"]
+    free: true
+    members: ["ifname=eth5", "ifname=interface_name"]
+
+# The spellings the environment profiles E1..E4 are crossed with. (#35)
+env:
+  ipv6: ["ipv6=true", "ipv6_mode=dhcp", "ipv6_mode=slaac", "ipv6_mode=auto"]
+  routes: ["skip_routes=true", "skip_routes=false"]

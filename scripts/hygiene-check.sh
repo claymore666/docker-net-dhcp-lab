@@ -68,6 +68,7 @@ while IFS= read -r -d '' f; do
 	scripts/hygiene-check-test.sh) continue ;;        # deliberately carries disallowed-looking fixtures, never real
 	scripts/commit-message-check-test.sh) continue ;; # same shape: fixtures for a throwaway repo, never real
 	scripts/pack-test.sh) continue ;;                 # same shape: planted addresses are fixtures, never real
+	internal/coverage/data/pinned/*/reference.md) continue ;; # a verbatim copy of the plugin's published docs at a tag; its example addresses are the plugin's, not this lab's
 	esac
 	# A _test.go fixture legitimately carries made-up private addresses
 	# (a TempDir source, never shipped or run anywhere real), so it
