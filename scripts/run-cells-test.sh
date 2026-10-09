@@ -191,6 +191,13 @@ cells "$e" kea dnsmasq
 expect "case 4c (source domain exists)" 1 "$e"
 has "case 4c" "$e" "REFUSED -- domain lab-dnsmasq-source already exists"
 [ "$(started "$e")" -eq 0 ] || { echo "run-cells-test: FAIL -- case 4c: a cell was started" >&2; fail=1; }
+e=$(new_env)
+meminfo "$e" 60
+echo "lab-kea-ha-partner" >"$e/state/existing"
+cells "$e" kea kea-ha
+expect "case 4d (failover partner domain exists)" 1 "$e"
+has "case 4d" "$e" "REFUSED -- domain lab-kea-ha-partner already exists"
+[ "$(started "$e")" -eq 0 ] || { echo "run-cells-test: FAIL -- case 4d: a cell was started" >&2; fail=1; }
 
 # Case 5: a cell that lab.yaml does not know refuses before any start,
 # even when it comes after cells that would have been fine.

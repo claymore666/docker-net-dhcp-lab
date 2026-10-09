@@ -1,6 +1,7 @@
 #!/bin/bash
 # Refusal and pcap-preservation tests for down-cell.sh (issue #1), plus
-# the source VM's own teardown (issue #2, cases 5-6). CI-safe: every case
+# the source VM's own teardown (issue #2, cases 5-6) and a failover
+# pair's partner (#12, cases 8-9). CI-safe: every case
 # runs against a stubbed sudo/virsh on PATH, never real libvirt.
 set -euo pipefail
 
@@ -265,7 +266,7 @@ mkdir -p "$work6"
 cat >"$tmp/virsh" <<STUB
 #!/bin/bash
 case "\$2" in
-*-dockerhost) exit 1 ;;
+*-dockerhost | *-partner) exit 1 ;;
 *-source)
 	if [ "\$1" = "dominfo" ]; then
 		n=\$(cat "$case6/dominfo-n" 2>/dev/null || echo 0)
@@ -332,7 +333,67 @@ if ! grep -q "REFUSED" <<<"${out7_captured:-}"; then
 	fail=1
 fi
 
+# Case 8: a failover pair's partner domain (#12) exists once, then is
+# gone on the recheck. Teardown must destroy and undefine it through
+# sudo -n, the same proof as case 6 for the source domain.
+case8=$(mktemp -d "$tmp/case8-XXXXXX")
+work8="$case8/work"
+mkdir -p "$work8"
+cat >"$tmp/virsh" <<STUB
+#!/bin/bash
+case "\$2" in
+*-partner)
+	if [ "\$1" = "dominfo" ]; then
+		n=\$(cat "$case8/dominfo-n" 2>/dev/null || echo 0)
+		n=\$((n + 1))
+		echo "\$n" >"$case8/dominfo-n"
+		[ "\$n" -eq 1 ] && exit 0 || exit 1
+	fi
+	exit 0
+	;;
+*) exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/virsh"
+sudolog8="$case8/sudo.log"
+: >"$sudolog8"
+out8=$(LAB_EVIDENCE_DIR="$case8/evidence" LAB_SUDO_LOG="$sudolog8" PATH="$tmp:$PATH" "$SCRIPT" case8cell "$work8" 2>&1) || {
+	echo "down-cell-test: FAIL -- case 8: teardown failed although the partner domain was gone by the recheck" >&2
+	echo "$out8" >&2
+	fail=1
+}
+for want in 'virsh destroy lab-case8cell-partner' 'virsh undefine lab-case8cell-partner --nvram'; do
+	if ! grep -qxF "$want" "$sudolog8"; then
+		echo "down-cell-test: FAIL -- case 8: missing sudo -n call: $want" >&2
+		cat "$sudolog8" >&2
+		fail=1
+	fi
+done
+
+# Case 9: the partner domain persists no matter what. Must refuse and
+# keep $WORK, as case 5 does for the source domain.
+case9=$(mktemp -d "$tmp/case9-XXXXXX")
+work9="$case9/work"
+mkdir -p "$work9"
+cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+case "$2" in
+*-partner) exit 0 ;;
+*) exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/virsh"
+if out9=$(LAB_EVIDENCE_DIR="$case9/evidence" PATH="$tmp:$PATH" "$SCRIPT" case9cell "$work9" 2>&1); then
+	echo "down-cell-test: FAIL -- case 9: exited 0 although the partner domain still exists" >&2
+	fail=1
+fi
+if ! grep -qF 'REFUSED -- lab-case9cell-partner still exists' <<<"${out9:-}" || [ ! -d "$work9" ]; then
+	echo "down-cell-test: FAIL -- case 9: no partner refusal, or the work dir was removed" >&2
+	echo "${out9:-}" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- all seven cases behaved as expected"
+echo "down-cell-test: PASS -- all nine cases behaved as expected"

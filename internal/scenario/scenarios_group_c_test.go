@@ -26,6 +26,7 @@ var cFast = cTiming{
 	c3Record: 40 * ms, c3Start: 80 * ms, c3Window: 200 * ms,
 	c4Wait: 40 * ms, c1Settle: 5 * ms, c10Lift: 300 * ms,
 	c6bWindow: 200 * ms, c8Settle: 20 * ms, c8Links: 50 * ms, c9Wait: 300 * ms,
+	c5Wait: 50 * ms,
 }
 
 // cRunner is bRunner plus what group C asks the docker host: the timed
@@ -201,7 +202,10 @@ func TestCatalogRegistersGroupCWithTheNeedsOfTheDesign(t *testing.T) {
 		NameC2:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart},
 		NameC3:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart},
 		NameC4:  {sourceadapter.CapV4, sourceadapter.CapShortLease},
-		NameC5:  {sourceadapter.CapFailoverPair},
+		NameC5:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair},
+		NameC5b: {sourceadapter.CapV4, sourceadapter.CapFailoverPair},
+		NameC5c: {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair},
+		NameC5d: {sourceadapter.CapV4, sourceadapter.CapFailoverPair},
 		NameC6:  {sourceadapter.CapV4, sourceadapter.CapReserveClientID, sourceadapter.CapSquatter},
 		NameC6b: {sourceadapter.CapV4, sourceadapter.CapSquatter},
 		NameC7:  {sourceadapter.CapV4, sourceadapter.CapRogueServer},
@@ -230,7 +234,7 @@ func TestCatalogRegistersGroupCWithTheNeedsOfTheDesign(t *testing.T) {
 func TestC5AndC12AreNotApplicableNamingTheirLabIssues(t *testing.T) {
 	all := &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart,
 		sourceadapter.CapShortLease, sourceadapter.CapImpair}}
-	for name, issue := range map[string]string{NameC5: "docker-net-dhcp-lab#12", NameC12: "docker-net-dhcp-lab#11"} {
+	for name, issue := range map[string]string{NameC5: "docker-net-dhcp-lab#12", NameC5b: "docker-net-dhcp-lab#12", NameC5c: "docker-net-dhcp-lab#12", NameC5d: "docker-net-dhcp-lab#12", NameC12: "docker-net-dhcp-lab#11"} {
 		for _, s := range Catalog {
 			if s.Name != name {
 				continue
@@ -349,8 +353,8 @@ func TestContainerAddrsSkipsLoopbackAndKeepsEveryInet(t *testing.T) {
 	}
 }
 
-func TestParseMessageLogReadsElevenFieldsAndDashes(t *testing.T) {
-	msgs, err := parseMessageLog("100.250000 DISCOVER 0x1 aa:bb:cc:00:00:01 - - - - - 0.0.0.0 255.255.255.255\n\n101.5 ACK 0x1 aa:bb:cc:00:00:01 00:6c 10.200.1.2 - - 10.200.1.150 10.200.1.2 10.200.1.150\n")
+func TestParseMessageLogReadsThirteenFieldsAndDashes(t *testing.T) {
+	msgs, err := parseMessageLog("100.250000 DISCOVER 0x1 aa:bb:cc:00:00:01 - - - - - 0.0.0.0 255.255.255.255 4 -\n\n101.5 ACK 0x1 aa:bb:cc:00:00:01 00:6c 10.200.1.2 - - 10.200.1.150 10.200.1.2 10.200.1.150 0 0x00000078\n")
 	if err != nil || len(msgs) != 2 {
 		t.Fatalf("got %v, %v", msgs, err)
 	}
@@ -363,8 +367,16 @@ func TestParseMessageLogReadsElevenFieldsAndDashes(t *testing.T) {
 	if _, err := parseMessageLog("100.0 DISCOVER 0x1\n"); err == nil {
 		t.Error("a short line was accepted")
 	}
-	if _, err := parseMessageLog("x DISCOVER 0x1 a - - - - - b c\n"); err == nil {
+	if _, err := parseMessageLog("x DISCOVER 0x1 a - - - - - b c 0 -\n"); err == nil {
 		t.Error("a bad timestamp was accepted")
+	}
+	if msgs[0].Secs != 4 || msgs[0].LeaseTime != 0 || msgs[1].Secs != 0 || msgs[1].LeaseTime != 120*time.Second {
+		t.Errorf("secs/option 51: %+v / %+v", msgs[0], msgs[1])
+	}
+	for _, bad := range []string{"x -", "-1 -", "65536 -", "0 0x78", "0 78787878", "0 0xzzzzzzzz"} {
+		if _, err := parseMessageLog("1.0 ACK 0x1 a - - - - - b c " + bad + "\n"); err == nil {
+			t.Errorf("secs/option 51 %q accepted", bad)
+		}
 	}
 }
 

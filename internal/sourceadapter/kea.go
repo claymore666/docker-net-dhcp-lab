@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -22,10 +23,20 @@ var keaValidLifetimeRE = regexp.MustCompile(`"valid-lifetime":\s*[0-9]+,`)
 // yet exercised against a live Kea instance.
 type KeaAdapter struct {
 	Runner Runner
+	// V4Only is a failover partner's adapter: its VM runs no DHCPv6 or
+	// radvd, so v6 is neither declared nor held by Ready (lab #12).
+	V4Only bool
 	base   baseline
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
+	if a.V4Only {
+		return slices.DeleteFunc(a.allCapabilities(), func(c Capability) bool { return v6Capabilities[c] })
+	}
+	return a.allCapabilities()
+}
+
+func (a *KeaAdapter) allCapabilities() []Capability {
 	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6}
 }
 

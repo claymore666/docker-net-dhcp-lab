@@ -93,11 +93,11 @@ dhcp_exchange_mac_seen() {
 
 # dhcp_message_log prints one line per DHCP message for one identity
 # (group C, #23): "ts type xid chaddr cid server req ciaddr yiaddr src
-# dst", "-" for an empty field, ts in epoch seconds. A client message
-# matches on chaddr or option 61 (ipvlan shares the parent MAC); a
-# server reply on chaddr, option 61, or the xid of a matched client
-# message, since a reply need not echo option 61. "*" prints every
-# message (C10 needs it). The decode reads tcpdump's hex and uses no
+# dst secs", "-" for empty, ts in epoch seconds, secs in decimal (#12).
+# A client message matches on chaddr or option 61 (ipvlan shares the
+# parent MAC); a server reply on chaddr, option 61, or the xid of a
+# matched client message, since a reply need not echo option 61. "*"
+# prints every message (C10). The decode reads tcpdump's hex with no
 # gawk-only builtin (Debian's awk is mawk); a partial last record is
 # dropped. A 3rd argument, a comma list of option codes, appends one
 # field per code: "0x<hex>" ("0x" for a zero-length option) or "-".
@@ -135,7 +135,7 @@ dhcp_message_log() {
 			if (code in wc) ov[code] = "0x" hx(p + 2, len)
 			p += 2 + len
 		}
-		line = ts " " (ty in tn ? tn[ty] : "TYPE" ty) " " xid " " ch " " nz(cid) " " nz(srv) " " nz(req) " " nz(ci) " " nz(yi) " " ip(12) " " ip(16)
+		line = ts " " (ty in tn ? tn[ty] : "TYPE" ty) " " xid " " ch " " nz(cid) " " nz(srv) " " nz(req) " " nz(ci) " " nz(yi) " " ip(12) " " ip(16) " " (b(o + 8) * 256 + b(o + 9))
 		for (k = 1; k <= nwc; k++) line = line " " ((wl[k] in ov) ? ov[wl[k]] : "-")
 		h = ""
 		if (want == "*") matched[xid] = 1
@@ -183,7 +183,7 @@ dhcp_option_bytes() {
 	done
 	log=$(dhcp_message_log "$pcap" "$ident" "$codes") || return 1
 	[ -n "$log" ] || return 0
-	awk '{ printf "%s %s %s", $1, $2, $3; for (i = 12; i <= NF; i++) printf " %s", $i; printf "\n" }' <<<"$log"
+	awk '{ printf "%s %s %s", $1, $2, $3; for (i = 13; i <= NF; i++) printf " %s", $i; printf "\n" }' <<<"$log"
 }
 
 # dhcp6_message_log <pcap> <ident> prints DHCPv6 messages and RAs, one

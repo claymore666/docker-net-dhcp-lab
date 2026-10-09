@@ -166,6 +166,25 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 	}
 }
 
+// newCellSourceAdapter returns the cell's source adapter: the single
+// adapter, or a PairAdapter over both peers when source.partner is set
+// (lab #12), each peer reached by its own runner.
+func newCellSourceAdapter(src *labyaml.Source, runnerFor func(mgmtAddress string) sourceadapter.Runner) (sourceadapter.Adapter, error) {
+	if src.Partner == nil {
+		return newSourceAdapter(src.Type, runnerFor(src.MgmtAddress))
+	}
+	ip := func(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
+	switch src.Type {
+	case "kea":
+		return sourceadapter.NewKeaPair(runnerFor(src.MgmtAddress), runnerFor(src.Partner.MgmtAddress),
+			ip(src.SegAddress), ip(src.Partner.SegAddress)), nil
+	case "isc-dhcp":
+		return nil, fmt.Errorf("an isc-dhcp failover pair lands in lab #12 PR 2")
+	default:
+		return nil, fmt.Errorf("source type %q cannot run as a failover pair", src.Type)
+	}
+}
+
 // selectScenarios narrows catalog to the comma-separated Names in
 // filterArg, in catalog's own order (never the filter's), so a debug
 // pass over "A10-kill-restart-policy,A5b-host-reboot-fixed-mac" still
@@ -332,14 +351,13 @@ func cmdRun(args []string) int {
 	knownHosts := filepath.Join(workDir, "known_hosts")
 	keyPath := os.ExpandEnv("$HOME/.ssh/id_ed25519_lab")
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
-	sourceMgmtIP := strings.SplitN(cell.Source.MgmtAddress, "/", 2)[0]
-
 	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
 	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
-	sourceRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
-		Inner: sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
-	source, err := newSourceAdapter(cell.Source.Type, sourceRunner)
+	source, err := newCellSourceAdapter(cell.Source, func(mgmt string) sourceadapter.Runner {
+		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+			Inner: sourceadapter.SSHRunner{Host: strings.SplitN(mgmt, "/", 2)[0], User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
 		return 1
@@ -419,7 +437,7 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl run: Leases after reset:", err)
 		return 1
 	}
-	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.MinPoolAddresses); !ok {
+	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.PoolDemand(scenariosToRun, source)); !ok {
 		reason = "pool cannot cover this shape's run: " + reason
 		for _, s := range scenariosToRun {
 			v := scenario.Verdict{

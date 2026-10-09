@@ -78,6 +78,11 @@ func Applicable(s Scenario, source sourceadapter.Adapter) (bool, string) {
 	for _, need := range s.Needs {
 		if !have[need] {
 			reason := fmt.Sprintf("source does not declare capability %q", need)
+			if x, ok := source.(sourceadapter.NAExplainer); ok {
+				if why, ok := x.NAReason(need); ok {
+					return false, reason + ": " + why
+				}
+			}
 			if why, ok := capabilityNAReason[need]; ok {
 				reason += ": " + why
 			}
@@ -145,6 +150,9 @@ const (
 	NameC7  = "C7-rogue-server"
 	NameC8  = "C8-pool-exhausted"
 	NameC9  = "C9-subnet-renumbered"
+	NameC5b = "C5b-failover-partner-down-at-start"
+	NameC5c = "C5c-failover-peer-returns"
+	NameC5d = "C5d-failover-no-double-assignment"
 	NameC10 = "C10-loss-and-latency"
 	NameC11 = "C11-validate-dhcp-create"
 	NameC12 = "C12-relay"
@@ -181,21 +189,25 @@ const (
 // its own second network is Docker's default IPAM, never this pool) +
 // A14(1) + A15(5, peak replica count) + A16(1) = 38, plus group B's 11
 // (poolDemand, counted as if every reservation and the class pool missed),
-// plus group C's 17: C1(2, if a failed run still kept a lease) + C2(1) +
+// plus group C's 39: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
-// second) + C6(1, the squatted address is reserved outside the pool) +
-// C6b(2) + C7(2, the rogue's pool is its own) + C8(1, the fills sit on
-// the narrowed range outside the pool) + C9(1, the renumbered lease is
-// reset) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
+// second) + C5(1) + C5b(1) + C5c(2, the kept container and a new one) +
+// C5d(18) on a failover pair (#12) + C6(1, the squatted address is
+// reserved outside the pool) + C6b(2) + C7(2, the rogue's pool is its
+// own) + C8(1, the fills sit on the narrowed range outside the pool) +
+// C9(1, the renumbered lease is reset) + C10(2) + C11(1, the
+// validate_dhcp probe); C12 never runs,
 // plus group D's 5: one IPv4 lease for each row's container, the slaac
 // rows included, since the container also leases IPv4 (#23),
 // plus group F's 9: one each for the user class, 108 not asked, both rapid commits and
 // the temporary address, two each for 108 forced and FORCERENEW (their control clients,
 // #21); prefix delegation and PREF64 never run yet (#23 group D part 2).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
-// against this and aborts the cell as a lab error, never as a scenario
-// FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 80
+// against PoolDemand, this sum less what the cell's source cannot run
+// (the C5 family's 22 count only on a failover pair, lab #12), and
+// aborts the cell as a lab error, never as a scenario FAIL.
+// TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
+const MinPoolAddresses = 102
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -205,8 +217,9 @@ var poolDemand = map[string]int{
 	NameA12: 2, NameA13: 1, NameA14: 1, NameA15: 5, NameA16: 1,
 	NameB1: 1, NameB2: 1, NameB3: 1, NameB4: 2, NameB5: 1, NameB6: 1,
 	NameB7: 1, NameB8: 3,
-	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC6: 1,
-	NameC6b: 2, NameC7: 2, NameC8: 1, NameC9: 1, NameC10: 2,
+	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 1, NameC5b: 1,
+	NameC5c: 2, NameC5d: 18, NameC6: 1, NameC6b: 2, NameC7: 2, NameC8: 1,
+	NameC9: 1, NameC10: 2,
 	NameC11: 1, NameC12: 0,
 	NameD1: 1, NameD1b: 1, NameD1c: 1, NameD2: 1, NameD2b: 1,
 	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
@@ -256,7 +269,9 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 		return blocked(s.Name, e.Cell, e.Shape,
 			fmt.Sprintf("source not in a known state before this scenario: %v", err), e.GitSHA)
 	}
+	before := haSample(ctx, e, s.Name, "ha-state-before")
 	v := s.Run(ctx, e)
+	v = withHASamples(v, before, haSample(bCleanupCtx(ctx), e, s.Name, "ha-state-after"))
 	if recovered != "" {
 		v.Reason += "; the source was recovered before this scenario from: " + recovered
 	}
@@ -329,7 +344,10 @@ var Catalog = []Scenario{
 	{Name: NameC2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart}, Run: runC2},
 	{Name: NameC3, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart}, Run: runC3},
 	{Name: NameC4, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runC4},
-	{Name: NameC5, Needs: []sourceadapter.Capability{sourceadapter.CapFailoverPair}, Run: runNeverReached},
+	{Name: NameC5, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair}, Run: runC5},
+	{Name: NameC5b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapFailoverPair}, Run: runC5b},
+	{Name: NameC5c, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair}, Run: runC5c},
+	{Name: NameC5d, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapFailoverPair}, Run: runC5d},
 	{Name: NameC6, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapReserveClientID, sourceadapter.CapSquatter}, Run: runC6},
 	{Name: NameC6b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapSquatter}, Run: runC6b},
 	{Name: NameC7, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRogueServer}, Run: runC7},
@@ -352,4 +370,15 @@ var Catalog = []Scenario{
 	{Name: NameF6, Needs: []sourceadapter.Capability{sourceadapter.CapV6, sourceadapter.CapPD}, Run: runNeverReached},
 	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6, sourceadapter.CapPref64}, Run: runNeverReached},
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
+}
+
+// PoolDemand is the worst-case pool need of the scenarios in ss that source can run (lab #12).
+func PoolDemand(ss []Scenario, source sourceadapter.Adapter) int {
+	n := 0
+	for _, s := range ss {
+		if ok, _ := Applicable(s, source); ok {
+			n += poolDemand[s.Name]
+		}
+	}
+	return n
 }

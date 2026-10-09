@@ -11,6 +11,7 @@ import (
 func groupBAdapters(r Runner) map[string]Adapter {
 	return map[string]Adapter{
 		"kea":      &KeaAdapter{Runner: r},
+		"kea-ha":   &KeaAdapter{Runner: r}, // one peer of the kea-ha pair (lab #12)
 		"isc-dhcp": &ISCDHCPAdapter{Runner: r},
 		"dnsmasq":  &DnsmasqAdapter{Runner: r},
 	}

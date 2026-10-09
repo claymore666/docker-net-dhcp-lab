@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"net/netip"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // The pre-shape pool capacity check exists because the plugin's own
@@ -58,18 +62,42 @@ func TestPoolCapacityRejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestPoolHasCapacityForMatchesMinPoolAddresses pins the check against
-// scenario.MinPoolAddresses's own value (catalog.go) rather than a
-// number restated here: a pool exhausted by four prior shapes' worth of
-// held leases must abort the fifth, and a fresh 101-address pool must
-// clear every shape (five shapes x the requirement is exactly the case that
-// exhausted the pool on A15/A16 before this fix, #3).
-func TestPoolHasCapacityForMatchesMinPoolAddresses(t *testing.T) {
-	const need = scenario.MinPoolAddresses
-
-	if ok, reason := poolHasCapacityFor(101, 0, need); !ok {
-		t.Fatalf("a fresh 101-address pool must cover one shape's run: %s", reason)
+// Every lab.yaml cell's fresh pool must cover one shape's run of what its
+// own source can run (scenario.PoolDemand, #3); the C5 family counts only
+// on the failover pair, where it fits beside the rest (lab #12).
+func TestPoolHasCapacityForEveryLabCell(t *testing.T) {
+	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	need, pairs := 0, 0
+	for _, c := range cfg.Cells {
+		if c.Source == nil {
+			continue
+		}
+		src, err := newCellSourceAdapter(c.Source, runnerFor)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		if slices.Contains(src.Capabilities(), sourceadapter.CapFailoverPair) {
+			pairs++
+		}
+		capacity, err := poolCapacity(c.Source.PoolStart, c.Source.PoolEnd)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		demand := scenario.PoolDemand(scenario.Catalog, src)
+		need = max(need, demand)
+		if ok, reason := poolHasCapacityFor(capacity, 0, demand); !ok {
+			t.Errorf("%s: a fresh pool must cover one shape's run: %s", c.Name, reason)
+		}
+	}
+	if pairs == 0 {
+		t.Fatal("lab.yaml holds no failover pair, so the C5 family's demand went unchecked")
+	}
+
+	// The edges, at the largest demand any cell has.
 	if ok, _ := poolHasCapacityFor(101, 4*need, need); ok {
 		t.Fatalf("a pool already holding four shapes' worth of leases must not clear a fifth")
 	}
@@ -183,5 +211,43 @@ func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("lab.yaml holds no cell with a source")
+	}
+}
+
+type mgmtRunner string
+
+func (r mgmtRunner) Run(context.Context, string) (string, error) { return "", nil }
+
+// A source with a partner (lab #12) gets one PairAdapter whose peers
+// each run on their own mgmt address and carry their seg address as
+// the server-id; without one, the single adapter as before.
+func TestNewCellSourceAdapterPair(t *testing.T) {
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	src := &labyaml.Source{Type: "kea", MgmtAddress: "10.200.255.91/24", SegAddress: "10.200.8.2/24"}
+	a, err := newCellSourceAdapter(src, runnerFor)
+	if k, ok := a.(*sourceadapter.KeaAdapter); err != nil || !ok || k.Runner != mgmtRunner("10.200.255.91/24") {
+		t.Fatalf("single source: %#v, %v", a, err)
+	}
+	src.Partner = &labyaml.Peer{MgmtAddress: "10.200.255.92/24", SegAddress: "10.200.8.3/24"}
+	a, err = newCellSourceAdapter(src, runnerFor)
+	p, ok := a.(*sourceadapter.PairAdapter)
+	if err != nil || !ok {
+		t.Fatalf("pair: %#v, %v", a, err)
+	}
+	want := [2][3]string{{"primary", "10.200.255.91/24", "10.200.8.2"}, {"partner", "10.200.255.92/24", "10.200.8.3"}}
+	for i, w := range want {
+		peer := p.Peers[i]
+		k, _ := peer.Adapter.(*sourceadapter.KeaAdapter)
+		if peer.Name != w[0] || k == nil || k.Runner != mgmtRunner(w[1]) || peer.ServerID != w[2] {
+			t.Errorf("peer %d = %s runner %v id %s, want %v", i, peer.Name, k, peer.ServerID, w)
+		}
+	}
+	src.Type = "isc-dhcp"
+	if _, err := newCellSourceAdapter(src, runnerFor); err == nil || !strings.Contains(err.Error(), "PR 2") {
+		t.Errorf("isc-dhcp pair: %v, want the PR 2 error", err)
+	}
+	src.Type = "dnsmasq"
+	if _, err := newCellSourceAdapter(src, runnerFor); err == nil {
+		t.Error("a dnsmasq pair built an adapter")
 	}
 }

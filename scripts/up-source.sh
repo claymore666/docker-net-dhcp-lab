@@ -6,8 +6,14 @@
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-CELL=${1:?usage: up-source.sh <cell-name> <work-dir>}
-WORK=${2:?usage: up-source.sh <cell-name> <work-dir>}
+CELL=${1:?usage: up-source.sh <cell-name> <work-dir> [primary|partner]}
+WORK=${2:?usage: up-source.sh <cell-name> <work-dir> [primary|partner]}
+PEER=${3:-primary}
+case "$PEER" in primary | partner) ;; *)
+	echo "up-source: peer must be primary or partner, got $PEER" >&2
+	exit 2
+	;;
+esac
 LAB_YAML="${LAB_YAML:-$REPO_ROOT/lab.yaml}"
 
 RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
@@ -17,9 +23,22 @@ if [ -z "$source_type" ]; then
 	exit 1
 fi
 seg_subnet=$(jq -r '.cell.segment.subnet' <<<"$RESOLVED")
-mgmt_addr=$(jq -r '.cell.source.mgmt_address' <<<"$RESOLVED")
 mgmt_gw=$(jq -r '.management.gateway' <<<"$RESOLVED")
-seg_addr=$(jq -r '.cell.source.seg_address' <<<"$RESOLVED")
+primary_seg=$(jq -r '.cell.source.seg_address' <<<"$RESOLVED")
+partner_seg=$(jq -r '.cell.source.partner.seg_address // empty' <<<"$RESOLVED")
+if [ "$PEER" = partner ] && [ -z "$partner_seg" ]; then
+	echo "up-source: cell $CELL has no source.partner in lab.yaml" >&2
+	exit 1
+fi
+if [ "$PEER" = partner ]; then
+	mgmt_addr=$(jq -r '.cell.source.partner.mgmt_address' <<<"$RESOLVED")
+	seg_addr=$partner_seg
+	domain="lab-${CELL}-partner"
+else
+	mgmt_addr=$(jq -r '.cell.source.mgmt_address' <<<"$RESOLVED")
+	seg_addr=$primary_seg
+	domain="lab-${CELL}-source"
+fi
 pool_start=$(jq -r '.cell.source.pool_start' <<<"$RESOLVED")
 pool_end=$(jq -r '.cell.source.pool_end' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.source.vcpus' <<<"$RESOLVED")
@@ -29,6 +48,9 @@ diskgib=$(jq -r '.cell.source.disk_gib' <<<"$RESOLVED")
 # adapters' Ready reads the v6 configs, so a cell without it stops here.
 seg_subnet6=$(jq -r '.cell.segment.subnet6 // empty' <<<"$RESOLVED")
 seg_addr6=$(jq -r '.cell.source.seg_address6 // empty' <<<"$RESOLVED")
+if [ "$PEER" = partner ]; then
+	seg_addr6=$(jq -r '.cell.source.partner.seg_address6 // empty' <<<"$RESOLVED")
+fi
 pool6_start=$(jq -r '.cell.source.pool6_start // empty' <<<"$RESOLVED")
 pool6_end=$(jq -r '.cell.source.pool6_end // empty' <<<"$RESOLVED")
 temp6_pool=$(jq -r '.cell.source.temp6_pool // empty' <<<"$RESOLVED")
@@ -38,7 +60,6 @@ for v in seg_subnet6 seg_addr6 pool6_start pool6_end temp6_pool; do
 		exit 1
 	fi
 done
-domain="lab-${CELL}-source"
 
 # Same deterministic-MAC scheme as up-cell.sh, own domain name so the two
 # VMs on one cell never collide.
@@ -75,7 +96,8 @@ seg_netmask=255.255.255.0
 # The DHCP server's own router option (issue #3, A13 redesign): the
 # source VM's seg_address stripped of its CIDR suffix, mirroring a real
 # Fritz.Box, where the DHCP server and the LAN gateway are the same box.
-seg_addr_ip=${seg_addr%%/*}
+# A pair (#12) hands out the primary's address from both peers.
+seg_addr_ip=${primary_seg%%/*}
 
 # Group B (#23): the class pool B5 serves to option 60 "lab-class-b5" is
 # a fixed host-octet band above every cell's main pool (.100-.200). The
@@ -87,8 +109,18 @@ class_prefix=${seg_network%.*}
 class_pool_start="$class_prefix.$class_first_host"
 class_pool_end="$class_prefix.$class_last_host"
 
-tmpl="$REPO_ROOT/cloud-init/${source_type}-user-data.tmpl.yaml"
-seed_dir="$WORK/seed-source"
+case "${partner_seg:+pair}-$source_type" in
+-*) tmpl_name="$source_type" ;;
+pair-kea) tmpl_name=kea-ha ;;
+pair-isc-dhcp) tmpl_name=isc-dhcp-failover ;;
+*)
+	echo "up-source: no pair template for source type $source_type" >&2
+	exit 1
+	;;
+esac
+tmpl="$REPO_ROOT/cloud-init/${tmpl_name}-user-data.tmpl.yaml"
+if [ "$PEER" = partner ]; then seed_dir="$WORK/seed-partner"; else seed_dir="$WORK/seed-source"; fi
+if [ "$PEER" = partner ]; then host_name="lab-${source_type}-partner"; else host_name="lab-${source_type}-source"; fi
 mkdir -p "$seed_dir"
 sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__SEG_SUBNET__#$seg_subnet#g" -e "s#__SEG_NETWORK__#$seg_network#g" \
@@ -98,13 +130,15 @@ sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
 	-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
 	-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
+	-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
+	-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
 	"$tmpl" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
 	-e "s#__SEG_ADDR__#$seg_addr#" -e "s#__SEG_ADDR6__#$seg_addr6#" \
 	"$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$seed_dir/network-config"
 echo "instance-id: $domain" >"$seed_dir/meta-data"
-echo "local-hostname: lab-${source_type}-source" >>"$seed_dir/meta-data"
+echo "local-hostname: $host_name" >>"$seed_dir/meta-data"
 
 seed_iso="$WORK/${domain}-seed.iso"
 rm -f "$seed_iso"
@@ -116,7 +150,7 @@ ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
 nvram="$WORK/${domain}-VARS.fd"
 
 bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
-echo "== source VM ($source_type) =="
+echo "== source VM ($source_type, $PEER) =="
 if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 	sudo -n virt-install \
 		--name "$domain" \
@@ -153,4 +187,4 @@ done
 	exit 1
 }
 
-echo "up-source: $CELL source ($source_type) ready at $mgmt_ip, segment address ${seg_addr%%/*}"
+echo "up-source: $CELL source ($source_type, $PEER) ready at $mgmt_ip, segment address ${seg_addr%%/*}"

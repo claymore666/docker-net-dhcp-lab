@@ -177,7 +177,11 @@ done
 has_source=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
 if [ -n "$has_source" ]; then
 	echo "== source ($has_source) =="
-	"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK"
+	"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK" primary
+	# A failover pair (#12) has a second peer on the same segment.
+	if [ -n "$(jq -r '.cell.source.partner.mgmt_address // empty' <<<"$RESOLVED")" ]; then
+		"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK" partner
+	fi
 fi
 
 echo "up-cell: $CELL ready, docker host at $mgmt_ip, segment bridge $bridge"

@@ -38,6 +38,7 @@ type cTiming struct {
 	c8Settle  time.Duration // C8: no lease for the failed client id within this of the restore
 	c8Links   time.Duration // C8: the host's link count must be back within this
 	c9Wait    time.Duration // C9: the renumbered lease must show by bind + this
+	c5Wait    time.Duration // C5b-C5d: bound on a pair's state change (measured 4.8-6.2 s, lab #12)
 }
 
 var cDefault = cTiming{
@@ -46,6 +47,7 @@ var cDefault = cTiming{
 	c3Record: 140 * time.Second, c3Start: 150 * time.Second, c3Window: 120 * time.Second,
 	c4Wait: 135 * time.Second, c1Settle: 40 * time.Second, c10Lift: 20 * time.Second,
 	c6bWindow: 30 * time.Second, c8Settle: 40 * time.Second, c8Links: 10 * time.Second, c9Wait: 200 * time.Second,
+	c5Wait: 60 * time.Second,
 }
 
 // The plugin's documented client timing (docs/reference.md): DISCOVER
@@ -214,6 +216,7 @@ func runC1Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 type cBound struct {
 	name, mac, addr, endpointID, ident string
 	bindAt                             time.Time
+	bindMsg                            DHCPMsg
 	before                             sourceadapter.Lease
 	ev                                 map[string]string
 }
@@ -240,10 +243,11 @@ func cStartBound(ctx context.Context, e Env, scenario string, t cTiming) (cBound
 		return b, cleanup, &v
 	}
 	b.ev = map[string]string{}
-	if b.bindAt, err = bindAnchor(ctx, e, scenario, b.ident, b.addr, t.anchor, t.poll, b.ev); err != nil {
+	if b.bindMsg, err = bindACK(ctx, e, scenario, b.ident, b.addr, t.anchor, t.poll, b.ev); err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("no bind time: %v", err), e.GitSHA)
 		return b, cleanup, &v
 	}
+	b.bindAt = b.bindMsg.At
 	snap := evidencePath(e, scenario, "leases-before")
 	l, _, ok, err := lookupLease(ctx, e.Source, e.Shape, b.mac, b.addr, b.endpointID, snap)
 	if err != nil {

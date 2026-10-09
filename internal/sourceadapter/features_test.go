@@ -37,6 +37,7 @@ func baselineConfig(t *testing.T, tmpl, path string) string {
 		"__CLASS_POOL_START__": "10.200.1.221", "__CLASS_POOL_END__": "10.200.1.230",
 		"__SEG_SUBNET6__": "fd42:200:0:100::/64", "__POOL6_START__": "fd42:200:0:100::100",
 		"__POOL6_END__": "fd42:200:0:100::1ff", "__TEMP6_POOL__": "fd42:200:0:100::200/120",
+		"__HA_THIS__": "primary", "__HA_PRIMARY_SEG__": "10.200.1.2", "__HA_PARTNER_SEG__": "10.200.1.3",
 	} {
 		cfg = strings.ReplaceAll(cfg, k, v)
 	}
@@ -48,6 +49,7 @@ func baselineConfig(t *testing.T, tmpl, path string) string {
 
 var baselines = map[string]struct{ tmpl, path string }{
 	"kea":      {"kea-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
+	"kea-ha":   {"kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
 	"isc-dhcp": {"isc-dhcp-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
 	"dnsmasq":  {"dnsmasq-user-data.tmpl.yaml", "/etc/dnsmasq.conf"},
 }
