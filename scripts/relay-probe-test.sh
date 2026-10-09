@@ -11,13 +11,26 @@ fail=0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-ack_from 02:11:00:00:00:01 <"$FIX" || { echo "relay-probe-test: FAIL -- the relay's ACK was not found" >&2; fail=1; }
-if ack_from 02:11:00:00:00:10 <"$FIX"; then
+C=02:11:00:00:00:10
+ack_from 02:11:00:00:00:01 "$C" <"$FIX" || { echo "relay-probe-test: FAIL -- the relay's ACK was not found" >&2; fail=1; }
+if ack_from 02:11:00:00:00:10 "$C" <"$FIX"; then
 	echo "relay-probe-test: FAIL -- an ACK was credited to the client's own MAC" >&2
 	fail=1
 fi
-if grep -v 'length 1: ACK$' "$FIX" | ack_from 02:11:00:00:00:01; then
+if grep -v 'length 1: ACK$' "$FIX" | ack_from 02:11:00:00:00:01 "$C"; then
 	echo "relay-probe-test: FAIL -- an OFFER alone passed as an ACK" >&2
+	fail=1
+fi
+if ack_from 02:11:00:00:00:01 02:11:00:00:00:77 <"$FIX"; then
+	echo "relay-probe-test: FAIL -- an ACK to another client passed" >&2
+	fail=1
+fi
+if grep -v 'Gateway-IP' "$FIX" | ack_from 02:11:00:00:00:01 "$C"; then
+	echo "relay-probe-test: FAIL -- a routed ACK (giaddr 0) passed as the relay's delivery" >&2
+	fail=1
+fi
+if sed 's/Gateway-IP 10.200.10.1/Gateway-IP 0.0.0.0/' "$FIX" | ack_from 02:11:00:00:00:01 "$C"; then
+	echo "relay-probe-test: FAIL -- an ACK with giaddr 0.0.0.0 passed" >&2
 	fail=1
 fi
 
@@ -26,7 +39,12 @@ cat >"$tmp/ssh" <<'STUB'
 #!/bin/bash
 cmd=${*: -1}
 case "$cmd" in
-*/sys/class/net/eth1/address*) echo "${RELAY_MAC-02:11:00:00:00:01}" ;;
+*/sys/class/net/eth1/address*)
+	case "$*" in
+	*lab@10.0.0.2*) echo "${RELAY_MAC-02:11:00:00:00:01}" ;;
+	*) echo "${CLIENT_MAC-02:11:00:00:00:10}" ;;
+	esac
+	;;
 *udhcpc*) exit "${UDHCPC_RC:-0}" ;;
 esac
 STUB
@@ -47,6 +65,14 @@ if RELAY_MAC=02:11:00:00:00:99 run; then
 fi
 if RELAY_MAC="" run; then
 	echo "relay-probe-test: FAIL -- an unreadable relay MAC passed" >&2
+	fail=1
+fi
+if CLIENT_MAC=02:11:00:00:00:66 run; then
+	echo "relay-probe-test: FAIL -- an ACK to another client's MAC passed" >&2
+	fail=1
+fi
+if CLIENT_MAC="" run; then
+	echo "relay-probe-test: FAIL -- an unreadable Docker host MAC passed" >&2
 	fail=1
 fi
 [ "$fail" -eq 0 ] && echo "relay-probe-test: PASS"
