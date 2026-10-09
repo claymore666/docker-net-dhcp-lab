@@ -170,6 +170,17 @@ func TestPartner6Rules(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+	t.Run("in a temp6 pool below pool6", func(t *testing.T) {
+		low := strings.Replace(withPair6, `temp6_pool: "fd42:200:0:800::200/120"`, `temp6_pool: "fd42:200:0:800::80/123"`, 1)
+		bad := strings.Replace(low, from, `seg_address6: "fd42:200:0:800::85/64"`, 1)
+		if _, err := Load(write(t, low)); err != nil {
+			t.Fatalf("the fixture with temp6 below pool6 must load: %v", err)
+		}
+		_, err := Load(write(t, bad))
+		if err == nil || !strings.Contains(err.Error(), "clear of temp6_pool") {
+			t.Fatalf("got %v", err)
+		}
+	})
 	t.Run("just below pool6", func(t *testing.T) {
 		ok := strings.Replace(withPair6, from, `seg_address6: "fd42:200:0:800::ff/64"`, 1)
 		if _, err := Load(write(t, ok)); err != nil {
