@@ -289,6 +289,7 @@ cells:
     segment:
       bridge: lab-br-kea-rly
       subnet: 10.200.10.0/24
+      subnet6: "fd42:200:0:a00::/64"
     relay:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.112/24
@@ -308,6 +309,10 @@ cells:
       seg_address: 10.200.11.2/24
       pool_start: 10.200.10.100
       pool_end: 10.200.10.200
+      seg_address6: "fd42:200:0:a00::2/64"
+      pool6_start: "fd42:200:0:a00::100"
+      pool6_end: "fd42:200:0:a00::1ff"
+      temp6_pool: "fd42:200:0:a00::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
