@@ -251,7 +251,11 @@ hot-standby, with `max-unacked-clients 0`, so the partner takes over at
 once when the primary stops (issue #12). `up-cell.sh` builds both
 peers and `down-cell.sh` removes both. C5 to C5d run only there. On
 that cell C1 to C4 stop or reset both peers together, C8 narrows both
-pools, and C6 and C7 act from the primary's VM. C9, C10 and C12 report
+pools, and C6 and C7 act from the primary's VM. Only the primary
+serves DHCPv6 and router advertisements: the partner stops both, since
+two unpaired DHCPv6 servers would hand out one pool twice. Group D and
+the IPv6 rows of group F act on the primary alone, and IPv6 failover is
+outside issue #12. C9, C10 and C12 report
 N/A with the reason: a renumbered peer drops the failover setup, a
 delay on one peer is split brain, and the pair is not a relay. Each
 PASS or FAIL lists both peers' failover state before and after the
