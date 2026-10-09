@@ -8,7 +8,76 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
+**[504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md)** in docker-net-dhcp-lab v0.1.0
+over 3 DHCP servers, 2 Docker hosts, 5 network shapes, 17 scenarios per shape.
+
 ## How it works
+
+```mermaid
+flowchart TD
+  host["Lab host<br/>one Linux machine with KVM"]
+  ctrl["labctl, the controller<br/>builds each cell and runs the scenarios"]
+  host --> ctrl
+
+  subgraph cell ["One cell: VMs on a segment with no route out"]
+    src["Source VM<br/>the DHCP server:<br/>Kea, ISC dhcpd or dnsmasq"]
+    seg{{"Segment<br/>10.200.N.0/24"}}
+    dock["Docker host VM<br/>Docker Engine and the<br/>docker-net-dhcp plugin"]
+    obs["Observer<br/>records every packet<br/>on the segment"]
+    src --- seg
+    dock --- seg
+    seg --- obs
+  end
+
+  ctrl -- "management network<br/>10.200.255.0/24, control only" --> src
+  ctrl -- "management network<br/>runs a scenario" --> dock
+
+  src --> leases["The server's own<br/>lease table"]
+  obs --> pcap["Packet capture"]
+  dock --> plog["Plugin log"]
+  leases --> bundle["Evidence bundle"]
+  pcap --> bundle
+  plog --> bundle
+  bundle --> verdict["One verdict per scenario:<br/>PASS, FAIL or N/A"]
+  verdict --> page["Results page"]
+  bundle --> pack["pack.sh<br/>refuses a disallowed address"]
+  pack --> release["GitHub release<br/>evidence tarball"]
+  page -. links into .-> release
+```
+
+Each scenario is judged by what the DHCP server's own lease table and the
+observer's packet capture show, never by what the plugin says about itself.
+
+What the lab runs on (a mark shown only to say the lab runs on that project):
+
+<table>
+<tr>
+<th>Docker hosts</th><th></th><th>Plugin runs on</th><th colspan="3">DHCP servers</th>
+</tr>
+<tr>
+<td align="center"><img src="docs/logos/debian.svg" alt="Debian logo" height="40"></td>
+<td align="center"><img src="docs/logos/ubuntu.svg" alt="Ubuntu logo" height="40"></td>
+<td align="center"><img src="docs/logos/docker.svg" alt="Docker logo" height="40"></td>
+<td align="center">Kea</td>
+<td align="center">ISC dhcpd</td>
+<td align="center">dnsmasq</td>
+</tr>
+<tr>
+<td align="center"><a href="https://www.debian.org/">Debian</a> 13</td>
+<td align="center"><a href="https://ubuntu.com/">Ubuntu</a> 24.04 LTS</td>
+<td align="center">Docker Engine 29.8.1 (<a href="https://github.com/moby/moby">moby/moby</a>)</td>
+<td align="center"><a href="https://github.com/isc-projects/kea">isc-projects/kea</a></td>
+<td align="center"><a href="https://github.com/isc-projects/dhcp">isc-projects/dhcp</a></td>
+<td align="center"><a href="https://thekelleys.org.uk/dnsmasq/doc.html">dnsmasq</a></td>
+</tr>
+</table>
+
+At v0.1.0 the servers were the Debian 13 packages: Kea 2.6.3, ISC dhcpd
+4.4.3-P1, dnsmasq 2.91. The Debian, Ubuntu and Docker marks belong to their owners; their files and
+licences are listed in [`docs/logos/`](docs/logos/README.md). No project
+named here endorses this lab.
+
+The terms in the picture:
 
 - A **cell** is a small set of virtual machines on one isolated network:
   a Docker host with the plugin installed, and a DHCP server.
