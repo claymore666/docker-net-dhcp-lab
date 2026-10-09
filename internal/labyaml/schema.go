@@ -76,7 +76,28 @@ type Source struct {
 	VCPUs       int    `yaml:"vcpus" json:"vcpus"`
 	MemoryMiB   int    `yaml:"memory_mib" json:"memory_mib"`
 	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
+	// Partner, when set, makes the source a failover pair (lab #12).
+	Partner *Peer `yaml:"partner" json:"partner,omitempty"`
 }
+
+// Peer is the second server of a failover pair: same type, image and
+// pool as its primary, its own management and segment address.
+type Peer struct {
+	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
+	SegAddress  string `yaml:"seg_address" json:"seg_address"`
+}
+
+// pairTypes are the source types with a failover mode (lab #12).
+var pairTypes = map[string]bool{"kea": true, "isc-dhcp": true}
+
+// Host octets the group B scenarios (#23) hand out on every segment: the
+// per-MAC reservations from 211, the class pool up to 230, the DNS option
+// value at 253. internal/scenario pins them to its own constants.
+const (
+	GroupBBandFirstHost = 211
+	GroupBBandLastHost  = 230
+	DNSOptionHost       = 253
+)
 
 var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true}
 
@@ -271,6 +292,49 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 	}
 	if start == segAddr.Addr() || end == segAddr.Addr() {
 		return fmt.Errorf("cell %s: source pool overlaps the source's own seg_address", cellName)
+	}
+	if s.Partner != nil {
+		return validatePartner(cellName, s, segAddr.Addr(), start, end, mgmtPrefix, segPrefix, seenMgmt)
+	}
+	return nil
+}
+
+// validatePartner checks a failover pair's second server: an address of
+// its own on the segment that no client lease can ever take.
+func validatePartner(cellName string, s *Source, primarySeg, start, end netip.Addr, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
+	p := s.Partner
+	if !pairTypes[s.Type] {
+		return fmt.Errorf("cell %s: source.partner needs source.type kea or isc-dhcp, not %q", cellName, s.Type)
+	}
+	mgmtAddr, err := netip.ParsePrefix(p.MgmtAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address: %w", cellName, err)
+	}
+	if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address is not inside management.subnet", cellName)
+	}
+	if seenMgmt[mgmtAddr.Addr().String()] {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address %s reused by another host in lab.yaml", cellName, mgmtAddr.Addr())
+	}
+	seenMgmt[mgmtAddr.Addr().String()] = true
+	segAddr, err := netip.ParsePrefix(p.SegAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.seg_address: %w", cellName, err)
+	}
+	a := segAddr.Addr()
+	if !segPrefix.Contains(a) {
+		return fmt.Errorf("cell %s: source.partner.seg_address is not inside segment.subnet", cellName)
+	}
+	if a == primarySeg {
+		return fmt.Errorf("cell %s: source.partner.seg_address equals source.seg_address", cellName)
+	}
+	if a.Compare(start) >= 0 && a.Compare(end) <= 0 {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is inside the source pool", cellName, a)
+	}
+	host := int(a.As4()[3])
+	if (host >= GroupBBandFirstHost && host <= GroupBBandLastHost) || host == DNSOptionHost {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is in the group B host band (.%d-.%d, .%d)",
+			cellName, a, GroupBBandFirstHost, GroupBBandLastHost, DNSOptionHost)
 	}
 	return nil
 }

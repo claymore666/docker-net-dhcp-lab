@@ -61,6 +61,35 @@ cells:
       memory_mib: 2048
       disk_gib: 8
 
+  - name: kea-ha
+    description: >
+      Kea 2.6 hot-standby pair: the kea cell's server twice, the HA hook
+      on the segment, primary and standby. Issue #12.
+    segment:
+      bridge: lab-br-kea-ha
+      subnet: 10.200.8.0/24
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.91/24
+      seg_address: 10.200.8.2/24
+      pool_start: 10.200.8.100
+      pool_end: 10.200.8.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+      partner:
+        mgmt_address: 10.200.255.92/24
+        seg_address: 10.200.8.3/24
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.90/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
   - name: isc-dhcp
     description: >
       ISC dhcpd 4.4, apt install, stock config plus a pool. Issue #2.
