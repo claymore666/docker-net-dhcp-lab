@@ -20,6 +20,7 @@ cells:
     segment:
       bridge: lab-br-ref-only
       subnet: 10.200.0.0/24
+      subnet6: "fd42:200:0:0::/64"
     source: null
     docker_host:
       base_image: debian-13-generic-amd64
@@ -36,6 +37,7 @@ cells:
     segment:
       bridge: lab-br-kea
       subnet: 10.200.1.0/24
+      subnet6: "fd42:200:0:100::/64"
     source:
       type: kea
       base_image: debian-13-generic-amd64
@@ -43,6 +45,10 @@ cells:
       seg_address: 10.200.1.2/24
       pool_start: 10.200.1.100
       pool_end: 10.200.1.200
+      seg_address6: "fd42:200:0:100::2/64"
+      pool6_start: "fd42:200:0:100::100"
+      pool6_end: "fd42:200:0:100::1ff"
+      temp6_pool: "fd42:200:0:100::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -61,6 +67,7 @@ cells:
     segment:
       bridge: lab-br-isc-dhcp
       subnet: 10.200.2.0/24
+      subnet6: "fd42:200:0:200::/64"
     source:
       type: isc-dhcp
       base_image: debian-13-generic-amd64
@@ -68,6 +75,10 @@ cells:
       seg_address: 10.200.2.2/24
       pool_start: 10.200.2.100
       pool_end: 10.200.2.200
+      seg_address6: "fd42:200:0:200::2/64"
+      pool6_start: "fd42:200:0:200::100"
+      pool6_end: "fd42:200:0:200::1ff"
+      temp6_pool: "fd42:200:0:200::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -86,6 +97,7 @@ cells:
     segment:
       bridge: lab-br-dnsmasq
       subnet: 10.200.3.0/24
+      subnet6: "fd42:200:0:300::/64"
     source:
       type: dnsmasq
       base_image: debian-13-generic-amd64
@@ -93,6 +105,10 @@ cells:
       seg_address: 10.200.3.2/24
       pool_start: 10.200.3.100
       pool_end: 10.200.3.200
+      seg_address6: "fd42:200:0:300::2/64"
+      pool6_start: "fd42:200:0:300::100"
+      pool6_end: "fd42:200:0:300::1ff"
+      temp6_pool: "fd42:200:0:300::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -112,6 +128,7 @@ cells:
     segment:
       bridge: lab-br-ubu2404
       subnet: 10.200.4.0/24
+      subnet6: "fd42:200:0:400::/64"
     source:
       type: kea
       base_image: debian-13-generic-amd64
@@ -119,6 +136,10 @@ cells:
       seg_address: 10.200.4.2/24
       pool_start: 10.200.4.100
       pool_end: 10.200.4.200
+      seg_address6: "fd42:200:0:400::2/64"
+      pool6_start: "fd42:200:0:400::100"
+      pool6_end: "fd42:200:0:400::1ff"
+      temp6_pool: "fd42:200:0:400::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -138,6 +159,7 @@ cells:
     segment:
       bridge: lab-br-u24isc
       subnet: 10.200.6.0/24
+      subnet6: "fd42:200:0:600::/64"
     source:
       type: isc-dhcp
       base_image: debian-13-generic-amd64
@@ -145,6 +167,10 @@ cells:
       seg_address: 10.200.6.2/24
       pool_start: 10.200.6.100
       pool_end: 10.200.6.200
+      seg_address6: "fd42:200:0:600::2/64"
+      pool6_start: "fd42:200:0:600::100"
+      pool6_end: "fd42:200:0:600::1ff"
+      temp6_pool: "fd42:200:0:600::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -164,6 +190,7 @@ cells:
     segment:
       bridge: lab-br-u24dns
       subnet: 10.200.7.0/24
+      subnet6: "fd42:200:0:700::/64"
     source:
       type: dnsmasq
       base_image: debian-13-generic-amd64
@@ -171,6 +198,10 @@ cells:
       seg_address: 10.200.7.2/24
       pool_start: 10.200.7.100
       pool_end: 10.200.7.200
+      seg_address6: "fd42:200:0:700::2/64"
+      pool6_start: "fd42:200:0:700::100"
+      pool6_end: "fd42:200:0:700::1ff"
+      temp6_pool: "fd42:200:0:700::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
@@ -191,6 +222,7 @@ cells:
     segment:
       bridge: lab-br-deb11d20
       subnet: 10.200.5.0/24
+      subnet6: "fd42:200:0:500::/64"
     source:
       type: kea
       base_image: debian-13-generic-amd64
@@ -198,6 +230,10 @@ cells:
       seg_address: 10.200.5.2/24
       pool_start: 10.200.5.100
       pool_end: 10.200.5.200
+      seg_address6: "fd42:200:0:500::2/64"
+      pool6_start: "fd42:200:0:500::100"
+      pool6_end: "fd42:200:0:500::1ff"
+      temp6_pool: "fd42:200:0:500::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6

@@ -25,9 +25,12 @@ type Management struct {
 	Gateway        string `yaml:"gateway" json:"gateway"`
 }
 
+// Subnet6 is the cell's IPv6 /64 inside ula_prefix; a cell without it has
+// no IPv6 segment (#23 group D).
 type Segment struct {
-	Bridge string `yaml:"bridge" json:"bridge"`
-	Subnet string `yaml:"subnet" json:"subnet"`
+	Bridge  string `yaml:"bridge" json:"bridge"`
+	Subnet  string `yaml:"subnet" json:"subnet"`
+	Subnet6 string `yaml:"subnet6,omitempty" json:"subnet6,omitempty"`
 }
 
 type DockerHost struct {
@@ -63,6 +66,13 @@ type Source struct {
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
 	PoolStart   string `yaml:"pool_start" json:"pool_start"`
 	PoolEnd     string `yaml:"pool_end" json:"pool_end"`
+	// The IPv6 side, required exactly when the cell has segment.subnet6:
+	// eth1's static address, the DHCPv6 IA_NA range, and the prefix the
+	// isc-dhcp template serves IA_TA from (#23 group D).
+	SegAddress6 string `yaml:"seg_address6,omitempty" json:"seg_address6,omitempty"`
+	Pool6Start  string `yaml:"pool6_start,omitempty" json:"pool6_start,omitempty"`
+	Pool6End    string `yaml:"pool6_end,omitempty" json:"pool6_end,omitempty"`
+	Temp6Pool   string `yaml:"temp6_pool,omitempty" json:"temp6_pool,omitempty"`
 	VCPUs       int    `yaml:"vcpus" json:"vcpus"`
 	MemoryMiB   int    `yaml:"memory_mib" json:"memory_mib"`
 	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
@@ -119,6 +129,13 @@ func (c *Config) Validate() error {
 	if len(c.Cells) == 0 {
 		return fmt.Errorf("at least one cell is required")
 	}
+	var ula netip.Prefix
+	if c.ULAPrefix != "" {
+		if ula, err = parseULA(c.ULAPrefix); err != nil {
+			return fmt.Errorf("ula_prefix: %w", err)
+		}
+	}
+	var seen6 []netip.Prefix
 	seenBridge := map[string]bool{}
 	seenSubnet := map[string]bool{}
 	seenMgmt := map[string]bool{}
@@ -154,6 +171,24 @@ func (c *Config) Validate() error {
 		if overlaps(segPrefix, mgmtPrefix) {
 			return fmt.Errorf("cell %s: segment.subnet overlaps the management subnet", cell.Name)
 		}
+		var seg6 netip.Prefix
+		if cell.Segment.Subnet6 != "" {
+			if !ula.IsValid() {
+				return fmt.Errorf("cell %s: segment.subnet6 needs ula_prefix", cell.Name)
+			}
+			if seg6, err = netip.ParsePrefix(cell.Segment.Subnet6); err != nil {
+				return fmt.Errorf("cell %s: segment.subnet6: %w", cell.Name, err)
+			}
+			if err := mustBeLabRange6(seg6, ula); err != nil {
+				return fmt.Errorf("cell %s: segment.subnet6: %w", cell.Name, err)
+			}
+			for _, o := range seen6 {
+				if overlaps(seg6, o) {
+					return fmt.Errorf("cell %s: segment.subnet6 %s overlaps %s of another cell", cell.Name, seg6, o)
+				}
+			}
+			seen6 = append(seen6, seg6)
+		}
 		if cell.DockerHost.BaseImage == "" {
 			return fmt.Errorf("cell %s: docker_host.base_image is required", cell.Name)
 		}
@@ -177,6 +212,9 @@ func (c *Config) Validate() error {
 
 		if cell.Source != nil {
 			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, seenMgmt); err != nil {
+				return err
+			}
+			if err := validateSource6(cell.Name, cell.Source, seg6); err != nil {
 				return err
 			}
 		}
@@ -252,6 +290,101 @@ func mustBeLabRange(p netip.Prefix) error {
 		return fmt.Errorf("%s is outside the lab's published range 10.200.0.0/16", p)
 	}
 	return nil
+}
+
+// validateSource6 checks the source's IPv6 fields against the cell's
+// segment.subnet6 (invalid when the cell has none, and then every v6 field
+// must be empty).
+func validateSource6(cellName string, s *Source, seg6 netip.Prefix) error {
+	fields := []struct{ name, v string }{
+		{"seg_address6", s.SegAddress6}, {"pool6_start", s.Pool6Start},
+		{"pool6_end", s.Pool6End}, {"temp6_pool", s.Temp6Pool},
+	}
+	for _, f := range fields {
+		if !seg6.IsValid() && f.v != "" {
+			return fmt.Errorf("cell %s: source.%s set on a cell with no segment.subnet6", cellName, f.name)
+		}
+		if seg6.IsValid() && f.v == "" {
+			return fmt.Errorf("cell %s: source.%s is required with segment.subnet6", cellName, f.name)
+		}
+	}
+	if !seg6.IsValid() {
+		return nil
+	}
+	segAddr, err := netip.ParsePrefix(s.SegAddress6)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.seg_address6: %w", cellName, err)
+	}
+	if segAddr.Bits() != seg6.Bits() || !seg6.Contains(segAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.seg_address6 is not an address of segment.subnet6 with its prefix length", cellName)
+	}
+	start, err := netip.ParseAddr(s.Pool6Start)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool6_start: %w", cellName, err)
+	}
+	end, err := netip.ParseAddr(s.Pool6End)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool6_end: %w", cellName, err)
+	}
+	if !seg6.Contains(start) || !seg6.Contains(end) {
+		return fmt.Errorf("cell %s: source IPv6 pool is not inside segment.subnet6", cellName)
+	}
+	if start.Compare(end) >= 0 {
+		return fmt.Errorf("cell %s: source.pool6_start must be lower than source.pool6_end", cellName)
+	}
+	own := segAddr.Addr()
+	if start.Compare(own) <= 0 && own.Compare(end) <= 0 {
+		return fmt.Errorf("cell %s: source IPv6 pool contains the source's own seg_address6", cellName)
+	}
+	temp, err := netip.ParsePrefix(s.Temp6Pool)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.temp6_pool: %w", cellName, err)
+	}
+	if temp != temp.Masked() || temp.Bits() <= seg6.Bits() || !seg6.Contains(temp.Addr()) {
+		return fmt.Errorf("cell %s: source.temp6_pool is not a network prefix inside segment.subnet6", cellName)
+	}
+	last := lastAddr(temp)
+	if temp.Contains(own) || !(end.Less(temp.Addr()) || last.Less(start)) {
+		return fmt.Errorf("cell %s: source.temp6_pool overlaps the IPv6 pool or seg_address6", cellName)
+	}
+	return nil
+}
+
+// parseULA accepts a prefix inside fd00::/8, the locally assigned half of
+// the unique local range (RFC 4193 section 3.1).
+func parseULA(v string) (netip.Prefix, error) {
+	p, err := netip.ParsePrefix(v)
+	if err != nil {
+		return p, err
+	}
+	local := netip.MustParsePrefix("fd00::/8")
+	if !p.Addr().Is6() || p.Addr().Is4In6() || p != p.Masked() || p.Bits() < local.Bits() || !local.Contains(p.Addr()) {
+		return p, fmt.Errorf("%s is not a network prefix inside fd00::/8", v)
+	}
+	return p, nil
+}
+
+// mustBeLabRange6 refuses any IPv6 subnet that is not a network prefix
+// inside the lab's ula_prefix.
+func mustBeLabRange6(p, ula netip.Prefix) error {
+	if !p.Addr().Is6() || p.Addr().Is4In6() {
+		return fmt.Errorf("%s is not IPv6", p)
+	}
+	if p != p.Masked() {
+		return fmt.Errorf("%s has host bits set", p)
+	}
+	if p.Bits() < ula.Bits() || !ula.Contains(p.Addr()) {
+		return fmt.Errorf("%s is outside the lab's ula_prefix %s", p, ula)
+	}
+	return nil
+}
+
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().As16()
+	for i := p.Bits(); i < 128; i++ {
+		b[i/8] |= 1 << (7 - uint(i%8))
+	}
+	return netip.AddrFrom16(b)
 }
 
 func overlaps(a, b netip.Prefix) bool {
