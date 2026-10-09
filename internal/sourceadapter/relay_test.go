@@ -115,6 +115,9 @@ func TestRelayReadyChecks(t *testing.T) {
 		{"6 source route without via", func(_, s *scriptRunner) {
 			s.replies["ip -4 route get"] = "10.200.10.100 dev eth0 src 10.200.255.111 uid 0\n"
 		}, "is not routed via"},
+		{"6 source route via another next hop", func(_, s *scriptRunner) {
+			s.replies["ip -4 route get"] = "10.200.10.100 via 10.200.11.9 dev eth1 src 10.200.11.2 uid 0\n"
+		}, "is not routed via"},
 		{"6 source route via the wrong device", func(_, s *scriptRunner) {
 			s.replies["ip -4 route get"] = "10.200.10.100 via 10.200.11.1 dev eth0 src 10.200.255.111 uid 0\n"
 		}, "is not routed via"},
