@@ -272,7 +272,10 @@ several cells at once on one host and leaves one evidence bundle per cell
 under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
 `/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
-`(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1; a
+`(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1. That
+bound assumes 3 vCPUs and 3 GiB per cell; a `kea-ha` cell has a third VM
+and takes 4 and 4 GiB, so the default can overcommit by one vCPU and 1 GiB
+per `kea-ha` cell in the run. A
 larger `-j` is accepted and reported as an overcommit: six cells are 18
 guest vCPUs, and on a 16-vCPU host with three of them rebooting at once
 their guests stopped accepting new ssh connections for about four minutes
