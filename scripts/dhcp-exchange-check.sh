@@ -93,12 +93,11 @@ dhcp_exchange_mac_seen() {
 
 # dhcp_message_log prints one line per DHCP message for one identity
 # (group C, #23): "ts type xid chaddr cid server req ciaddr yiaddr src
-# dst secs", "-" for an empty field, ts in epoch seconds, secs the BOOTP
-# field in decimal (lab #12). A client message
-# matches on chaddr or option 61 (ipvlan shares the parent MAC); a
-# server reply on chaddr, option 61, or the xid of a matched client
-# message, since a reply need not echo option 61. "*" prints every
-# message (C10 needs it). The decode reads tcpdump's hex and uses no
+# dst secs", "-" for empty, ts in epoch seconds, secs in decimal (#12).
+# A client message matches on chaddr or option 61 (ipvlan shares the
+# parent MAC); a server reply on chaddr, option 61, or the xid of a
+# matched client message, since a reply need not echo option 61. "*"
+# prints every message (C10). The decode reads tcpdump's hex with no
 # gawk-only builtin (Debian's awk is mawk); a partial last record is
 # dropped. A 3rd argument, a comma list of option codes, appends one
 # field per code: "0x<hex>" ("0x" for a zero-length option) or "-".
