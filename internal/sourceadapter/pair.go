@@ -149,8 +149,10 @@ func (p *PairAdapter) Leases(ctx context.Context) ([]Lease, error) {
 }
 
 // ReserveMAC and ReserveClientID have no undo in the Adapter interface:
-// a partner failure leaves the primary's reservation, which the next
-// ResetLeases or Recover clears; the error names the failing peer.
+// a partner failure leaves the primary's row in reservations.json for the
+// rest of the cell run, as every Kea reservation stays (nothing but
+// cloud-init writes that file empty); a later reserve of the same key
+// replaces the row. The error names the failing peer (#12).
 func (p *PairAdapter) ReserveMAC(ctx context.Context, mac, addr string) error {
 	return p.each(func(a Adapter) error { return a.ReserveMAC(ctx, mac, addr) })
 }
