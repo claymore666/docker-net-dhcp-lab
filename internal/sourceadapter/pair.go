@@ -442,3 +442,11 @@ func (p *PairAdapter) PeerState(ctx context.Context, name string) (HAState, erro
 func (p *PairAdapter) Profile() PairProfile {
 	return PairProfile{Normal: p.Normal, Survivor: p.Survivor, StandbySilent: p.StandbySilent}
 }
+
+func (p *PairAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
+	return nil, errors.New("pair: v6 is not wired")
+}
+
+func (p *PairAdapter) SetRA(ctx context.Context, rp RAParams) (func(context.Context) error, error) {
+	return nil, errors.New("pair: v6 is not wired")
+}

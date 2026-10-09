@@ -53,7 +53,7 @@ func TestKeaHATemplateIsKeaPlusMarkedLines(t *testing.T) {
 	if d := haTemplateDrift(base, ha); d != "" {
 		t.Fatalf("kea-ha template drifted from kea: %s", d)
 	}
-	cfg := baselineConfig(t, "kea-ha-user-data.tmpl.yaml", "KEAEOF")
+	cfg := baselineConfig(t, "kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf")
 	for _, want := range []string{
 		`libdhcp_ha.so`, `"this-server-name": "primary"`, `"mode": "hot-standby"`,
 		`"heartbeat-delay": 2000`, `"max-response-delay": 6000`, `"max-unacked-clients": 0`,
@@ -89,8 +89,8 @@ func TestKeaHATemplateDriftCatchesAMovedAnchor(t *testing.T) {
 
 // Each Kea edit regex matches the HA config as often as the kea config.
 func TestKeaRegexesAnchorOnTheHAConfig(t *testing.T) {
-	base := baselineConfig(t, "kea-user-data.tmpl.yaml", "KEAEOF")
-	ha := baselineConfig(t, "kea-ha-user-data.tmpl.yaml", "KEAEOF")
+	base := baselineConfig(t, "kea-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf")
+	ha := baselineConfig(t, "kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf")
 	for name, re := range map[string]interface{ FindAllStringIndex(string, int) [][]int }{
 		"valid-lifetime": keaValidLifetimeRE, "routers": keaRoutersOptionRE, "classes": keaClassesRE,
 		"not-b5": keaNotB5RE, "class pool": keaClassPoolRE, "lease_cmds hook": keaLeaseCmdsHookRE,
@@ -127,5 +127,33 @@ func TestKeaHAEditsKeepTheHABlock(t *testing.T) {
 	}
 	if !strings.Contains(r.cfg, `"pool": "10.200.1.100 - 10.200.1.101"`) || !strings.Contains(r.cfg, "libdhcp_ha.so") {
 		t.Fatalf("narrowed config lost a part:\n%s", r.cfg)
+	}
+}
+
+// Option A of lab #12: the standby's VM stops the v6 daemons the kea
+// template enables, after that enable, so only the primary serves v6.
+func TestKeaHAStandbyStopsTheV6Daemons(t *testing.T) {
+	ha := readTemplate(t, "kea-ha-user-data.tmpl.yaml")
+	lines := strings.Split(ha, "\n")
+	enable, stop := -1, -1
+	for i, l := range lines {
+		if strings.Contains(l, "systemctl enable") && strings.Contains(l, "kea-dhcp6-server") {
+			enable = i
+		}
+		if strings.HasSuffix(l, haMarker) && strings.Contains(l, `[ "__HA_THIS__" = primary ] ||`) &&
+			strings.Contains(l, "systemctl disable --now kea-dhcp6-server radvd") {
+			if stop >= 0 {
+				t.Fatal("two standby stop lines")
+			}
+			stop = i
+		}
+	}
+	if enable < 0 || stop < 0 || stop < enable {
+		t.Fatalf("enable line %d, standby stop line %d: want the stop after the enable", enable, stop)
+	}
+	for _, l := range lines[stop+1:] {
+		if strings.Contains(l, "kea-dhcp6-server") || strings.Contains(l, "radvd") {
+			t.Fatalf("a later line starts the v6 side again: %q", l)
+		}
 	}
 }

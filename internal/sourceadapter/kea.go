@@ -22,6 +22,9 @@ var keaValidLifetimeRE = regexp.MustCompile(`"valid-lifetime":\s*[0-9]+,`)
 // yet exercised against a live Kea instance.
 type KeaAdapter struct {
 	Runner Runner
+	// V4Only is a failover partner's adapter: its VM runs no DHCPv6 or
+	// radvd, so v6 is neither declared nor held by Ready (lab #12).
+	V4Only bool
 	base   baseline
 }
 

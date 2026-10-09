@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,10 @@ func (f *fakePeer) Impair(context.Context, time.Duration, int) (func(context.Con
 }
 func (f *fakePeer) EnableFeature(context.Context, Feature, FeatureParams) (func(context.Context) error, error) {
 	return f.restorable("EnableFeature")
+}
+func (f *fakePeer) Leases6(context.Context) ([]Lease6, error) { return nil, f.rec("Leases6") }
+func (f *fakePeer) SetRA(context.Context, RAParams) (func(context.Context) error, error) {
+	return f.restorable("SetRA")
 }
 func (f *fakePeer) SendForceRenew(context.Context, []byte, ForceRenewParams) (string, error) {
 	return "sent", f.rec("SendForceRenew")
@@ -556,5 +561,105 @@ func TestPairActorsRunFromThePrimary(t *testing.T) {
 	}
 	if want := "primary Squat,primary StartRogue,primary RogueLeases"; fp.calls() != want {
 		t.Fatalf("calls %q, want %q", fp.calls(), want)
+	}
+}
+
+// Option A of lab #12: the primary alone serves v6, so every v6 call and
+// v6 feature edit reaches it and never the partner; v4 edits still fan out.
+func TestPairV6GoesToThePrimaryOnly(t *testing.T) {
+	ctx := context.Background()
+	fp := newFakePair()
+	if _, err := fp.pair.Leases6(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restore, err := fp.pair.SetRA(ctx, RAParams{Off: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []Feature{FeatureRapidCommit6, FeatureTemporary6} {
+		r, err := fp.pair.EnableFeature(ctx, f, FeatureParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "primary Leases6,primary SetRA,primary restore-SetRA," +
+		"primary EnableFeature,primary restore-EnableFeature,primary EnableFeature,primary restore-EnableFeature"
+	if fp.calls() != want {
+		t.Fatalf("calls %q, want %q", fp.calls(), want)
+	}
+	fp.log = nil
+	if _, err := fp.pair.EnableFeature(ctx, FeatureOffer108, FeatureParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if fp.calls() != "primary EnableFeature,partner EnableFeature" {
+		t.Fatalf("a v4 feature did not fan out: %q", fp.calls())
+	}
+}
+
+func TestPairV6PrimaryFailureNamesIt(t *testing.T) {
+	ctx := context.Background()
+	fp := newFakePair()
+	fp.a.fail = map[string]bool{"Leases6": true, "SetRA": true, "EnableFeature": true}
+	_, err1 := fp.pair.Leases6(ctx)
+	_, err2 := fp.pair.SetRA(ctx, RAParams{Off: true})
+	_, err3 := fp.pair.EnableFeature(ctx, FeatureRapidCommit6, FeatureParams{})
+	for i, err := range []error{err1, err2, err3} {
+		if err == nil || !strings.Contains(err.Error(), "pair: primary:") {
+			t.Fatalf("call %d: got %v, want the primary named", i, err)
+		}
+	}
+	if strings.Contains(fp.calls(), "partner") {
+		t.Fatalf("a v6 failure reached the partner: %q", fp.calls())
+	}
+}
+
+// The v6 capabilities come from the primary alone; the v4 ones still need both peers.
+func TestPairCapabilitiesV6FromThePrimary(t *testing.T) {
+	fp := newFakePair()
+	fp.b.caps = (&KeaAdapter{V4Only: true}).Capabilities()
+	got := fp.pair.Capabilities()
+	for _, c := range []Capability{CapV6, CapRapidCommit6, CapV4, CapFailoverPair} {
+		if !slices.Contains(got, c) {
+			t.Fatalf("pair lacks %s: %v", c, got)
+		}
+	}
+	fp.a.caps = []Capability{CapV4}
+	fp.b.caps = []Capability{CapV4, CapV6, CapRapidCommit6}
+	got = fp.pair.Capabilities()
+	if slices.Contains(got, CapV6) || slices.Contains(got, CapRapidCommit6) {
+		t.Fatalf("pair took v6 from the partner: %v", got)
+	}
+}
+
+func TestKeaV4OnlyLeavesV6Out(t *testing.T) {
+	caps := (&KeaAdapter{V4Only: true}).Capabilities()
+	for _, c := range []Capability{CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64} {
+		if slices.Contains(caps, c) {
+			t.Fatalf("v4-only Kea declares %s", c)
+		}
+	}
+	if !slices.Contains(caps, CapV4) || !slices.Contains(caps, CapNarrowPool) {
+		t.Fatalf("v4-only Kea lost a v4 capability: %v", caps)
+	}
+	u := (&KeaAdapter{V4Only: true}).units()
+	if len(u.extra) != 0 || u.leases6 != nil || u.service != "kea-dhcp4-server" || u.cfgPath != "/etc/kea/kea-dhcp4.conf" {
+		t.Fatalf("v4-only units %+v", u)
+	}
+	full := (&KeaAdapter{}).units()
+	if len(full.extra) != 2 || full.leases6 == nil {
+		t.Fatalf("full units lost the v6 side: %+v", full)
+	}
+}
+
+func TestKeaPairPartnerIsV4Only(t *testing.T) {
+	p := NewKeaPair(nil, nil, "a", "b")
+	if p.Peers[0].Adapter.(*KeaAdapter).V4Only || !p.Peers[1].Adapter.(*KeaAdapter).V4Only {
+		t.Fatal("want a full primary and a v4-only partner")
 	}
 }
