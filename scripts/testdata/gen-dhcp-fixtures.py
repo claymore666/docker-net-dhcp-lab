@@ -357,4 +357,11 @@ write_pcap("v6/synth-mixed.pcap", [
     (70.7, c2s6(LL_A, dhcp6(12, 0x000000, o6(1, DUID_A)))),
 ])
 
-print("wrote 15 fixtures")
+# A Reply that carries no Client Identifier, so only the xid of A's
+# matched Information-request ties it to the ident.
+write_pcap("v6/synth-xid.pcap", [
+    (80.0, c2s6(LL_A, dhcp6(11, 0x0a0003, o6(1, DUID_A)))),
+    (80.1, s2c6(LL_A, dhcp6(7, 0x0a0003, o6(2, SDUID)))),
+])
+
+print("wrote 16 fixtures")

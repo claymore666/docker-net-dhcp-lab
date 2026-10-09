@@ -150,8 +150,8 @@ rc=0
 [ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- opts X: a missing capture read as no options" >&2; fail=1; }
 
 # dhcp6_message_log (#23 group D), against real captures (v6/*.pcap,
-# kea 2.6.3, dhcpd 4.4.3-P1, dnsmasq 2.91, radvd 2.20) and one built
-# frame set (v6/synth-mixed.pcap) for what they do not hold.
+# kea 2.6.3, dhcpd 4.4.3-P1, dnsmasq 2.91, radvd 2.20) and built
+# frame sets (v6/synth-*.pcap) for what they do not hold.
 V6="$DATA/v6"
 DUID6=00:03:00:01:02:00:00:00:23:d1
 expect6() {
@@ -201,6 +201,8 @@ expect6 "synthetic, star skips hop-by-hop and relay" "$SYN" '*' "$RA6
 $B6
 $A6
 REPLY 0c0001 - $SDUID6 0 - - - fe80::6:1 fe80::6:2"
+expect6 "synthetic, Reply without a client DUID matched by xid" "$V6/synth-xid.pcap" fe80::6:2 "INFORMATION-REQUEST 0a0003 00:03:00:01:02:00:00:00:06:02 - 0 - - - fe80::6:2 ff02::1:2
+REPLY 0a0003 - $SDUID6 0 - - - fe80::6:1 fe80::6:2"
 tr6=$(mktemp)
 head -c "$(($(stat -c %s "$V6/radvd-m1a1.pcap") - 20))" "$V6/radvd-m1a1.pcap" >"$tr6"
 got=$(dhcp6_message_log "$tr6" '*' | awk '{print $2}' | tr '\n' ' ')
