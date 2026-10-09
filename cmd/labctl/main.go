@@ -437,7 +437,7 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl run: Leases after reset:", err)
 		return 1
 	}
-	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.MinPoolAddresses); !ok {
+	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.PoolDemand(scenariosToRun, source)); !ok {
 		reason = "pool cannot cover this shape's run: " + reason
 		for _, s := range scenariosToRun {
 			v := scenario.Verdict{

@@ -203,8 +203,10 @@ const (
 // the temporary address, two each for 108 forced and FORCERENEW (their control clients,
 // #21); prefix delegation and PREF64 never run yet (#23 group D part 2).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
-// against this and aborts the cell as a lab error, never as a scenario
-// FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
+// against PoolDemand, this sum less what the cell's source cannot run
+// (the C5 family's 22 count only on a failover pair, lab #12), and
+// aborts the cell as a lab error, never as a scenario FAIL.
+// TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
 const MinPoolAddresses = 102
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
@@ -370,7 +372,13 @@ var Catalog = []Scenario{
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
 }
 
-// PoolDemand is a stub until the per-source demand lands (lab #12).
+// PoolDemand is the worst-case pool need of the scenarios in ss that source can run (lab #12).
 func PoolDemand(ss []Scenario, source sourceadapter.Adapter) int {
-	return MinPoolAddresses
+	n := 0
+	for _, s := range ss {
+		if ok, _ := Applicable(s, source); ok {
+			n += poolDemand[s.Name]
+		}
+	}
+	return n
 }
