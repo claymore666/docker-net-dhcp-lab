@@ -94,9 +94,15 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 // handful of directives but not a new dhcp-host line. key and ip are
 // validated by the callers (issue #2, #23).
 func (a *DnsmasqAdapter) dnsmasqReserve(ctx context.Context, key, ip string) error {
-	cmd := fmt.Sprintf(`sudo sed -i '/^dhcp-host=%s,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart dnsmasq`, key, key, ip)
-	if _, err := a.Runner.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("dnsmasq: reserve %s -> %s: %w", key, ip, err)
+	return reserveViaDhcpHost(ctx, a.Runner, key, ip, "dnsmasq")
+}
+
+// reserveViaDhcpHost is the body of dnsmasqReserve for any server that
+// reads /etc/dnsmasq.d/*.conf; service names the unit to restart (#10).
+func reserveViaDhcpHost(ctx context.Context, r Runner, key, ip, service string) error {
+	cmd := fmt.Sprintf(`sudo sed -i '/^dhcp-host=%s,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart %s`, key, key, ip, service)
+	if _, err := r.Run(ctx, cmd); err != nil {
+		return fmt.Errorf("%s: reserve %s -> %s: %w", service, key, ip, err)
 	}
 	return nil
 }
