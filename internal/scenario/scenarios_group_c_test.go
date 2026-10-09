@@ -349,8 +349,8 @@ func TestContainerAddrsSkipsLoopbackAndKeepsEveryInet(t *testing.T) {
 	}
 }
 
-func TestParseMessageLogReadsElevenFieldsAndDashes(t *testing.T) {
-	msgs, err := parseMessageLog("100.250000 DISCOVER 0x1 aa:bb:cc:00:00:01 - - - - - 0.0.0.0 255.255.255.255\n\n101.5 ACK 0x1 aa:bb:cc:00:00:01 00:6c 10.200.1.2 - - 10.200.1.150 10.200.1.2 10.200.1.150\n")
+func TestParseMessageLogReadsThirteenFieldsAndDashes(t *testing.T) {
+	msgs, err := parseMessageLog("100.250000 DISCOVER 0x1 aa:bb:cc:00:00:01 - - - - - 0.0.0.0 255.255.255.255 4 -\n\n101.5 ACK 0x1 aa:bb:cc:00:00:01 00:6c 10.200.1.2 - - 10.200.1.150 10.200.1.2 10.200.1.150 0 0x00000078\n")
 	if err != nil || len(msgs) != 2 {
 		t.Fatalf("got %v, %v", msgs, err)
 	}
@@ -363,8 +363,16 @@ func TestParseMessageLogReadsElevenFieldsAndDashes(t *testing.T) {
 	if _, err := parseMessageLog("100.0 DISCOVER 0x1\n"); err == nil {
 		t.Error("a short line was accepted")
 	}
-	if _, err := parseMessageLog("x DISCOVER 0x1 a - - - - - b c\n"); err == nil {
+	if _, err := parseMessageLog("x DISCOVER 0x1 a - - - - - b c 0 -\n"); err == nil {
 		t.Error("a bad timestamp was accepted")
+	}
+	if msgs[0].Secs != 4 || msgs[0].LeaseTime != 0 || msgs[1].Secs != 0 || msgs[1].LeaseTime != 120*time.Second {
+		t.Errorf("secs/option 51: %+v / %+v", msgs[0], msgs[1])
+	}
+	for _, bad := range []string{"x -", "-1 -", "65536 -", "0 0x78", "0 78787878", "0 0xzzzzzzzz"} {
+		if _, err := parseMessageLog("1.0 ACK 0x1 a - - - - - b c " + bad + "\n"); err == nil {
+			t.Errorf("secs/option 51 %q accepted", bad)
+		}
 	}
 }
 

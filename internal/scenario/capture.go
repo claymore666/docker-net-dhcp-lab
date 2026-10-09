@@ -25,6 +25,8 @@ type DHCPMsg struct {
 	YIAddr    string
 	Src       string
 	Dst       string
+	Secs      int           // BOOTP secs, recorded unjudged (lab #12, RFC 2131 Table 5)
+	LeaseTime time.Duration // option 51, zero when absent
 }
 
 // CaptureReader reads the messages the observer has captured so far for
@@ -49,9 +51,15 @@ func (o ObserverCapture) Messages(ctx context.Context, ident, snapshotPath strin
 	if err := o.snapshot(ctx, snapshotPath); err != nil {
 		return nil, err
 	}
-	script := o.RepoRoot + "/scripts/dhcp-exchange-check.sh"
-	cmd := exec.CommandContext(ctx, "bash", "-c", `. "$1"; dhcp_message_log "$2" "$3"`,
-		"dhcp-message-log-wrapper", script, snapshotPath, ident)
+	return decodeCapture(ctx, o.RepoRoot, snapshotPath, ident)
+}
+
+// decodeCapture runs dhcp_message_log over pcap for ident, asking for
+// option 51 so the C5 family times T1/T2 from the bound ACK (lab #12).
+func decodeCapture(ctx context.Context, repoRoot, pcap, ident string) ([]DHCPMsg, error) {
+	script := repoRoot + "/scripts/dhcp-exchange-check.sh"
+	cmd := exec.CommandContext(ctx, "bash", "-c", `. "$1"; dhcp_message_log "$2" "$3" 51`,
+		"dhcp-message-log-wrapper", script, pcap, ident)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("dhcp_message_log: %w", err)
@@ -79,7 +87,7 @@ func (o ObserverCapture) snapshot(ctx context.Context, path string) error {
 }
 
 // parseMessageLog reads dhcp_message_log's lines: ts TYPE xid chaddr cid
-// server requested ciaddr yiaddr src dst, "-" for an absent field.
+// server requested ciaddr yiaddr src dst secs opt51, "-" for an absent field.
 func parseMessageLog(out string) ([]DHCPMsg, error) {
 	var msgs []DHCPMsg
 	for _, line := range strings.Split(out, "\n") {
@@ -87,8 +95,8 @@ func parseMessageLog(out string) ([]DHCPMsg, error) {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) != 11 {
-			return nil, fmt.Errorf("dhcp_message_log line has %d fields, want 11: %q", len(f), line)
+		if len(f) != 13 {
+			return nil, fmt.Errorf("dhcp_message_log line has %d fields, want 13: %q", len(f), line)
 		}
 		ts, err := strconv.ParseFloat(f[0], 64)
 		if err != nil {
@@ -99,8 +107,22 @@ func parseMessageLog(out string) ([]DHCPMsg, error) {
 				f[i] = ""
 			}
 		}
+		secs, err := strconv.Atoi(f[11])
+		if err != nil || secs < 0 || secs > 65535 {
+			return nil, fmt.Errorf("dhcp_message_log secs %q is not 0-65535", f[11])
+		}
+		var lease time.Duration
+		if f[12] != "" {
+			hex, ok := strings.CutPrefix(f[12], "0x")
+			v, err := strconv.ParseUint(hex, 16, 32)
+			if !ok || len(hex) != 8 || err != nil {
+				return nil, fmt.Errorf("dhcp_message_log option 51 %q is not 4 bytes of hex", f[12])
+			}
+			lease = time.Duration(v) * time.Second
+		}
 		sec := int64(ts)
 		msgs = append(msgs, DHCPMsg{
+			Secs: secs, LeaseTime: lease,
 			At:   time.Unix(sec, int64((ts-float64(sec))*1e9)),
 			Type: f[1], XID: f[2], CHAddr: f[3], ClientID: f[4], Server: f[5],
 			Requested: f[6], CIAddr: f[7], YIAddr: f[8], Src: f[9], Dst: f[10],
@@ -120,9 +142,13 @@ func writeMessageLog(path string, msgs []DHCPMsg) error {
 		return s
 	}
 	for _, m := range msgs {
-		fmt.Fprintf(&b, "%s %s %s %s %s %s %s %s %s %s %s\n",
+		lease := "-"
+		if m.LeaseTime > 0 {
+			lease = m.LeaseTime.String()
+		}
+		fmt.Fprintf(&b, "%s %s %s %s %s %s %s %s %s %s %s secs=%d lease=%s\n",
 			m.At.UTC().Format("15:04:05.000"), m.Type, dash(m.XID), dash(m.CHAddr), dash(m.ClientID),
-			dash(m.Server), dash(m.Requested), dash(m.CIAddr), dash(m.YIAddr), dash(m.Src), dash(m.Dst))
+			dash(m.Server), dash(m.Requested), dash(m.CIAddr), dash(m.YIAddr), dash(m.Src), dash(m.Dst), m.Secs, lease)
 	}
 	if len(msgs) == 0 {
 		b.WriteString("no DHCP message for this identity in the capture\n")

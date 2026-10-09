@@ -78,6 +78,11 @@ func Applicable(s Scenario, source sourceadapter.Adapter) (bool, string) {
 	for _, need := range s.Needs {
 		if !have[need] {
 			reason := fmt.Sprintf("source does not declare capability %q", need)
+			if x, ok := source.(sourceadapter.NAExplainer); ok {
+				if why, ok := x.NAReason(need); ok {
+					return false, reason + ": " + why
+				}
+			}
 			if why, ok := capabilityNAReason[need]; ok {
 				reason += ": " + why
 			}

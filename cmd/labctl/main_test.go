@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // The pre-shape pool capacity check exists because the plugin's own
@@ -183,5 +186,43 @@ func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
 	}
 	if seen == 0 {
 		t.Fatal("lab.yaml holds no cell with a source")
+	}
+}
+
+type mgmtRunner string
+
+func (r mgmtRunner) Run(context.Context, string) (string, error) { return "", nil }
+
+// A source with a partner (lab #12) gets one PairAdapter whose peers
+// each run on their own mgmt address and carry their seg address as
+// the server-id; without one, the single adapter as before.
+func TestNewCellSourceAdapterPair(t *testing.T) {
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	src := &labyaml.Source{Type: "kea", MgmtAddress: "10.200.255.91/24", SegAddress: "10.200.8.2/24"}
+	a, err := newCellSourceAdapter(src, runnerFor)
+	if k, ok := a.(*sourceadapter.KeaAdapter); err != nil || !ok || k.Runner != mgmtRunner("10.200.255.91/24") {
+		t.Fatalf("single source: %#v, %v", a, err)
+	}
+	src.Partner = &labyaml.Peer{MgmtAddress: "10.200.255.92/24", SegAddress: "10.200.8.3/24"}
+	a, err = newCellSourceAdapter(src, runnerFor)
+	p, ok := a.(*sourceadapter.PairAdapter)
+	if err != nil || !ok {
+		t.Fatalf("pair: %#v, %v", a, err)
+	}
+	want := [2][3]string{{"primary", "10.200.255.91/24", "10.200.8.2"}, {"partner", "10.200.255.92/24", "10.200.8.3"}}
+	for i, w := range want {
+		peer := p.Peers[i]
+		k, _ := peer.Adapter.(*sourceadapter.KeaAdapter)
+		if peer.Name != w[0] || k == nil || k.Runner != mgmtRunner(w[1]) || peer.ServerID != w[2] {
+			t.Errorf("peer %d = %s runner %v id %s, want %v", i, peer.Name, k, peer.ServerID, w)
+		}
+	}
+	src.Type = "isc-dhcp"
+	if _, err := newCellSourceAdapter(src, runnerFor); err == nil || !strings.Contains(err.Error(), "PR 2") {
+		t.Errorf("isc-dhcp pair: %v, want the PR 2 error", err)
+	}
+	src.Type = "dnsmasq"
+	if _, err := newCellSourceAdapter(src, runnerFor); err == nil {
+		t.Error("a dnsmasq pair built an adapter")
 	}
 }

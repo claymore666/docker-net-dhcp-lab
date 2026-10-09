@@ -96,6 +96,22 @@ expect_log "log J (partial last record dropped)" "$DATA/dhcp-c-partial.pcap" "$M
 	"DISCOVER@0.000000 OFFER@0.000000 REQUEST@0.000000"
 expect_log "log L (\"*\" prints every identity)" "$DATA/dhcp-c-retransmit.pcap" "*" \
 	"DISCOVER@100.000000 DISCOVER@101.000000 DISCOVER@104.200000 DISCOVER@112.100000 OFFER@114.300000 REQUEST@114.400000 ACK@114.500000"
+# A Kea HA pair's T2 rebind (lab #12), captured on a local pair: the
+# unicast T1 renewal to the dead primary goes unanswered, the broadcast
+# rebind (secs 3) is ACKed by the partner with option 51 = 40 s.
+HAMAC=ce:26:ae:11:40:98
+HAPCAP="$DATA/dhcp-c5-kea-ha-rebind.pcap"
+expect_log "log M (Kea HA rebind to the partner)" "$HAPCAP" "$HAMAC" \
+	"DISCOVER@1791571234.398347 OFFER@1791571234.398865 REQUEST@1791571234.474303 ACK@1791571234.475340 REQUEST@1791571254.578337 REQUEST@1791571257.674251 ACK@1791571257.674791 REQUEST@1791571277.802297 ACK@1791571277.803316"
+expect_field "log M renewal dst (unicast to the primary)" "$HAPCAP" "$HAMAC" 5 11 10.200.8.2
+expect_field "log M rebind secs" "$HAPCAP" "$HAMAC" 6 12 3
+expect_field "log M renewal secs" "$HAPCAP" "$HAMAC" 5 12 0
+expect_field "log M rebind ACK server id" "$HAPCAP" "$HAMAC" 7 6 10.200.8.3
+got=$(dhcp_message_log "$HAPCAP" "$HAMAC" 51 | awk 'NR == 7 {print $13}')
+if [ "$got" != 0x00000028 ]; then
+	echo "dhcp-exchange-check-test: FAIL -- log M rebind ACK option 51 = \"$got\", want 0x00000028" >&2
+	fail=1
+fi
 rc=0
 (dhcp_message_log "$DATA/does-not-exist.pcap" "$MAC" >/dev/null 2>&1) || rc=$?
 if [ "$rc" -eq 0 ]; then
