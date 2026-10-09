@@ -146,18 +146,20 @@ type c5Rig struct {
 	no51, noRenewal, noUnicast, deadACK bool
 	lateRenewal, noRebind, rebindByDead bool
 	noSurvivorRenew, renewToSurvivor    bool
+	earlyRenewal                        bool
 	bindServer                          string
+	lease                               time.Duration
 }
 
 func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 	b := cBoundSetup(t, shape, NameC5)
-	r := &c5Rig{cBoundRig: b, p: newFakePair(b.src), grant: grant}
+	r := &c5Rig{cBoundRig: b, p: newFakePair(b.src), grant: grant, lease: c5Lease}
 	b.e.Source = r.p
 	addr := "10.200.1.101"
-	b.src.fn = func(int) []sourceadapter.Lease { return []sourceadapter.Lease{b.lease(addr, b.bind.Add(c5Lease))} }
+	b.src.fn = func(int) []sourceadapter.Lease { return []sourceadapter.Lease{b.lease(addr, b.bind.Add(r.lease))} }
 	r.p.peerFn = func(n string) []sourceadapter.Lease {
-		if n != r.p.other(r.grant) || r.noSurvivorRenew || time.Now().Before(b.bind.Add(c5Lease*7/8+20*ms)) {
-			return []sourceadapter.Lease{b.lease(addr, b.bind.Add(c5Lease))}
+		if n != r.p.other(r.grant) || r.noSurvivorRenew || time.Now().Before(b.bind.Add(r.lease*7/8+20*ms)) {
+			return []sourceadapter.Lease{b.lease(addr, b.bind.Add(r.lease))}
 		}
 		return []sourceadapter.Lease{b.lease(addr, b.bind.Add(time.Hour))}
 	}
@@ -166,7 +168,7 @@ func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 			b.bind = time.Now()
 		}
 		gid, sid := r.p.ids[r.grant], r.p.ids[r.p.other(r.grant)]
-		lease := c5Lease
+		lease := r.lease
 		if r.no51 {
 			lease = 0
 		}
@@ -175,9 +177,11 @@ func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 			bs = r.bindServer
 		}
 		out := []DHCPMsg{ack(b.bind, "b", addr, bs, lease)}
-		t1, t2 := b.bind.Add(c5Lease/2), b.bind.Add(c5Lease*7/8)
+		t1, t2 := b.bind.Add(r.lease/2), b.bind.Add(r.lease*7/8)
 		switch {
 		case r.noRenewal:
+		case r.earlyRenewal:
+			out = append(out, req(b.bind.Add(100*ms), "r", addr, gid))
 		case r.lateRenewal:
 			out = append(out, req(t2.Add(5*ms), "r", addr, gid))
 		case r.renewToSurvivor:
@@ -186,14 +190,14 @@ func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 			out = append(out, req(t1.Add(10*ms), "r", addr, gid))
 		}
 		if r.deadACK {
-			out = append(out, ack(b.bind.Add(c5Lease/4), "r", addr, gid, c5Lease))
+			out = append(out, ack(b.bind.Add(r.lease/4), "r", addr, gid, r.lease))
 		}
 		if !r.noRebind {
 			by := sid
 			if r.rebindByDead {
 				by = gid
 			}
-			out = append(out, req(t2.Add(10*ms), "x", addr, "255.255.255.255"), ack(t2.Add(20*ms), "x", addr, by, c5Lease))
+			out = append(out, req(t2.Add(10*ms), "x", addr, "255.255.255.255"), ack(t2.Add(20*ms), "x", addr, by, r.lease))
 		}
 		if ident == "*" && !r.noUnicast {
 			out = append(out, req(b.bind.Add(ms), "o", "10.200.1.150", "10.200.1.2"))
@@ -238,6 +242,8 @@ func TestRunC5Judges(t *testing.T) {
 		{"no renewal and no unicast seen", func(r *c5Rig) { r.noRenewal, r.noUnicast = true, true }, BLOCKED, "absence is not judged"},
 		{"no renewal", func(r *c5Rig) { r.noRenewal = true }, FAIL, "no REQUEST from"},
 		{"renewal only after T2", func(r *c5Rig) { r.lateRenewal = true }, FAIL, "between T1"},
+		// T1 less the 1 s jitter must fall after bind + 100 ms, so this lease is 2.4 s (#12).
+		{"renewal only before T1", func(r *c5Rig) { r.earlyRenewal, r.lease = true, 2400*ms }, FAIL, "between T1"},
 		{"renewal unicast to the survivor", func(r *c5Rig) { r.renewToSurvivor = true }, FAIL, "no REQUEST from"},
 		{"no rebind", func(r *c5Rig) { r.noRebind = true }, FAIL, "no broadcast REQUEST"},
 		{"rebind ACKed by the stopped peer", func(r *c5Rig) { r.rebindByDead, r.deadACK = true, false }, BLOCKED, "the stop did not land"},
@@ -297,8 +303,9 @@ func TestC5RebindWindow(t *testing.T) {
 // ---- C5b and C5c ------------------------------------------------------
 
 // c5bRig: the outage container is ACKed by the partner at its first
-// capture read; after the primary's start it is ACKed by the primary
-// 30 ms later, and a second container by the primary at once.
+// capture read; after the primary's start its renewal goes unicast to
+// the partner, its rebind is ACKed by the primary 30 ms after the start,
+// and a second container is ACKed by the primary at once.
 type c5bRig struct {
 	*cRig
 	p                                  *fakePair
@@ -307,6 +314,8 @@ type c5bRig struct {
 	outageServer                       string
 	noPartnerLease, noPrimaryLease     bool
 	noPrimaryACK, standbyACK, newByPtn bool
+	renewToPrimary, noStandbyRenewal   bool
+	noRebind, noUnicast                bool
 }
 
 func newC5bRig(t *testing.T, scenario string) *c5bRig {
@@ -327,7 +336,7 @@ func newC5bRig(t *testing.T, scenario string) *c5bRig {
 		}
 		return lease(r.name)
 	}
-	c.cap.fn = func(string) []DHCPMsg {
+	c.cap.fn = func(ident string) []DHCPMsg {
 		ct, _, ok := c.h.container(r.name)
 		if !ok {
 			return nil
@@ -340,7 +349,17 @@ func newC5bRig(t *testing.T, scenario string) *c5bRig {
 			if r.standbyACK && time.Now().After(st) {
 				out = append(out, ack(st.Add(ms), "s", ct.addr, r.p.ids["partner"], c5Lease))
 			}
-			if !r.noPrimaryACK && time.Now().After(st.Add(30*ms)) {
+			if !r.noStandbyRenewal {
+				out = append(out, req(st.Add(15*ms), "t", ct.addr, r.p.ids["partner"]))
+			}
+			dst := "255.255.255.255"
+			if r.renewToPrimary {
+				dst = r.p.ids["primary"]
+			}
+			if !r.noRebind {
+				out = append(out, req(st.Add(25*ms), "r", ct.addr, dst))
+			}
+			if !r.noPrimaryACK {
 				out = append(out, ack(st.Add(30*ms), "r", ct.addr, r.p.ids["primary"], c5Lease))
 			}
 		}
@@ -350,6 +369,9 @@ func newC5bRig(t *testing.T, scenario string) *c5bRig {
 				by = r.p.ids["partner"]
 			}
 			out = append(out, ack(time.Now(), "n", n.addr, by, c5Lease))
+		}
+		if ident == "*" && !r.noUnicast {
+			out = append(out, req(r.outageAt.Add(ms), "o", "10.200.1.150", "10.200.1.2"))
 		}
 		return seen(out)
 	}
@@ -408,6 +430,7 @@ func TestRunC5cPassesWhenThePrimaryReturnsAndTakesTheRebind(t *testing.T) {
 	needResult(t, v, PASS)
 	needWritten(t, r.e, v)
 	needReason(t, v, "the primary ACKed it")
+	needReason(t, v, "1 renewal(s) unicast to the standby 10.200.1.3 went unanswered")
 	needOps(t, r.p, "stop primary", "start primary", "start primary", "restore")
 	needCleanup(t, r.h.bRunner, "", r.name)
 	needCleanup(t, r.h.bRunner, "", r.name+"-new")
@@ -424,6 +447,10 @@ func TestRunC5cJudges(t *testing.T) {
 		{"the standby answers", func(r *c5bRig) { r.standbyACK = true }, BLOCKED, "broke the premise"},
 		{"the primary never ACKs", func(r *c5bRig) { r.noPrimaryACK = true }, FAIL, "no ACK of"},
 		{"the new container goes to the standby", func(r *c5bRig) { r.newByPtn = true }, FAIL, "not the primary"},
+		{"renewal unicast to the returned primary", func(r *c5bRig) { r.renewToPrimary = true }, FAIL, "unicast to the returned primary"},
+		{"the primary ACKs with no rebind seen", func(r *c5bRig) { r.noRebind = true }, FAIL, "answers no broadcast REQUEST"},
+		{"no renewal to the standby", func(r *c5bRig) { r.noStandbyRenewal = true }, FAIL, "unicast to the granting standby"},
+		{"no renewal and no unicast seen", func(r *c5bRig) { r.noStandbyRenewal, r.noUnicast = true, true }, BLOCKED, "absence is not judged"},
 		{"the address goes", func(r *c5bRig) {
 			r.p.stateFn = func(n string) (sourceadapter.HAState, error) {
 				if !r.p.startAt["primary"].IsZero() {
