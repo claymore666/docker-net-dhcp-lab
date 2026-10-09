@@ -2,13 +2,11 @@
 # A measured config diff from stock for one source cell (issue #2):
 # pulls the stock backup each cloud-init template makes before it writes
 # its own config, plus the live file, off the running VM, and diffs
-# them -- never hand-typed. Headed with the commit this ran at and a UTC
-# timestamp, matching the "Done when" evidence rule.
-#
-# The diff is of the effective configuration (issues #32, #46): comment
-# and blank lines go on both sides first, so the stock package's commented
-# examples are not evidence. The live file is checked raw, comments
-# included: a disallowed address there ends the capture, nothing written.
+# them, never hand-typed. Headed with the commit this ran at and a UTC
+# timestamp, matching the "Done when" evidence rule. Comment and blank
+# lines go on both sides first (issues #32, #46). The live file is
+# checked raw, comments included: a disallowed address ends the capture.
+# The Pi-hole toml's comment-only lines are vendor help text (#10).
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -38,6 +36,7 @@ udhcpd)
 	pairs=("udhcpd.conf.stock:/etc/udhcpd.conf")
 	mask_stock=1
 	;;
+pihole) pairs=("pihole.toml.stock:/etc/pihole/pihole.toml") ;;
 *)
 	echo "capture-source-config-diff: unknown source type $SOURCE_TYPE" >&2
 	exit 1
@@ -66,9 +65,19 @@ for pair in "${pairs[@]}"; do
 		echo "capture-source-config-diff: REFUSED -- $live_path is empty on the cell" >&2
 		exit 1
 	fi
-	lines=$(config_live_disallowed_lines "$scratch/live" | tr '\n' ' ')
+	# Pi-hole's toml carries vendor help text with example addresses (#10).
+	# Its comment-only lines are blanked for this one check, so line
+	# numbers hold; code lines stay checked raw.
+	check_file="$scratch/live"
+	scope="comments included"
+	if [ "$SOURCE_TYPE" = pihole ]; then
+		scope="code lines only"
+		sed -E 's/^[[:space:]]*#.*$//' "$scratch/live" >"$scratch/live-code"
+		check_file="$scratch/live-code"
+	fi
+	lines=$(config_live_disallowed_lines "$check_file" | tr '\n' ' ')
 	if [ -n "$lines" ]; then
-		echo "capture-source-config-diff: REFUSED -- $live_path carries a disallowed address at line(s) ${lines% }, comments included; nothing written" >&2
+		echo "capture-source-config-diff: REFUSED -- $live_path carries a disallowed address at line(s) ${lines% }, $scope; nothing written" >&2
 		exit 1
 	fi
 	{
