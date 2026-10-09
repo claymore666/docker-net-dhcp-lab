@@ -39,11 +39,20 @@ VERDICT_RE='\b(HOLD|CLEAR)\b'
 # like VERDICT_RE, never folded into the case-insensitive PROCESS_RE.
 FINDING_CITE_RE='\bF[0-9]+\b'
 # Group F's scenario IDs (F1, F2a, F3, ...) have the same shape as that
-# label (#20). Only two forms are product names and are removed from the
-# line before FINDING_CITE_RE runs: the catalog name "F1-user-class"
-# (hyphen then a lowercase word) and a README table row's first cell
-# "| F1 |". A bare "see F2" in prose stays caught.
-SCENARIO_ID_RES=('\bF[0-9]+[a-z]?-[a-z][a-z0-9-]*' '^\|[[:space:]]*F[0-9]+[a-z]?[[:space:]]*\|')
+# label (#20). Only the product names themselves are removed from the
+# line before FINDING_CITE_RE runs, each listed in full: the eight
+# catalog names ("F1-user-class-pool", ...) and the eight README table
+# row heads ("| F1 | user class pool |"). Any other F<n>-word or table
+# row stays caught, so "the F2-finding" and "| F3 | fixed as asked |"
+# fail. TestGroupFNamesAreInTheHygieneGate keeps the list in step.
+SCENARIO_ID_RES=(
+	'\bF1-user-class-pool\b' '\bF2a-option-108-not-asked\b' '\bF2b-option-108-forced\b' '\bF3-rapid-commit-v4\b'
+	'\bF4-rapid-commit-v6\b' '\bF5-temporary-address\b' '\bF6-prefix-delegation\b' '\bF7-pref64\b'
+	'^\| F1 \| user class pool \|' '^\| F2a \| IPv6-only preferred, not asked for \|'
+	'^\| F2b \| IPv6-only preferred, sent unasked \|' '^\| F3 \| rapid commit, IPv4 \|'
+	'^\| F4 \| rapid commit, IPv6 \|' '^\| F5 \| temporary address \|'
+	'^\| F6 \| prefix delegation \|' '^\| F7 \| NAT64 prefix \|'
+)
 # A `.claude/...` path is never openable by a public reader; matched as
 # a plain fixed string, not a regex, so it needs no escaping and cannot
 # itself be misread as a pattern.

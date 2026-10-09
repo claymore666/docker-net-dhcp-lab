@@ -95,7 +95,7 @@ Group F runs today (IPv4; the plugin's client options, judged by the bytes the c
 |---|---|---|
 | F1 | user class pool | with `user_class` the container sends a short label naming its kind of client (DHCP option 77); the source serves that label from its own address range, outside the main one |
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
-| F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease |
+| F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
 | F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Kea and ISC answer as usual and the normal four messages follow |
 | F4 | rapid commit, IPv6 | N/A on every source until the IPv6 segment exists (#23 group D) |
 | F5 | temporary address | N/A on every source until the IPv6 segment exists (#23 group D) |

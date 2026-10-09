@@ -174,6 +174,22 @@ func judgeF2bWire(msgs, all []OptMsg, want []byte) fOutcome {
 	return fOK("OFFER %s carried option 108 = 0x%x; the client never asked, sent its REQUEST and got the ACK", offered.XID, want)
 }
 
+// judgeF2bControl: a second client, with no forced client id, got a lease
+// inside the forcing window. If the capture shows it and its messages
+// carry no option 108, the forcing is scoped to the one identity; with
+// no ACK for it the scoping was never exercised, which is a lab error.
+func judgeF2bControl(control []OptMsg) fOutcome {
+	if len(ofType(control, "ACK")) == 0 {
+		return fBlocked("no ACK for the control client in the capture, so the forcing's scope was not exercised")
+	}
+	for _, m := range control {
+		if m.Has(108) {
+			return fBlocked("%s %s to the control client carries option 108: the forcing is not scoped to the one client id (lab error)", m.Type, m.XID)
+		}
+	}
+	return fOK("the control client got its lease with no option 108")
+}
+
 // collapse drops immediate repeats of a message type, so a retransmitted
 // DISCOVER does not read as a second exchange step.
 func collapse(types []string) []string {

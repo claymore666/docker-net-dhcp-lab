@@ -259,7 +259,8 @@ func runF2a(ctx context.Context, e Env) (v Verdict) {
 
 // runF2b -- IPv6-Only Preferred, forced: the source sends option 108 to
 // one client id although it did not ask. RFC 8925 3.2 says such a client
-// must ignore it, so the IPv4 lease still completes.
+// must ignore it, so the IPv4 lease still completes. A second client with
+// no client id then takes a lease and must see no 108: the scoping test.
 func runF2b(ctx context.Context, e Env) (v Verdict) {
 	if v, ok := bIPAMNA(NameF2b, e); ok {
 		return v
@@ -303,7 +304,28 @@ func runF2b(ctx context.Context, e Env) (v Verdict) {
 		return blocked(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
 	}
 	o := judgeF2bWire(msgs, all, f108Bytes())
-	return fFinish(NameF2b, e, o, "IPv4 lease "+addr+" kept, shown in the source's own table", ev)
+	if o.Result != PASS {
+		return fFinish(NameF2b, e, o, "", ev)
+	}
+	// The control: another client takes a lease while the forcing is on.
+	ctl := name + "-ctl"
+	defer removeContainer(bCleanupCtx(ctx), e.Host, ctl)
+	cmac, caddr, cep, err := runContainer(ctx, e.Host, e.Shape, e.Network, ctl)
+	if err != nil {
+		return fail(NameF2b, e.Cell, e.Shape, fmt.Sprintf("the control container did not start: %v", err), nil, e.GitSHA)
+	}
+	cident, err := cIdent(e.Shape, cmac, cep)
+	if err != nil {
+		return blocked(NameF2b, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	cmsgs, err := fOptions(ctx, e, NameF2b, "capture-control", cident, []int{108}, t0, ready, ev)
+	if err != nil {
+		return blocked(NameF2b, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
+	}
+	if c := judgeF2bControl(cmsgs); c.Result != PASS {
+		return fFinish(NameF2b, e, c, "", ev)
+	}
+	return fFinish(NameF2b, e, o, fmt.Sprintf("IPv4 lease %s kept, shown in the source's own table; the control client (%s) got %s with no option 108", addr, cident, caddr), ev)
 }
 
 // serverHas reports whether the source declares c.

@@ -167,11 +167,12 @@ const (
 // plus group C's 10: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
 // second) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
-// plus group F's 4: one each for the user class, both 108 rows and rapid commit; the IPv6 rows never run (#20).
+// plus group F's 5: one each for the user class, 108 not asked and rapid commit, two for
+// 108 forced (its control client); the IPv6 rows never run (#20).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 63
+const MinPoolAddresses = 64
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -183,7 +184,7 @@ var poolDemand = map[string]int{
 	NameB7: 1, NameB8: 3,
 	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC10: 2,
 	NameC11: 1, NameC12: 0,
-	NameF1: 1, NameF2a: 1, NameF2b: 1, NameF3: 1,
+	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 0, NameF5: 0, NameF6: 0, NameF7: 0,
 }
 

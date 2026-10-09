@@ -327,3 +327,38 @@ func TestDnsmasqShortenCoversTwoTaggedRanges(t *testing.T) {
 		t.Fatalf("%d of 3 ranges shortened:\n%s", n, out)
 	}
 }
+
+// A guard that is present but widened ("... or true", "|| ...") scopes
+// nothing; every class test must be exactly one equality on the option,
+// and the ISC match exactly one comparison (#20).
+func TestClassGuardsAreASingleEquality(t *testing.T) {
+	kre := regexp.MustCompile(`"name": "(f1|f2b)", "test": "([^"]*)"`)
+	uc := FeatureParams{Class: "lab-uc-f1", PoolStart: "10.200.1.203", PoolEnd: "10.200.1.210"}
+	fb := FeatureParams{Seconds: 1800, ClientID: f1ID}
+	for name, cfg := range map[string]string{
+		"f1": enabled(t, "kea", FeatureUserClassPool, uc), "f2b": enabled(t, "kea", FeatureForce108, fb),
+	} {
+		m := kre.FindStringSubmatch(cfg)
+		if m == nil || m[1] != name {
+			t.Fatalf("kea %s: class not found", name)
+		}
+		want := `^option\[(77|61)\]\.hex == 0x[0-9a-f]+$`
+		if !regexp.MustCompile(want).MatchString(m[2]) {
+			t.Errorf("kea %s test %q is not a single equality", name, m[2])
+		}
+	}
+	isc := regexp.MustCompile(`(?m)^\s*match if ([^;]*);$`)
+	for name, cfg := range map[string]string{
+		"f1": enabled(t, "isc-dhcp", FeatureUserClassPool, uc), "f2b": enabled(t, "isc-dhcp", FeatureForce108, fb),
+	} {
+		ms := isc.FindAllStringSubmatch(cfg, -1)
+		if len(ms) == 0 {
+			t.Fatalf("isc %s: no match line", name)
+		}
+		for _, m := range ms {
+			if strings.Contains(m[1], " or ") || strings.Contains(m[1], " and ") || strings.Contains(m[1], "true") {
+				t.Errorf("isc %s match %q is not a single comparison", name, m[1])
+			}
+		}
+	}
+}

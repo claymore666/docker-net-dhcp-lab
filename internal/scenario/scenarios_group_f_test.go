@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -22,8 +24,10 @@ type fCapture struct {
 	// others are what the whole-capture read ("*") also shows: messages
 	// of other clients, never of the identity under test.
 	others []OptMsg
-	err    error
-	calls  int
+	// byIdent answers a read for one identity (the control client).
+	byIdent map[string][]OptMsg
+	err     error
+	calls   int
 }
 
 func (c *fCapture) Messages(context.Context, string, string) ([]DHCPMsg, error) { return nil, nil }
@@ -33,6 +37,9 @@ func (c *fCapture) Options(_ context.Context, ident, _ string, _ []int) ([]OptMs
 		return nil, c.err
 	}
 	src := c.msgs
+	if m, ok := c.byIdent[ident]; ok {
+		src = m
+	}
 	if ident == "*" {
 		src = append(append([]OptMsg{}, c.msgs...), c.others...)
 	}
@@ -250,6 +257,8 @@ func f2bFix(t *testing.T) *fFix {
 	wire := b2WireClientID(fClientID(ShapeBridge))
 	f.src.fn = staticLeases(sourceadapter.Lease{MAC: "aa:bb:cc:00:00:01", ClientID: wire, Address: "10.200.1.150"})
 	f.cap.msgs = f2bMsgs(f108Bytes())
+	// The control container is the second one the fake host starts.
+	f.cap.byIdent = map[string][]OptMsg{"aa:bb:cc:00:00:02": fFour("2", nil, nil)}
 	return f
 }
 
@@ -265,6 +274,43 @@ func TestRunF2bPassesWhenTheClientIgnoresTheForcedOption(t *testing.T) {
 		t.Errorf("feature %v params %+v", f.src.features, p)
 	}
 	needCleanup(t, f.h, "f2", containerName(f.e, NameF2b))
+	needCleanup(t, f.h, "f2", containerName(f.e, NameF2b)+"-ctl")
+	if !strings.Contains(v.Reason, "control client") || v.Evidence["capture-control"] == "" {
+		t.Errorf("the control must be in the verdict and its evidence: %q %v", v.Reason, v.Evidence)
+	}
+}
+
+// The scoping proof: a second client with no client id that is sent
+// option 108 means the forcing leaked; a control never seen means the
+// scoping was not exercised. Neither may PASS.
+func TestRunF2bBlocksWhenTheControlClientIsSentOption108(t *testing.T) {
+	f := f2bFix(t)
+	f.cap.byIdent["aa:bb:cc:00:00:02"] = []OptMsg{om("DISCOVER", "2", nil), om("OFFER", "2", map[int][]byte{108: f108Bytes()}), om("REQUEST", "2", nil), om("ACK", "2", nil)}
+	v := runF2b(context.Background(), f.e)
+	needResult(t, v, BLOCKED)
+	if f.src.featureRestores != 1 {
+		t.Errorf("restores = %d", f.src.featureRestores)
+	}
+}
+
+func TestRunF2bBlocksWhenTheControlClientIsNeverSeen(t *testing.T) {
+	f := f2bFix(t)
+	f.cap.byIdent["aa:bb:cc:00:00:02"] = nil
+	needResult(t, runF2b(context.Background(), f.e), BLOCKED)
+}
+
+func TestJudgeF2bControl(t *testing.T) {
+	if o := judgeF2bControl(fFour("2", nil, nil)); o.Result != PASS {
+		t.Errorf("clean control = %+v", o)
+	}
+	if o := judgeF2bControl(nil); o.Result != BLOCKED {
+		t.Errorf("unseen control = %+v", o)
+	}
+	m := fFour("2", nil, nil)
+	m[3] = om("ACK", "2", map[int][]byte{108: f108Bytes()})
+	if o := judgeF2bControl(m); o.Result != BLOCKED {
+		t.Errorf("108 on the control's ACK = %+v", o)
+	}
 }
 
 func TestRunF2bFailsWhenTheClientStopsAfterTheForcedOffer(t *testing.T) {
@@ -575,6 +621,42 @@ func TestUserClassPoolStaysClearOfEveryOtherAddressInEveryCell(t *testing.T) {
 			if in, _ := inUserClassPool(e, addr); in {
 				t.Errorf("%s: %s is not a user-class address", c.Name, addr)
 			}
+		}
+	}
+}
+
+// The hygiene gate lets a group F product name pass by listing it in
+// full; a scenario or README row added without a gate entry would fail
+// the gate on its own name, so this keeps the list in step (#20).
+func TestGroupFNamesAreInTheHygieneGate(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "scripts", "hygiene-check.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := string(raw)
+	n := 0
+	for _, s := range Catalog {
+		if strings.HasPrefix(s.Name, "F") {
+			n++
+			if !strings.Contains(gate, `\b`+s.Name+`\b`) {
+				t.Errorf("catalog name %s is not in SCENARIO_ID_RES", s.Name)
+			}
+		}
+	}
+	if n != 8 {
+		t.Errorf("catalog holds %d group F names, want 8", n)
+	}
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	heads := regexp.MustCompile(`(?m)^\| (F\d+[a-z]?) \| ([^|]+?) \|`).FindAllStringSubmatch(string(readme), -1)
+	if len(heads) != 8 {
+		t.Errorf("README holds %d group F rows, want 8", len(heads))
+	}
+	for _, m := range heads {
+		if want := `'^\| ` + m[1] + ` \| ` + m[2] + ` \|'`; !strings.Contains(gate, want) {
+			t.Errorf("README row head %q is not in SCENARIO_ID_RES", m[0])
 		}
 	}
 }
