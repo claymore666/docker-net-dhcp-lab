@@ -239,6 +239,11 @@ func (c *Config) Validate() error {
 			if err := validateSource6(cell.Name, cell.Source, seg6); err != nil {
 				return err
 			}
+			if cell.Source.Partner != nil {
+				if err := validatePartner6(cell.Name, cell.Source, seg6); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -414,6 +419,39 @@ func validateSource6(cellName string, s *Source, seg6 netip.Prefix) error {
 	last := lastAddr(temp)
 	if temp.Contains(own) || !(end.Less(temp.Addr()) || last.Less(start)) {
 		return fmt.Errorf("cell %s: source.temp6_pool overlaps the IPv6 pool or seg_address6", cellName)
+	}
+	return nil
+}
+
+// validatePartner6 checks the partner's own IPv6 address: the primary
+// alone serves v6 on a pair, so the partner sits below the v6 pool and
+// clear of the temporary pool, as its v4 address sits below the v4 pool (#12).
+func validatePartner6(cellName string, s *Source, seg6 netip.Prefix) error {
+	v := s.Partner.SegAddress6
+	if !seg6.IsValid() {
+		if v != "" {
+			return fmt.Errorf("cell %s: source.partner.seg_address6 set on a cell with no segment.subnet6", cellName)
+		}
+		return nil
+	}
+	if v == "" {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 is required with segment.subnet6", cellName)
+	}
+	a, err := netip.ParsePrefix(v)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.seg_address6: %w", cellName, err)
+	}
+	if a.Bits() != seg6.Bits() || !seg6.Contains(a.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 is not an address of segment.subnet6 with its prefix length", cellName)
+	}
+	own := netip.MustParsePrefix(s.SegAddress6).Addr()
+	if a.Addr() == own {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 equals source.seg_address6", cellName)
+	}
+	start := netip.MustParseAddr(s.Pool6Start)
+	temp := netip.MustParsePrefix(s.Temp6Pool)
+	if a.Addr().Compare(start) >= 0 || temp.Contains(a.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 %s is not below the source IPv6 pool and clear of temp6_pool", cellName, a.Addr())
 	}
 	return nil
 }

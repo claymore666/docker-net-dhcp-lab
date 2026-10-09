@@ -68,6 +68,7 @@ cells:
     segment:
       bridge: lab-br-kea-ha
       subnet: 10.200.8.0/24
+      subnet6: "fd42:200:0:800::/64"
     source:
       type: kea
       base_image: debian-13-generic-amd64
@@ -75,12 +76,17 @@ cells:
       seg_address: 10.200.8.2/24
       pool_start: 10.200.8.100
       pool_end: 10.200.8.200
+      seg_address6: "fd42:200:0:800::2/64"
+      pool6_start: "fd42:200:0:800::100"
+      pool6_end: "fd42:200:0:800::1ff"
+      temp6_pool: "fd42:200:0:800::200/120"
       vcpus: 1
       memory_mib: 1024
       disk_gib: 6
       partner:
         mgmt_address: 10.200.255.92/24
         seg_address: 10.200.8.3/24
+        seg_address6: "fd42:200:0:800::3/64"
     docker_host:
       base_image: debian-13-generic-amd64
       mgmt_address: 10.200.255.90/24
