@@ -161,6 +161,19 @@ func TestPairFanOutRestoresInReverse(t *testing.T) {
 	}
 }
 
+// The restore returns only when both peers are back in Normal.
+func TestPairFanOutRestoreWaitsForNormal(t *testing.T) {
+	fp := newFakePair()
+	restore, err := fp.pair.ShortenLeaseTime(context.Background(), 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp.states[1] = []string{"syncing"}
+	if err := restore(context.Background()); err == nil || !strings.Contains(err.Error(), "syncing") {
+		t.Fatalf("restore returned %v with the partner still syncing", err)
+	}
+}
+
 // A primary failure never touches the partner and needs no restore.
 func TestPairFanOutPrimaryFailureStopsThere(t *testing.T) {
 	fp := newFakePair()
@@ -228,6 +241,11 @@ func TestPairRestartBothThenNormal(t *testing.T) {
 	}
 	if fp.calls() != "primary Restart,partner Restart" {
 		t.Fatalf("calls %q", fp.calls())
+	}
+	fp = newFakePair()
+	fp.states[1] = []string{"syncing"}
+	if err := fp.pair.Restart(context.Background()); err == nil {
+		t.Fatal("Restart returned with the partner still syncing")
 	}
 	fp = newFakePair()
 	fp.b.fail["Restart"] = true
@@ -385,6 +403,9 @@ func TestPairCapabilities(t *testing.T) {
 	if why, ok := fp.pair.NAReason(CapRenumber); !ok || !strings.Contains(why, "without the HA hook") {
 		t.Fatalf("no C9 reason: %q", why)
 	}
+	if _, err := fp.pair.Impair(context.Background(), time.Second, 10); err == nil || fp.calls() != "" {
+		t.Fatalf("impair reached a peer: err %v, calls %q", err, fp.calls())
+	}
 	if _, err := fp.pair.Renumber(context.Background(), "10.200.9.0/24", "10.200.9.2", "10.200.9.100", "10.200.9.199"); err == nil || fp.calls() != "" {
 		t.Fatalf("renumber reached a peer: err %v, calls %q", err, fp.calls())
 	}
@@ -434,13 +455,20 @@ func TestPairControlByName(t *testing.T) {
 	if err := fp.pair.StartPeer(ctx, "primary"); err != nil {
 		t.Fatal(err)
 	}
+	if err := fp.pair.StartPeer(ctx, "partner"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fp.pair.PeerLeases(ctx, "partner"); err != nil {
 		t.Fatal(err)
 	}
-	if fp.calls() != "partner Stop,primary Start,partner Leases" {
+	if fp.calls() != "partner Stop,primary Start,partner Start,partner Leases" {
 		t.Fatalf("calls %q", fp.calls())
 	}
+	fp.states[1] = []string{KeaPartnerDown}
 	if st, err := fp.pair.PeerState(ctx, "primary"); err != nil || st.State != KeaHotStandby {
+		t.Fatalf("%+v %v", st, err)
+	}
+	if st, err := fp.pair.PeerState(ctx, "partner"); err != nil || st.State != KeaPartnerDown {
 		t.Fatalf("%+v %v", st, err)
 	}
 	if err := fp.pair.StopPeer(ctx, "tertiary"); err == nil {
