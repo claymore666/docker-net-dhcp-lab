@@ -315,7 +315,7 @@ type c5bRig struct {
 	noPartnerLease, noPrimaryLease     bool
 	noPrimaryACK, standbyACK, newByPtn bool
 	renewToPrimary, noStandbyRenewal   bool
-	noRebind, noUnicast                bool
+	noRebind, noUnicast, outageRenewal bool
 }
 
 func newC5bRig(t *testing.T, scenario string) *c5bRig {
@@ -348,6 +348,9 @@ func newC5bRig(t *testing.T, scenario string) *c5bRig {
 		if st := r.p.startAt["primary"]; !st.IsZero() {
 			if r.standbyACK && time.Now().After(st) {
 				out = append(out, ack(st.Add(ms), "s", ct.addr, r.p.ids["partner"], c5Lease))
+			}
+			if r.outageRenewal {
+				out = append(out, req(st.Add(-ms), "u", ct.addr, r.p.ids["partner"]))
 			}
 			if !r.noStandbyRenewal {
 				out = append(out, req(st.Add(15*ms), "t", ct.addr, r.p.ids["partner"]))
@@ -451,6 +454,7 @@ func TestRunC5cJudges(t *testing.T) {
 		{"the primary ACKs with no rebind seen", func(r *c5bRig) { r.noRebind = true }, FAIL, "answers no broadcast REQUEST"},
 		{"no renewal to the standby", func(r *c5bRig) { r.noStandbyRenewal = true }, FAIL, "unicast to the granting standby"},
 		{"no renewal and no unicast seen", func(r *c5bRig) { r.noStandbyRenewal, r.noUnicast = true, true }, BLOCKED, "absence is not judged"},
+		{"a renewal to the standby only during the outage", func(r *c5bRig) { r.noStandbyRenewal, r.outageRenewal = true, true }, FAIL, "unicast to the granting standby"},
 		{"the address goes", func(r *c5bRig) {
 			r.p.stateFn = func(n string) (sourceadapter.HAState, error) {
 				if !r.p.startAt["primary"].IsZero() {
