@@ -44,14 +44,13 @@ var cDefault = cTiming{
 }
 
 // The plugin's documented client timing (docs/reference.md): DISCOVER
-// retransmits at 4, 8, 16, 32 s with ±1 s jitter each; lease_timeout
-// fails a create at about 34 s by default; validate_dhcp waits 8 s.
-// C1 wall bounds, pinned from the kea run of plugin v2.5.0 (#23): c1b
-// 15.26-15.46 s and c1 31.13-31.29 s over bridge, macvlan and ipvlan,
-// spread 0.2 s. Min is the configured 12 s timeout for c1b and the
-// measured wall less 3 s for c1; max is measured plus 3 s, and for c1
-// the documented 34 s plus 3 s. cGapSlack adds timer and capture
-// latency to the jitter, so a retransmit at its edge is not a FAIL.
+// retransmits at 4, 8, 16, 32 s with ±1 s jitter; lease_timeout fails a
+// create at about 34 s by default; validate_dhcp waits 8 s. C1 bounds, pinned from the kea run of
+// plugin v2.5.0 (#23): c1b 15.26-15.46 s, c1 31.13-31.29 s on all three
+// shapes. c1b ends on the plugin's own 12 s timeout. c1 ends on the
+// engine's ~30 s plugin-request timeout, before the documented 34 s, so
+// its min is measured less 3 s and its max is 34 s plus 3 s. cGapSlack
+// adds timer and capture latency to the jitter.
 const (
 	cJitter      = time.Second
 	cGapSlack    = 250 * time.Millisecond

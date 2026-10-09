@@ -141,7 +141,7 @@ echo "== source state directory (Kea lease-file cleanup copies, #23) =="
 # (defeat 2), and only this listing after a run of an hour or more shows
 # which copies exist.
 if [ "$source_type" = kea ]; then
-	ssh_run "$source_mgmt_ip" "ls -l --time-style=full-iso /var/lib/kea/; date -u +%Y-%m-%dT%H:%M:%SZ" \
+	ssh_run "$source_mgmt_ip" "sudo ls -l --time-style=full-iso /var/lib/kea/; date -u +%Y-%m-%dT%H:%M:%SZ" \
 		>"$EVIDENCE_DIR/${CELL}-source-var-lib-kea.txt" || true
 fi
 
