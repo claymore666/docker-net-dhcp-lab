@@ -143,7 +143,7 @@ B2, B3, B5, B6 and B7 run on their own network next to the cell's, removed after
 
 On `bridge-ipam` and `macvlan-ipam` B2, B5, B6 and B7 report N/A: the plugin's reference docs refuse a second network in that shape unless it names a different parent or its own subnet, so the lab cannot create the option-carrying network there. B8 runs on every shape.
 
-Group C runs today (IPv4; the source is stopped, slowed or reset, and put back afterwards):
+Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renumbered, or a squatter or a second server joins the segment, and everything is put back afterwards):
 
 | ID | Scenario | What it does |
 |---|---|---|
@@ -152,11 +152,16 @@ Group C runs today (IPv4; the source is stopped, slowed or reset, and put back a
 | C3 | source down past expiry | the source stays down past the lease's expiry; within 120 s of its return the container carries an address the source's table shows for it |
 | C4 | restart without lease file | the source restarts with an empty lease file; 135 s after the bind it holds exactly one lease for the container, on the address the container carries |
 | C5 | failover, primary killed | N/A on every source until the failover cells exist (#12) |
+| C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it |
+| C6b | late squatter | with `conflict_check=async`, a host takes the container's address and announces it; within 30 s the client declines it and moves to an address the source leases to it |
+| C7 | rogue server | a second DHCP server answers on the segment; a network with `dhcp_deny_servers` and one with `dhcp_servers` both lease from the real source, and the second server's lease file stays empty for them |
+| C8 | pool exhausted | the pool is cut to two addresses, both held; a third container fails with no endpoint or link left, gets no lease once the pool is back, and a fourth container is leased |
+| C9 | subnet renumbered | the source moves to a new subnet under a short lease; by 200 s after the bind the container carries the new lease, routes via the new source address and answers ping |
 | C10 | reply delay and loss | a 2 s reply delay, then total loss until the client has sent two DISCOVERs; the container is leased both times |
 | C11 | validate_dhcp at create | with `validate_dhcp=true` the create succeeds while the source is up and is refused within 12 s while it is down (macvlan and ipvlan; the plugin refuses the option on bridge) |
 | C12 | relay | N/A on every source until the relay cell exists (#11) |
 
-C1 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
+C1, C6, C6b, C7, C8 (its third container), C9 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
 
 Group F runs today (IPv4; the plugin's client options, judged by the bytes the container sends and by the source's own table; the source setting changes for the scenario and is put back afterwards):
 

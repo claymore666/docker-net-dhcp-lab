@@ -71,6 +71,16 @@ type fakeAdapter struct {
 	// when set, answers it (a test adds the frame to its fake capture).
 	forceRenews  []sourceadapter.ForceRenewParams
 	onForceRenew func(sourceadapter.ForceRenewParams) (string, error)
+
+	// Group C actors and rewrites (#23): each call is recorded, each
+	// on* hook runs after it (a test edits its fake capture or lease
+	// table there), each stop or restore is counted.
+	squats, rogues, narrows, renumbers                    []string
+	squatErr, rogueErr, narrowErr, renumberErr            error
+	squatStops, rogueStops, narrowRestores, renumberRests int
+	onSquat, onRogue, onNarrow, onRenumber                func()
+	onNarrowRestore, onRenumberRestore                    func()
+	rogueLeases                                           []sourceadapter.Lease
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -148,6 +158,37 @@ func (f *fakeAdapter) EnableFeature(_ context.Context, ft sourceadapter.Feature,
 	}, nil
 }
 func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
+func fakeActor(log *[]string, entry string, err error, on func(), stops *int, onStop func()) (func(context.Context) error, error) {
+	if err != nil {
+		return nil, err
+	}
+	*log = append(*log, entry)
+	if on != nil {
+		on()
+	}
+	return func(context.Context) error {
+		*stops++
+		if onStop != nil {
+			onStop()
+		}
+		return nil
+	}, nil
+}
+func (f *fakeAdapter) Squat(_ context.Context, addr string, announce bool) (func(context.Context) error, error) {
+	return fakeActor(&f.squats, fmt.Sprintf("%s/%t", addr, announce), f.squatErr, f.onSquat, &f.squatStops, nil)
+}
+func (f *fakeAdapter) StartRogue(_ context.Context, srv, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.rogues, srv+" "+first+"-"+last, f.rogueErr, f.onRogue, &f.rogueStops, nil)
+}
+func (f *fakeAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return f.rogueLeases, nil
+}
+func (f *fakeAdapter) NarrowPool(_ context.Context, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.narrows, first+"-"+last, f.narrowErr, f.onNarrow, &f.narrowRestores, f.onNarrowRestore)
+}
+func (f *fakeAdapter) Renumber(_ context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.renumbers, subnet+" "+addr+" "+first+"-"+last, f.renumberErr, f.onRenumber, &f.renumberRests, f.onRenumberRestore)
+}
 func (f *fakeAdapter) SendForceRenew(_ context.Context, _ []byte, p sourceadapter.ForceRenewParams) (string, error) {
 	f.forceRenews = append(f.forceRenews, p)
 	if f.onForceRenew != nil {

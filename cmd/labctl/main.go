@@ -441,6 +441,7 @@ func cmdRun(args []string) int {
 	}
 	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
 
+	segGateway, sourceAddr := segAddresses(cell.Source)
 	env := scenario.Env{
 		Host:              hostRunner,
 		Source:            source,
@@ -454,7 +455,8 @@ func cmdRun(args []string) int {
 		PluginTag:         cell.DockerHost.PluginTag,
 		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
 		GitSHA:            gitSHA,
-		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
+		SegGateway:        segGateway,
+		SourceAddr:        sourceAddr,
 		SegSubnet:         cell.Segment.Subnet,
 		PoolStart:         cell.Source.PoolStart,
 		PoolEnd:           cell.Source.PoolEnd,
@@ -573,4 +575,11 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// segAddresses is the router and the source address a cell's Env carries;
+// without a relay both are seg_address stripped of its CIDR suffix (#11).
+func segAddresses(src *labyaml.Source) (segGateway, sourceAddr string) {
+	a := strings.SplitN(src.SegAddress, "/", 2)[0]
+	return a, a
 }

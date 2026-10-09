@@ -34,6 +34,10 @@ type cTiming struct {
 	c4Wait    time.Duration // C4: judge at bind + this
 	c1Settle  time.Duration // C1: wait after Start before reading the table
 	c10Lift   time.Duration // C10(b): lift the loss by this even without two DISCOVERs
+	c6bWindow time.Duration // C6b: the conflict must be resolved within this of the squat
+	c8Settle  time.Duration // C8: no lease for the failed client id within this of the restore
+	c8Links   time.Duration // C8: the host's link count must be back within this
+	c9Wait    time.Duration // C9: the renumbered lease must show by bind + this
 }
 
 var cDefault = cTiming{
@@ -41,6 +45,7 @@ var cDefault = cTiming{
 	stopAfter: 10 * time.Second, c2Start: 80 * time.Second, c2Settle: 150 * time.Second,
 	c3Record: 140 * time.Second, c3Start: 150 * time.Second, c3Window: 120 * time.Second,
 	c4Wait: 135 * time.Second, c1Settle: 40 * time.Second, c10Lift: 20 * time.Second,
+	c6bWindow: 30 * time.Second, c8Settle: 40 * time.Second, c8Links: 10 * time.Second, c9Wait: 200 * time.Second,
 }
 
 // The plugin's documented client timing (docs/reference.md): DISCOVER

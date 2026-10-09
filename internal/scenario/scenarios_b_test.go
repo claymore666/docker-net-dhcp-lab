@@ -638,3 +638,18 @@ func (a *sequencedLeaseAdapter) EnableFeature(_ context.Context, _ sourceadapter
 func (a *sequencedLeaseAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *sequencedLeaseAdapter) Squat(_ context.Context, _ string, _ bool) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) StartRogue(_ context.Context, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return nil, nil
+}
+func (a *sequencedLeaseAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

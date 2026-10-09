@@ -3,6 +3,8 @@ package sourceadapter
 import (
 	"context"
 	"fmt"
+	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,18 +31,28 @@ type baseline struct {
 
 type sourceState struct {
 	netns []string
+	links []string
+	procs int
 	netem bool
 	addrs string
 	cfg   string
 }
 
+// actorRE matches the group C actors' names (adapter.go) in netns,
+// link and process lists. The bracket keeps the text "labc-" out of
+// every command that searches for it, so pgrep and pkill never match
+// the shell running the search itself (pgrep(1) -f reads full argv).
+const actorRE = `[l]abc-`
+
 // stateCmd reads every Ready input in one remote command; the config
 // comes last, after a "cfg:" line, so its bytes stay exact.
 func stateCmd(cfgPath string) string {
-	return fmt.Sprintf(`printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^labc-/ {printf "%%s ", $1}'; echo; `+
+	return fmt.Sprintf(`printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^%[4]s/ {printf "%%s ", $1}'; echo; `+
+		`printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^%[4]s/ {split($2, n, "@"); printf "%%s ", n[1]}'; echo; `+
+		`printf 'procs:'; pgrep -f '%[4]s' | wc -l; `+
 		`printf 'netem:'; %[3]s qdisc show dev %[2]s root 2>/dev/null | grep -c netem; `+
 		`printf 'addr:'; ip -4 -o addr show dev %[2]s | awk '{printf "%%s ", $4}'; echo; `+
-		`echo 'cfg:'; sudo cat %[1]s`, cfgPath, segmentNIC, tcBin)
+		`echo 'cfg:'; sudo cat %[1]s`, cfgPath, segmentNIC, tcBin, actorRE)
 }
 
 func parseState(out string) (sourceState, error) {
@@ -60,6 +72,16 @@ func parseState(out string) (sourceState, error) {
 		case "netns":
 			st.netns = strings.Fields(val)
 			seen++
+		case "links":
+			st.links = strings.Fields(val)
+			seen++
+		case "procs":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return sourceState{}, fmt.Errorf("state read: process count %q", val)
+			}
+			st.procs = n
+			seen++
 		case "netem":
 			st.netem = val != "" && val != "0"
 			seen++
@@ -68,7 +90,7 @@ func parseState(out string) (sourceState, error) {
 			seen++
 		}
 	}
-	if seen != 3 {
+	if seen != 5 {
 		return sourceState{}, fmt.Errorf("state read is incomplete: %q", head)
 	}
 	return st, nil
@@ -97,6 +119,12 @@ func sourceReady(ctx context.Context, r Runner, service, cfgPath string, leases 
 	if len(st.netns) > 0 {
 		return fmt.Errorf("leftover network namespaces: %s", strings.Join(st.netns, " "))
 	}
+	if len(st.links) > 0 {
+		return fmt.Errorf("leftover links: %s", strings.Join(st.links, " "))
+	}
+	if st.procs > 0 {
+		return fmt.Errorf("%d leftover group C actor processes", st.procs)
+	}
 	if st.netem {
 		return fmt.Errorf("a netem qdisc is still on %s", segmentNIC)
 	}
@@ -115,22 +143,40 @@ func sourceReady(ctx context.Context, r Runner, service, cfgPath string, leases 
 	return nil
 }
 
-// sourceRecover is every adapter's Recover body (#23): delete labc-*
-// netns and the netem qdisc, write the baseline config back when it
-// differs, and restart the service. Segment addresses are PR 2's
-// Renumber restore and are not rewritten here.
+// sourceRecover is every adapter's Recover body (#23): kill the actor
+// processes, delete their netns and links and the netem qdisc, put the
+// baseline segment addresses and config back when they differ, and
+// restart the service.
 func sourceRecover(ctx context.Context, r Runner, service, cfgPath string, b *baseline) error {
-	clean := fmt.Sprintf(`for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^labc-/ {print $1}'); do sudo ip netns del "$n"; done; sudo %s qdisc del dev %s root 2>/dev/null; true`, tcBin, segmentNIC)
+	clean := fmt.Sprintf(`sudo pkill -f '%[3]s'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {print $1}'); do p=$(sudo ip netns pids "$n"); [ -z "$p" ] || sudo kill -9 $p; sudo ip netns del "$n"; done; `+
+		`for l in $(ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); print n[1]}'); do sudo ip link del "$l"; done; `+
+		`sudo %[1]s qdisc del dev %[2]s root 2>/dev/null; true`, tcBin, segmentNIC, actorRE)
 	if _, err := r.Run(ctx, clean); err != nil {
-		return fmt.Errorf("recover: clear netns and qdisc: %w", err)
+		return fmt.Errorf("recover: clear actors and qdisc: %w", err)
 	}
 	b.mu.Lock()
-	taken, cfg := b.taken, b.cfg
+	taken, addrs, cfg := b.taken, b.addrs, b.cfg
 	b.mu.Unlock()
 	if taken {
 		st, err := readState(ctx, r, cfgPath)
 		if err != nil {
 			return fmt.Errorf("recover: %w", err)
+		}
+		if st.addrs != addrs {
+			var want []netip.Prefix
+			for _, f := range strings.Fields(addrs) {
+				p, err := netip.ParsePrefix(f)
+				if err != nil {
+					return fmt.Errorf("recover: baseline %s address %q: %w", segmentNIC, f, err)
+				}
+				want = append(want, p)
+			}
+			if len(want) == 0 {
+				return fmt.Errorf("recover: baseline holds no %s address to put back", segmentNIC)
+			}
+			if err := setSegmentAddrs(ctx, r, want); err != nil {
+				return fmt.Errorf("recover: %w", err)
+			}
 		}
 		if st.cfg != cfg {
 			if !strings.HasSuffix(cfg, "\n") {

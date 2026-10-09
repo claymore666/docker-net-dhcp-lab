@@ -138,6 +138,7 @@ func bEnv(t *testing.T, host sourceadapter.Runner, src sourceadapter.Adapter, sh
 		Host: host, Source: src, Cell: "dnsmasq", Shape: shape, Network: "net1",
 		EvidenceDir: t.TempDir(), GitSHA: "sha",
 		SegSubnet: "10.200.1.0/24", PoolStart: "10.200.1.100", PoolEnd: "10.200.1.200", SegGateway: "10.200.1.1",
+		SourceAddr: "10.200.1.1",
 	}
 }
 

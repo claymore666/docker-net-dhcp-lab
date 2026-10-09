@@ -96,3 +96,18 @@ func (a *countingReachAdapter) EnableFeature(_ context.Context, _ sourceadapter.
 func (a *countingReachAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *countingReachAdapter) Squat(_ context.Context, _ string, _ bool) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) StartRogue(_ context.Context, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return nil, nil
+}
+func (a *countingReachAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

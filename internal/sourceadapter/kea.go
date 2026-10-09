@@ -26,7 +26,7 @@ type KeaAdapter struct {
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber}
 }
 
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +

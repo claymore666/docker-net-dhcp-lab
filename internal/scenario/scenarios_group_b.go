@@ -120,10 +120,15 @@ func b2WireClientID(id string) string { return hexColonID(append([]byte{0}, id..
 // refused", and the lab will not give the second network its own
 // subnet or parent (measured on the kea cell).
 func bIPAMNA(name string, e Env) (Verdict, bool) {
+	return ipamNA(name, e, "the option-carrying network")
+}
+
+// ipamNA is bIPAMNA naming which second network the shape refuses.
+func ipamNA(name string, e Env, network string) (Verdict, bool) {
 	if e.Shape != ShapeBridgeIPAM && e.Shape != ShapeMacvlanIPAM {
 		return Verdict{}, false
 	}
-	return na(name, e.Cell, e.Shape, "plugin docs/reference.md: \"Two such networks otherwise derive the same pool identity, and the second `docker network create` is refused\"; the lab cannot create the option-carrying network in this shape", e.GitSHA), true
+	return na(name, e.Cell, e.Shape, "plugin docs/reference.md: \"Two such networks otherwise derive the same pool identity, and the second `docker network create` is refused\"; the lab cannot create "+network+" in this shape", e.GitSHA), true
 }
 
 // runB2 -- reservation by client id: the network sets client_id, the

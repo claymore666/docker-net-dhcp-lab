@@ -17,7 +17,7 @@ runcmd:
   # DEBIAN_FRONTEND=noninteractive: kea-ctrl-agent's postinst runs a
   # debconf select prompt (auth password choice) with no frontend this
   # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent jq
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-ctrl-agent jq dnsmasq-base iputils-arping
   - mkdir -p /root/lab-stock-config
   - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
   - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
