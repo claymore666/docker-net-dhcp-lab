@@ -93,17 +93,14 @@ dhcp_exchange_mac_seen() {
 
 # dhcp_message_log prints one line per DHCP message for one identity
 # (group C, #23): "ts type xid chaddr cid server req ciaddr yiaddr src
-# dst", "-" for an empty field, ts in epoch seconds from the capture.
-# A client message matches on chaddr or option 61 (ipvlan shares the
-# parent MAC); a server reply matches on chaddr, option 61, or the xid
-# of a matched client message, since a reply need not echo option 61.
-# "*" prints every message (C10 waits on a sender not yet known).
-# The decode reads tcpdump's hex, not its text, and uses no gawk-only
-# builtin: Debian's default awk is mawk. A capture copied while tcpdump
-# was writing may end in a partial record; that one record is dropped.
-# A third argument, a comma list of option codes, appends one field per
-# code to every line: "0x<hex of the option's data>" ("0x" alone for a
-# zero-length option such as 80), "-" when the message lacks it.
+# dst", "-" for an empty field, ts in epoch seconds. A client message
+# matches on chaddr or option 61 (ipvlan shares the parent MAC); a
+# server reply on chaddr, option 61, or the xid of a matched client
+# message, since a reply need not echo option 61. "*" prints every
+# message (C10 needs it). The decode reads tcpdump's hex and uses no
+# gawk-only builtin (Debian's awk is mawk); a partial last record is
+# dropped. A 3rd argument, a comma list of option codes, appends one
+# field per code: "0x<hex>" ("0x" for a zero-length option) or "-".
 dhcp_message_log() {
 	local pcap=$1 want errfile outfile rc codes=${3:-}
 	want=$(printf '%s' "$2" | tr 'A-F' 'a-f')

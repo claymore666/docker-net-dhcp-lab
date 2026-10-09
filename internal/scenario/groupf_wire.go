@@ -142,6 +142,6 @@ func clientHasFeature(tag string, since [3]int) (bool, error) {
 	return true, nil
 }
 
-// fSince4 is the release that gave the client user_class (F1) and
-// rapid_commit (F3) (docker-net-dhcp v2.4.0).
+// fSince4 is the release that gave the client user_class and
+// rapid_commit (docker-net-dhcp v2.4.0).
 var fSince4 = [3]int{2, 4, 0}

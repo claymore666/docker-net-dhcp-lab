@@ -167,7 +167,7 @@ const (
 // plus group C's 10: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
 // second) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run,
-// plus group F's 4: F1(1) + F2a(1) + F2b(1) + F3(1); F4-F7 never run (#20).
+// plus group F's 4: one each for the user class, both 108 rows and rapid commit; the IPv6 rows never run (#20).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).

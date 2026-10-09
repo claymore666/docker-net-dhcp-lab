@@ -14,7 +14,7 @@ type Feature string
 
 const (
 	// FeatureUserClassPool serves Class's clients (option 77) from
-	// PoolStart-PoolEnd and keeps the main pool away from them (F1).
+	// PoolStart-PoolEnd and keeps the main pool away from them.
 	FeatureUserClassPool Feature = "user-class-pool"
 	// FeatureOffer108 sets option 108 on the subnet without forcing it,
 	// so a client that never asks never receives it (F2a, RFC 8925 3.3).
@@ -22,7 +22,7 @@ const (
 	// FeatureForce108 sends option 108 to ClientID's client even though
 	// it did not ask, to show it ignores it (F2b, RFC 8925 3.2).
 	FeatureForce108 Feature = "force-108"
-	// FeatureRapidCommit4 turns DHCPv4 rapid commit on (F3, RFC 4039).
+	// FeatureRapidCommit4 turns DHCPv4 rapid commit on (group F, RFC 4039).
 	FeatureRapidCommit4 Feature = "rapid-commit-4"
 )
 

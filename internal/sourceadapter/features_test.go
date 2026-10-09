@@ -278,7 +278,7 @@ func mustContain(t *testing.T, label, cfg string, want ...string) {
 	}
 }
 
-// The rendered snippets, per source: the F1 class and pool, the main
+// The rendered snippets, per source: the user-class pool, the main
 // pool kept away from the class (defeat 7, 14), the client-id guard on
 // the forced option (defeat 2) and no tag on the offered one.
 func TestRenderedSnippetsCarryTheirGuards(t *testing.T) {
@@ -318,7 +318,7 @@ func TestRenderedSnippetsCarryTheirGuards(t *testing.T) {
 	mustContain(t, "dnsmasq rc", enabled(t, "dnsmasq", FeatureRapidCommit4, FeatureParams{}), "\ndhcp-rapid-commit\n")
 }
 
-// dnsmasq ShortenLeaseTime still rewrites every range once F1 added a
+// dnsmasq ShortenLeaseTime still rewrites every range once the user-class scenario added a
 // second tag to the main one (the regex took one tag before #20).
 func TestDnsmasqShortenCoversTwoTaggedRanges(t *testing.T) {
 	cfg := enabled(t, "dnsmasq", FeatureUserClassPool, FeatureParams{Class: "c", PoolStart: "10.200.1.203", PoolEnd: "10.200.1.210"})

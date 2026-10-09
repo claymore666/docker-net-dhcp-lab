@@ -15,19 +15,21 @@ import (
 // Each scenario that changes the source does it through EnableFeature
 // and puts it back in a defer that outlives a cancelled context, on every
 // path including a failed verdict; a restore that fails turns the verdict
-// BLOCKED, never a PASS. F4-F7 need the IPv6 segment (#23 group D).
+// BLOCKED, never a PASS. The IPv6 rows need the IPv6 segment (#23 group D).
 
 const (
 	fUserClass  = "lab-uc-f1"
 	f108Seconds = 1800
-	// fCaptureWait bounds how long a scenario waits for the observer's
-	// capture to show the messages of the exchange it just completed.
-	fCaptureWait = 30 * time.Second
 )
 
-// fCapturePoll is how often the capture is re-read; a variable so the
-// tests do not wait.
-var fCapturePoll = 2 * time.Second
+// fCaptureWait bounds how long a scenario waits for the observer's
+// capture to show the messages of the exchange it just completed;
+// fCapturePoll is how often it is re-read. Variables so the tests do
+// not wait.
+var (
+	fCaptureWait = 30 * time.Second
+	fCapturePoll = 2 * time.Second
+)
 
 // f108Bytes is option 108's value as the wire carries it: four bytes, big endian.
 func f108Bytes() []byte {

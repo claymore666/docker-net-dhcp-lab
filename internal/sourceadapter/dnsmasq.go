@@ -14,7 +14,7 @@ import (
 // (start, end, lease-time), capturing everything up to the lease-time
 // field so ShortenLeaseTime can replace only that field (#3, A14).
 //
-// The tag:... fields are what B5's and F1's ranges carry
+// The tag:... fields are what the B5 and user-class ranges carry
 // (dhcp-range=tag:!b5,tag:!f1,start,end,12h, #23, #20); without them the main range
 // would no longer match once the config is tagged and A14 would break.
 var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=(?:tag:[^,\n]+,)*[^,\n]+,[^,\n]+,)[^,\n]+$`)

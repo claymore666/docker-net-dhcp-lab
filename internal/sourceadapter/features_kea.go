@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	// keaClassesRE and keaMainPoolClassRE anchor the F1 edits on the
+	// keaClassesRE and keaMainPoolClassRE anchor the user-class edits on the
 	// class list and the main-pool test cloud-init/kea-user-data writes.
 	keaClassesRE   = regexp.MustCompile(`("client-classes": \[)`)
 	keaNotB5RE     = regexp.MustCompile(`(\{ "name": "not-b5", "test": ")not member\('b5'\)(" \})`)

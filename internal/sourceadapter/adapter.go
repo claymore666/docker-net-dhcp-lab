@@ -49,17 +49,17 @@ const (
 	CapFailoverPair Capability = "failover-pair"
 	CapRelay        Capability = "relay"
 	// CapUserClassPool declares EnableFeature(FeatureUserClassPool): a
-	// pool served only to option 77 clients of one class (F1, #20).
+	// pool served only to option 77 clients of one class (group F, #20).
 	CapUserClassPool Capability = "user-class-pool"
 	// CapOption108 declares EnableFeature(FeatureOffer108) and
 	// EnableFeature(FeatureForce108) (RFC 8925, F2a and F2b, #20).
 	CapOption108 Capability = "option-108"
 	// CapRapidCommit4 declares EnableFeature(FeatureRapidCommit4): the
 	// source answers a DHCPv4 DISCOVER that carries option 80 with an
-	// ACK (RFC 4039; dnsmasq only, F3, #20).
+	// ACK (RFC 4039; dnsmasq only, #20).
 	CapRapidCommit4 Capability = "rapid-commit-4"
 	// CapV6 is declared by no adapter until group D's IPv6 segment
-	// exists; the F4-F7 rows stay N/A through Applicable until then (#20).
+	// exists; the IPv6 rows of group F stay N/A through Applicable until then (#20).
 	CapV6 Capability = "v6"
 )
 

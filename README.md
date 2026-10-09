@@ -89,6 +89,21 @@ Group C runs today (IPv4; the source is stopped, slowed or reset, and put back a
 
 C1 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
 
+Group F runs today (IPv4; the plugin's client options, judged by the bytes the container sends and by the source's own table; the source setting changes for the scenario and is put back afterwards):
+
+| ID | Scenario | What it does |
+|---|---|---|
+| F1 | user class pool | with `user_class` the container sends a short label naming its kind of client (DHCP option 77); the source serves that label from its own address range, outside the main one |
+| F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
+| F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease |
+| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Kea and ISC answer as usual and the normal four messages follow |
+| F4 | rapid commit, IPv6 | N/A on every source until the IPv6 segment exists (#23 group D) |
+| F5 | temporary address | N/A on every source until the IPv6 segment exists (#23 group D) |
+| F6 | prefix delegation | N/A on every source until the IPv6 segment exists (#23 group D) |
+| F7 | NAT64 prefix | N/A on every source until the IPv6 segment exists (#23 group D) |
+
+The user class, forced 108 and rapid commit rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class and rapid commit rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send neither option, and a tag that is not a release leaves them BLOCKED. A source VM needs no rebuild for group F; the settings are written at run time.
+
 ## Reading a result
 
 Each scenario on each shape and source gets one verdict:

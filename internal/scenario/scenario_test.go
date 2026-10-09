@@ -63,6 +63,9 @@ type fakeAdapter struct {
 	features         []sourceadapter.Feature
 	featureParams    []sourceadapter.FeatureParams
 	featureRestores  int
+	// featureRestoreCtx is ctx.Err() as the last restore saw it: a
+	// cancelled scenario context must not reach the restore.
+	featureRestoreCtx error
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -133,7 +136,11 @@ func (f *fakeAdapter) EnableFeature(_ context.Context, ft sourceadapter.Feature,
 	}
 	f.features = append(f.features, ft)
 	f.featureParams = append(f.featureParams, p)
-	return func(context.Context) error { f.featureRestores++; return f.featureRestoreEr }, nil
+	return func(ctx context.Context) error {
+		f.featureRestores++
+		f.featureRestoreCtx = ctx.Err()
+		return f.featureRestoreEr
+	}, nil
 }
 func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {

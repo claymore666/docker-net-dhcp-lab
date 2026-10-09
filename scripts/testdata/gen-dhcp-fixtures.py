@@ -208,7 +208,7 @@ with open("dhcp-c-partial.pcap", "r+b") as f:
     f.seek(0, 2)
     f.truncate(f.tell() - 100)
 
-# Group F (#20): the option bytes F1-F3 read. tcpdump prints 80 as SLP-NA
+# Group F (#20): the option bytes group F reads. tcpdump prints 80 as SLP-NA
 # and 77, 108 and type 9 as Unknown, so the helper keys on the code.
 MSG_FORCERENEW = 9
 F_MAC = "02:f1:00:00:00:01"
@@ -236,7 +236,7 @@ def f_offer(mac, xid, yi, *extra):
 def f_ack(mac, xid, yi, *extra):
     return plus(ack(mac, xid, yi, SERVER), *extra)
 
-# F1: option 77 in every DISCOVER and REQUEST of the identity; a second
+# User class: option 77 in every DISCOVER and REQUEST of the identity; a second
 # client sends no class and is answered from the main pool.
 FX1, FX2 = 0x0f100001, 0x0f100002
 write_pcap("dhcp-f1-userclass.pcap", [
@@ -266,7 +266,7 @@ write_pcap("dhcp-f2-asked108.pcap", [
     (30.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX5, LEASED, opt(108, OPT108)))),
 ])
 
-# F3: dnsmasq answers a DISCOVER carrying 80 with an ACK carrying 80 (two
+# Rapid commit: dnsmasq answers a DISCOVER carrying 80 with an ACK carrying 80 (two
 # messages); Kea and ISC answer OFFER without 80 and carry on (four).
 FX6, FX7 = 0x0f300001, 0x0f300002
 write_pcap("dhcp-f3-rapid-commit.pcap", [
