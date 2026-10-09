@@ -41,9 +41,12 @@ echo "== segment bridge =="
 # run had already created the bridge, not because this call could.
 sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
 # A relay cell (#11) has a second segment, the source's server segment
-# behind the relay; down-cell.sh reads both names back from $WORK.
+# behind the relay; both names are recorded in $WORK before it is built,
+# so down-cell.sh still finds them after a bring-up that failed later.
 server_bridge=$(jq -r '.cell.relay.server_segment.bridge // empty' <<<"$RESOLVED")
 if [ -n "$server_bridge" ]; then
+	mkdir -p "$WORK"
+	printf '%s\n' "$bridge" "$server_bridge" >"$WORK/relay-bridges"
 	sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$server_bridge"
 fi
 
@@ -62,9 +65,6 @@ mkdir -p "$WORK"
 # from "not ready yet". Never read or write the personal file for this.
 known_hosts="$WORK/known_hosts"
 : >"$known_hosts"
-if [ -n "$server_bridge" ]; then
-	printf '%s\n' "$bridge" "$server_bridge" >"$WORK/relay-bridges"
-fi
 
 overlay="$WORK/${domain}.qcow2"
 if [ ! -f "$overlay" ]; then
