@@ -13,6 +13,7 @@ CELL=${1:?usage: down-cell.sh <cell-name> <work-dir>}
 WORK=${2:?usage: down-cell.sh <cell-name> <work-dir>}
 domain="lab-${CELL}-dockerhost"
 source_domain="lab-${CELL}-source"
+partner_domain="lab-${CELL}-partner"
 
 # Same naming as observe-segment.sh's own container and host-side veth
 # (its comment there has the IFNAMSIZ reasoning for the hash); recomputed
@@ -51,14 +52,18 @@ fi
 # above: its own overlay/NVRAM under $WORK, the shared base image never
 # touched. A cell with no source (issue #1's ref-only) has none defined,
 # so every call here is a harmless no-op.
-if sudo -n virsh dominfo "$source_domain" >/dev/null 2>&1; then
-	sudo -n virsh destroy "$source_domain" >/dev/null 2>&1 || true
-	sudo -n virsh undefine "$source_domain" --nvram >/dev/null 2>&1 || sudo -n virsh undefine "$source_domain" >/dev/null 2>&1 || true
-fi
-if sudo -n virsh dominfo "$source_domain" >/dev/null 2>&1; then
-	echo "down-cell: REFUSED -- $source_domain still exists after destroy/undefine; not touching $WORK" >&2
-	exit 1
-fi
+# A failover pair's partner (#12) is a second source domain, torn down
+# the same way.
+for d in "$source_domain" "$partner_domain"; do
+	if sudo -n virsh dominfo "$d" >/dev/null 2>&1; then
+		sudo -n virsh destroy "$d" >/dev/null 2>&1 || true
+		sudo -n virsh undefine "$d" --nvram >/dev/null 2>&1 || sudo -n virsh undefine "$d" >/dev/null 2>&1 || true
+	fi
+	if sudo -n virsh dominfo "$d" >/dev/null 2>&1; then
+		echo "down-cell: REFUSED -- $d still exists after destroy/undefine; not touching $WORK" >&2
+		exit 1
+	fi
+done
 
 # Move any observer pcaps out to an evidence directory, outside $WORK,
 # before it is removed below -- a real pcap was lost this way once

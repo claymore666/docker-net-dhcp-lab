@@ -32,6 +32,11 @@ mgmt_ip=${mgmt_addr%%/*}
 source_type=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
 source_mgmt_addr=$(jq -r '.cell.source.mgmt_address // empty' <<<"$RESOLVED")
 source_mgmt_ip=${source_mgmt_addr%%/*}
+# A failover pair (#12): every per-source step below runs once per peer,
+# labelled source and partner.
+partner_mgmt_addr=$(jq -r '.cell.source.partner.mgmt_address // empty' <<<"$RESOLVED")
+peers="source=$source_mgmt_ip"
+[ -z "$partner_mgmt_addr" ] || peers="$peers partner=${partner_mgmt_addr%%/*}"
 plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 previous_plugin_tag=$(jq -r '.cell.docker_host.previous_plugin_tag // empty' <<<"$RESOLVED")
 
@@ -61,11 +66,17 @@ echo "== versions =="
 	echo "docker_host engine: $(ssh_run "$mgmt_ip" "sudo docker version --format '{{.Server.Version}}'")"
 	echo "docker_host kernel: $(ssh_run "$mgmt_ip" "uname -r")"
 	echo "source type: $source_type"
-	echo "source kernel: $(ssh_run "$source_mgmt_ip" "uname -r")"
+	for peer in $peers; do
+		echo "${peer%%=*} kernel: $(ssh_run "${peer#*=}" "uname -r")"
+	done
 } >"$EVIDENCE_DIR/${CELL}-versions.txt"
 
 echo "== config diff from stock =="
-"$REPO_ROOT/scripts/capture-source-config-diff.sh" "$CELL" "$source_type" "$source_mgmt_ip" "$WORK" "$EVIDENCE_DIR"
+for peer in $peers; do
+	label=$CELL
+	[ "${peer%%=*}" = source ] || label="${CELL}-${peer%%=*}"
+	"$REPO_ROOT/scripts/capture-source-config-diff.sh" "$label" "$source_type" "${peer#*=}" "$WORK" "$EVIDENCE_DIR"
+done
 
 echo "== capture: start (spans every shape below) =="
 "$REPO_ROOT/scripts/capture-start.sh" "$CELL" "$bridge" "$WORK"
@@ -141,8 +152,10 @@ echo "== source state directory (Kea lease-file cleanup copies, #23) =="
 # (defeat 2), and only this listing after a run of an hour or more shows
 # which copies exist.
 if [ "$source_type" = kea ]; then
-	ssh_run "$source_mgmt_ip" "sudo ls -l --time-style=full-iso /var/lib/kea/; date -u +%Y-%m-%dT%H:%M:%SZ" \
-		>"$EVIDENCE_DIR/${CELL}-source-var-lib-kea.txt" || true
+	for peer in $peers; do
+		ssh_run "${peer#*=}" "sudo ls -l --time-style=full-iso /var/lib/kea/; date -u +%Y-%m-%dT%H:%M:%SZ" \
+			>"$EVIDENCE_DIR/${CELL}-${peer%%=*}-var-lib-kea.txt" || true
+	done
 fi
 
 echo "== tear down cell $CELL =="
