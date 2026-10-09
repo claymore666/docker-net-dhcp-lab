@@ -1,0 +1,52 @@
+#cloud-config
+# Pi-hole source cell (issue #10). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Three steps in
+# one script, in this order: the toml, then the installer, then the
+# marker. With pihole.toml already in place the installer takes its
+# update path and shows no dialog; without it --unattended is ignored
+# (basic-install.sh check_fresh_install, #10). The stock copy is the
+# live toml with each key FTL marked "### CHANGED, default = D" put back
+# to D, so it is derived from FTL's own markers. The Debian dnsmasq
+# package stays out: dnsmasq-base only gives the rogue-server actor its
+# binary, and FTL embeds its own.
+hostname: lab-pihole-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates dnsmasq-base iputils-arping python3
+  - |
+    set -e
+    mkdir -p /etc/pihole /etc/dnsmasq.d /root/lab-stock-config
+    cat >/etc/pihole/pihole.toml <<'TOMLEOF'
+    [dns]
+      interface = "eth1"
+      listeningMode = "BIND"
+    [dhcp]
+      active = true
+      start = "__POOL_START__"
+      end = "__POOL_END__"
+      router = "__SEG_GATEWAY__"
+      netmask = "__SEG_NETMASK__"
+      leaseTime = "12h"
+    [misc]
+      etc_dnsmasq_d = true
+    TOMLEOF
+    cat >/etc/dnsmasq.d/90-lab.conf <<'LABEOF'
+    # lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)
+    LABEOF
+    touch /etc/dnsmasq.d/lab-reservations.conf
+    curl -fsSL https://install.pi-hole.net -o /root/pihole-install.sh
+    bash /root/pihole-install.sh --unattended >/var/log/lab-pihole-install.log 2>&1
+    systemctl is-active --quiet pihole-FTL
+    for b in dnsmasq arping python3; do command -v "$b" >/dev/null; done
+    if systemctl is-enabled --quiet dnsmasq 2>/dev/null; then echo "debian dnsmasq unit is enabled" >&2; exit 1; fi
+    sed -E 's/^([[:space:]]*[A-Za-z0-9_]+ = ).* ### CHANGED, default = (.*)$/\1\2/' /etc/pihole/pihole.toml >/root/lab-stock-config/pihole.toml.stock
+    grep -q '### CHANGED' /etc/pihole/pihole.toml
+    if grep -q '### CHANGED' /root/lab-stock-config/pihole.toml.stock; then echo "stock copy still carries a CHANGED marker" >&2; exit 1; fi
+    touch /var/lib/cloud/lab-bootstrap-done

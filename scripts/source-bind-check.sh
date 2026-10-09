@@ -51,5 +51,16 @@ if [ "$ud_iface" -ne 1 ] || [ "$ud_other" -ne 1 ]; then
 	fail=1
 fi
 
+# Pi-hole's FTL reads dns.interface and dns.listeningMode from pihole.toml;
+# BIND makes the embedded dnsmasq bind that one interface (#10).
+ph=cloud-init/pihole-user-data.tmpl.yaml
+ph_iface=$(grep -c '^[[:space:]]*interface = "eth1"$' "$ph" || true)
+ph_bind=$(grep -c '^[[:space:]]*listeningMode = "BIND"$' "$ph" || true)
+ph_other=$(grep -cE '^[[:space:]]*(interface|listeningMode) *=' "$ph" || true)
+if [ "$ph_iface" -ne 1 ] || [ "$ph_bind" -ne 1 ] || [ "$ph_other" -ne 2 ]; then
+	echo "source-bind-check: FAIL -- pihole-user-data.tmpl.yaml does not bind exactly eth1" >&2
+	fail=1
+fi
+
 [ "$fail" -eq 0 ] || exit 1
-echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd and udhcpd all bind eth1 only"
+echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd, udhcpd and pihole all bind eth1 only"
