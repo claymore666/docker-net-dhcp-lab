@@ -54,6 +54,12 @@ if [ -d "/sys/class/net/$bridge/brif" ]; then
 fi
 [ "$bad" -eq 0 ] || exit 1
 
+# Hub mode (group C, #23): with the default 300 s FDB ageing the bridge
+# stops flooding a unicast frame once it has learned the destination, so
+# the observer port never sees a T1 renewal REQUEST or its ACK. Ageing 0
+# floods every frame to every port; the segment carries lab devices only.
+ip link set dev "$bridge" type bridge ageing_time 0
+
 if [ -n "$add_port" ]; then
 	if ! is_allowed_port "$add_port"; then
 		echo "build-bridge: REFUSED -- $add_port is not a lab device, will not enslave it to $bridge" >&2

@@ -67,10 +67,24 @@ ip link add stray0 type veth peer name stray0-peer
 ip link set stray0 master bridge-d
 run_refused "pre-existing stray port refused with no --add-port" bridge-d
 
+# Case E (#23): every accepted bridge, new or already present, is left in
+# hub mode, so the observer sees unicast renewals.
+ageing() { cat "/sys/class/net/$1/bridge/ageing_time"; }
+if [ "$(ageing bridge-a)" != "0" ]; then
+	echo "build-bridge-test: FAIL -- new bridge-a ageing_time $(ageing bridge-a), want 0" >&2
+	fail=1
+fi
+ip link add bridge-e type bridge
+run_ok "existing lab bridge accepted" bridge-e
+if [ "$(ageing bridge-e)" != "0" ]; then
+	echo "build-bridge-test: FAIL -- existing bridge-e ageing_time $(ageing bridge-e), want 0" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "build-bridge-test: PASS -- all 4 cases behaved as expected"
+echo "build-bridge-test: PASS -- all 5 cases behaved as expected"
 '
 
 unshare -rnm bash -c "$inner" bash "$BUILD_BRIDGE"
