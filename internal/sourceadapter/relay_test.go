@@ -185,12 +185,17 @@ func TestRelayRecoverPutsEverythingBack(t *testing.T) {
 }
 
 func TestRelayCapabilities(t *testing.T) {
-	inner := &innerStub{caps: []Capability{CapV4, CapRestart}}
+	// The squatter and the rogue server would sit on the source's server
+	// segment, not the client one, and C9 cannot move a source that is
+	// not on the client segment: behind a relay C6, C6b, C7 and C9 are
+	// N/A (#11, #23). The narrowed pool still works through the relay.
+	all := []Capability{CapV4, CapRestart, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber}
+	inner := &innerStub{caps: slices.Clone(all)}
 	got := WithRelay(inner, &scriptRunner{}, testRelayParams).Capabilities()
-	if !slices.Equal(got, []Capability{CapV4, CapRestart, CapRelay}) {
+	if !slices.Equal(got, []Capability{CapV4, CapRestart, CapNarrowPool, CapRelay}) {
 		t.Fatalf("got %v", got)
 	}
-	if !slices.Equal(inner.caps, []Capability{CapV4, CapRestart}) {
+	if !slices.Equal(inner.caps, all) {
 		t.Fatalf("the inner adapter's slice was changed: %v", inner.caps)
 	}
 }
