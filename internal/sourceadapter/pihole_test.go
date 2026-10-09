@@ -14,7 +14,7 @@ import (
 const piholeLeaseLine = "1791620503 de:ef:59:a7:47:e6 10.200.13.115 m2host 01:de:ef:59:a7:47:e6\n"
 
 // recordRunner keeps every command, and answers a read of the config with
-// cfg so an edit sees the lab file as the template seeds it.
+// cfg so an edit sees the lab file as the template seeds it (#10).
 type recordRunner struct {
 	cfg   string
 	lease string
@@ -34,7 +34,7 @@ func (r *recordRunner) Run(_ context.Context, cmd string) (string, error) {
 
 // FTL regenerates /etc/pihole/dnsmasq.conf from pihole.toml on every start,
 // so a command touching either file would be undone or would move the
-// stock diff (D6c, D6d).
+// stock diff (#10).
 func assertNeverTouchesFTLOwnedFiles(t *testing.T, label string, calls []string) {
 	t.Helper()
 	for _, c := range calls {
@@ -56,7 +56,7 @@ func TestPiholeCapabilitiesAreTheDnsmasqSetMinusWhatFTLOwns(t *testing.T) {
 			t.Errorf("pihole lacks %s", c)
 		}
 	}
-	// The five the toml owns, and the three that need a cell that does not exist yet.
+	// The five the toml owns (#10), and the three that need a cell that does not exist yet.
 	for _, c := range []Capability{CapShortLease, CapNarrowPool, CapRenumber, CapVendorClassPool, CapUserClassPool, CapV6, CapFailoverPair, CapRelay} {
 		if have[c] {
 			t.Errorf("pihole declares %s", c)
@@ -158,7 +158,7 @@ func TestPiholeRejectsInjectionBeforeAnySSH(t *testing.T) {
 
 // ShortenLeaseTime, NarrowPool, Renumber and the user-class pool would
 // give a verdict on a server whose range they never changed (FTL ignores a
-// second dhcp-range); they refuse with the reason and run nothing.
+// second dhcp-range, FTL v6.7.1, #10); they refuse with the reason and run nothing.
 func TestPiholeRefusesWhatFTLOwns(t *testing.T) {
 	const reason = "Pi-hole's FTL owns dhcp-range and lease time in pihole.toml; the lab does not edit the toml."
 	r := &fakeRunner{}
@@ -180,7 +180,7 @@ func TestPiholeRefusesWhatFTLOwns(t *testing.T) {
 
 // Every scenario edit reads and writes the lab-owned file only, anchors on
 // the header the template seeds, and restore writes the captured bytes
-// back (D6c, D12).
+// back (#10).
 func TestPiholeEditsOnlyThe90LabFile(t *testing.T) {
 	ctx := context.Background()
 	for name, edit := range map[string]func(*PiholeAdapter) (func(context.Context) error, error){
@@ -246,7 +246,8 @@ func TestPiholeFeatureSnippets(t *testing.T) {
 }
 
 // Ready takes the lab file as its baseline, so a leftover scenario edit in
-// 90-lab.conf is refused and Recover puts the baseline back (D6d).
+// 90-lab.conf is refused and Recover puts the baseline back, writing only
+// that file and never the toml FTL owns (#10).
 func TestPiholeReadyHoldsTheLabFileToItsBaseline(t *testing.T) {
 	ctx := context.Background()
 	h := healthyHost()
@@ -266,6 +267,19 @@ func TestPiholeReadyHoldsTheLabFileToItsBaseline(t *testing.T) {
 	if h.written != orig {
 		t.Fatalf("Recover wrote %q, want %q", h.written, orig)
 	}
+	var tees int
+	for _, c := range h.calls {
+		if strings.HasPrefix(c, "sudo tee ") {
+			tees++
+			if !strings.HasPrefix(c, "sudo tee "+piholeLabConf+" ") {
+				t.Errorf("a write went to %q, want only %s", c[:strings.IndexByte(c, '\n')], piholeLabConf)
+			}
+		}
+	}
+	if tees != 1 {
+		t.Errorf("Recover wrote the baseline %d times, want once", tees)
+	}
+	assertNeverTouchesFTLOwnedFiles(t, "ready and recover", h.calls)
 	var restarted bool
 	for _, c := range h.calls {
 		if c == "sudo systemctl restart pihole-FTL" {
@@ -300,9 +314,23 @@ func TestPiholeTemplateOrdersTomlInstallerMarker(t *testing.T) {
 	if !(toml < installer && installer < marker) {
 		t.Errorf("order toml=%d installer=%d marker=%d, want toml < installer < marker (the installer ignores --unattended without the toml)", toml, installer, marker)
 	}
-	// Anything that can fail between the installer and the marker must stop the script.
+	// Anything that can fail between the installer and the marker must stop the script (#10).
 	if !regexp.MustCompile(`(?m)^    set -e$`).MatchString(tmpl) || at("set -e") > toml {
 		t.Error("the script does not start with set -e")
+	}
+	// Each check after the installer is a whole line of its own: a trailing
+	// "|| true" or a dropped line would let a failed install reach the marker (#10).
+	for _, line := range []string{
+		"    bash /root/pihole-install.sh --unattended >/var/log/lab-pihole-install.log 2>&1",
+		"    systemctl is-active --quiet pihole-FTL",
+		`    for b in dnsmasq arping python3; do command -v "$b" >/dev/null; done`,
+		`    if systemctl is-enabled --quiet dnsmasq 2>/dev/null; then echo "debian dnsmasq unit is enabled" >&2; exit 1; fi`,
+		"    grep -q '### CHANGED' /etc/pihole/pihole.toml",
+		`    if grep -q '### CHANGED' /root/lab-stock-config/pihole.toml.stock; then echo "stock copy still carries a CHANGED marker" >&2; exit 1; fi`,
+	} {
+		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(line) + `$`).MatchString(tmpl) {
+			t.Errorf("template lacks the guard line %q", line)
+		}
 	}
 	body := tmpl[toml:installer]
 	for _, want := range []string{`interface = "eth1"`, `listeningMode = "BIND"`, "active = true", `start = "__POOL_START__"`, `end = "__POOL_END__"`, `router = "__SEG_GATEWAY__"`, `netmask = "__SEG_NETMASK__"`, "etc_dnsmasq_d = true", "touch /etc/dnsmasq.d/lab-reservations.conf"} {
@@ -313,7 +341,7 @@ func TestPiholeTemplateOrdersTomlInstallerMarker(t *testing.T) {
 	if !strings.Contains(tmpl, piholeLabHeader) {
 		t.Errorf("template does not seed the %q header the adapter anchors on", piholeLabHeader)
 	}
-	if strings.Contains(tmpl, "install -y dnsmasq ") || regexp.MustCompile(`install -y[^\n]* dnsmasq( |$)`).MatchString(tmpl) {
+	if regexp.MustCompile(`(?m)install -y[^\n]* dnsmasq( |$)`).MatchString(tmpl) {
 		t.Error("the template installs the Debian dnsmasq package, which fights FTL for port 67")
 	}
 	for _, want := range []string{"dnsmasq-base", "iputils-arping", "python3", "### CHANGED"} {
