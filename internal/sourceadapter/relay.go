@@ -126,7 +126,7 @@ func (a *relayAdapter) relayReady(ctx context.Context) error {
 		return fmt.Errorf("relay params: %w", err)
 	}
 	if _, err := a.relay.Run(ctx, "sudo systemctl is-active --quiet "+relayService+" && pgrep -x dhcrelay"); err != nil {
-		return fmt.Errorf("relay: %s is not active or dhcrelay is not running: %w", relayService, err)
+		return fmt.Errorf("relay: is-active %s && pgrep dhcrelay failed (service down, no dhcrelay, or relay unreachable): %w", relayService, err)
 	}
 	fwd, err := a.relay.Run(ctx, "sysctl -n net.ipv4.ip_forward")
 	if err != nil {

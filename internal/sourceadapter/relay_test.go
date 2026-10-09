@@ -93,7 +93,7 @@ func TestRelayReadyChecks(t *testing.T) {
 		want   string
 	}{
 		{"inner source not ready", nil, "inner"},
-		{"1 relay service inactive", func(r, _ *scriptRunner) { r.fail["sudo systemctl is-active"] = true }, "is not active"},
+		{"1 relay service inactive", func(r, _ *scriptRunner) { r.fail["sudo systemctl is-active"] = true }, "pgrep dhcrelay failed"},
 		{"2 ip_forward off", func(r, _ *scriptRunner) { r.replies["sysctl -n"] = "0\n" }, "ip_forward"},
 		{"3 client leg renumbered", func(r, _ *scriptRunner) {
 			r.replies["ip -4 -o addr show dev eth1"] = "3: eth1    inet 10.200.10.9/24 scope global eth1\n"

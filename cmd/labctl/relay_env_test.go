@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
+	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // Defeat 11 of the relay design (#11): behind a relay the router is the
@@ -83,5 +89,120 @@ func TestObserverVethsAreUniqueAcrossCells(t *testing.T) {
 	// `echo -n kea-relay-srv | md5sum | cut -c1-5` on the controller.
 	if seen["veth-obs-f03c5h"] != "kea-relay-srv" {
 		t.Errorf("the Go derivation drifted from capture-start.sh's: %v", seen)
+	}
+}
+
+// fakeHost answers a command with the reply of the first key it contains,
+// else reply, or fails every one when down, and records what it was asked.
+type fakeHost struct {
+	reply   string
+	replies map[string]string
+	down    bool
+	calls   []string
+}
+
+func (f *fakeHost) Run(_ context.Context, cmd string) (string, error) {
+	f.calls = append(f.calls, cmd)
+	if f.down {
+		return "", errors.New("unreachable")
+	}
+	for k, v := range f.replies {
+		if strings.Contains(cmd, k) {
+			return v, nil
+		}
+	}
+	return f.reply, nil
+}
+
+func dialFakes(hosts map[string]*fakeHost) func(string) sourceadapter.Runner {
+	return func(h string) sourceadapter.Runner {
+		f, ok := hosts[h]
+		if !ok {
+			f = &fakeHost{down: true}
+			hosts[h] = f
+		}
+		return f
+	}
+}
+
+// The Env cmdRun runs a relay cell with (#11):
+// the router is the relay's client leg, the source keeps its own address,
+// and the adapter carries the relay's capability, Ready and Recover, with
+// the route repair on the source VM.
+func TestCellEnvWiresTheRelay(t *testing.T) {
+	cfg, err := labyaml.Load("../../lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell, err := cfg.CellByName("kea-relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeHost{replies: map[string]string{
+		"lease4-get-all":  `[{"result":3,"text":"0 IPv4 lease(s) found."}]`,
+		"printf 'netns:'": "netns:\nlinks:\nprocs:0\nnetem:0\naddr:10.200.11.2/24 \ncfg:\n{}\n",
+	}}
+	relay := &fakeHost{reply: "02:11:00:00:00:01\n02:11:00:00:00:02\n"}
+	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): src, hostPart(cell.Relay.MgmtAddress): relay}
+	work := t.TempDir()
+	env, err := cellEnv(context.Background(), cell, "kea-relay", "/repo", work, dialFakes(hosts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.SegGateway != "10.200.10.1" || env.SourceAddr != "10.200.11.2" {
+		t.Errorf("SegGateway %q SourceAddr %q, want 10.200.10.1 and 10.200.11.2", env.SegGateway, env.SourceAddr)
+	}
+	if env.RelayClientMAC != "02:11:00:00:00:01" || env.RelayServerMAC != "02:11:00:00:00:02" {
+		t.Errorf("relay MACs %q %q", env.RelayClientMAC, env.RelayServerMAC)
+	}
+	if env.ServerPCAP != filepath.Join(work, "srv", "observer.pcap") {
+		t.Errorf("ServerPCAP %q", env.ServerPCAP)
+	}
+	if c, ok := env.ServerCapture.(scenario.ObserverCapture); !ok || c.Cell != "kea-relay-srv" {
+		t.Errorf("ServerCapture %#v, want the kea-relay-srv observer", env.ServerCapture)
+	}
+	if !slices.Contains(env.Source.Capabilities(), sourceadapter.CapRelay) {
+		t.Errorf("capabilities %v lack CapRelay", env.Source.Capabilities())
+	}
+	if err := env.Source.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if want := "sudo ip route replace 10.200.10.0/24 via 10.200.11.1 dev eth1"; !slices.Contains(src.calls, want) {
+		t.Errorf("Recover never repaired the source route; source calls %q", src.calls)
+	}
+	if !slices.Contains(relay.calls, "sudo systemctl restart isc-dhcp-relay") {
+		t.Errorf("Recover never restarted the relay; relay calls %q", relay.calls)
+	}
+	relay.down = true
+	if err := env.Source.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "relay: is-active") {
+		t.Errorf("Ready with the relay down: %v, want the relay service check", err)
+	}
+}
+
+// A cell with no relay keeps one address for router and source, the plain
+// adapter and no second capture.
+func TestCellEnvLeavesAPlainCellAlone(t *testing.T) {
+	cfg, err := labyaml.Load("../../lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell, err := cfg.CellByName("kea")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): {}}
+	env, err := cellEnv(context.Background(), cell, "kea", "/repo", t.TempDir(), dialFakes(hosts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := hostPart(cell.Source.SegAddress)
+	if env.SegGateway != want || env.SourceAddr != want {
+		t.Errorf("SegGateway %q SourceAddr %q, want both %s", env.SegGateway, env.SourceAddr, want)
+	}
+	if slices.Contains(env.Source.Capabilities(), sourceadapter.CapRelay) || env.ServerCapture != nil || env.ServerPCAP != "" || env.RelayClientMAC != "" {
+		t.Errorf("plain cell carries relay wiring: %+v", env)
+	}
+	if len(hosts) != 1 {
+		t.Errorf("plain cell dialled %d hosts, want only the source", len(hosts))
 	}
 }
