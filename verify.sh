@@ -149,6 +149,11 @@ echo "== run-cells.sh pool, duplicate and signal tests (issue #38) =="
 echo "== fetch-base-image.sh download lock tests (issue #38) =="
 ./scripts/fetch-base-image-test.sh
 
+echo "== relay cell: source network-config, probe, run-cell abort (#11) =="
+./scripts/render-source-network-config-test.sh
+./scripts/relay-probe-test.sh
+./scripts/run-cell-relay-test.sh
+
 echo "== capture-start/capture-stop orchestration and sudo -n tests =="
 ./scripts/capture-lifecycle-test.sh
 

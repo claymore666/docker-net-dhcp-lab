@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/md5"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -46,5 +48,40 @@ func TestResolveRelayRendersTheFilesReadyChecks(t *testing.T) {
 				t.Errorf("%s has no relay but resolved %v %v %v", c.Name, img, files, err)
 			}
 		}
+	}
+}
+
+// Defeat 10 of the relay design (#11): capture-start.sh keys an observer's
+// host veth on md5(key)[:5], with key the cell name or, for a relay
+// cell's server segment, "<cell>-srv". Every key in lab.yaml must give a
+// distinct veth, or one observer's start tears down another's.
+func TestObserverVethsAreUniqueAcrossCells(t *testing.T) {
+	cfg, err := labyaml.Load("../../lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	relays := 0
+	for _, c := range cfg.Cells {
+		keys := []string{c.Name}
+		if c.Relay != nil {
+			keys = append(keys, c.Name+"-srv")
+			relays++
+		}
+		for _, k := range keys {
+			veth := fmt.Sprintf("veth-obs-%xh", md5.Sum([]byte(k)))
+			veth = veth[:len("veth-obs-")+5] + "h"
+			if other, dup := seen[veth]; dup {
+				t.Errorf("observer keys %q and %q share veth %s", other, k, veth)
+			}
+			seen[veth] = k
+		}
+	}
+	if relays == 0 {
+		t.Fatal("no relay cell in lab.yaml")
+	}
+	// `echo -n kea-relay-srv | md5sum | cut -c1-5` on the controller.
+	if seen["veth-obs-f03c5h"] != "kea-relay-srv" {
+		t.Errorf("the Go derivation drifted from capture-start.sh's: %v", seen)
 	}
 }

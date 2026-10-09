@@ -1,0 +1,53 @@
+20:40:17.082235 02:11:00:00:00:10 > 33:33:00:00:00:16, ethertype IPv6 (0x86dd), length 90: (hlim 1, next-header Options (0) payload length: 36) :: > ff02::16: HBH (rtalert: 0x0000) (padn) [icmp6 sum ok] ICMP6, multicast listener report v2, 1 group record(s) [gaddr ff02::1:ff00:10 to_in, 0 source(s)]
+20:40:17.154285 02:11:00:00:00:10 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:11:00:00:00:10, length 300, xid 0xbb265d2e, Flags [none]
+	  Client-Ethernet-Address 02:11:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 12: "udhcp 1.37.0"
+	    Client-ID (61), length 7: ether 02:11:00:00:00:10
+20:40:17.154975 02:11:00:00:00:01 > 02:11:00:00:00:10, ethertype IPv4 (0x0800), length 342: (tos 0x10, ttl 128, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    10.200.10.1.67 > 10.200.10.100.68: BOOTP/DHCP, Reply, length 300, hops 1, xid 0xbb265d2e, Flags [none]
+	  Your-IP 10.200.10.100
+	  Gateway-IP 10.200.10.1
+	  Client-Ethernet-Address 02:11:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 10.200.10.1
+	    Lease-Time (51), length 4: 120
+	    Server-ID (54), length 4: 10.200.11.2
+	    Client-ID (61), length 7: ether 02:11:00:00:00:10
+20:40:17.246339 02:11:00:00:00:10 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 02:11:00:00:00:10, length 300, xid 0xbb265d2e, secs 1, Flags [none]
+	  Client-Ethernet-Address 02:11:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    Requested-IP (50), length 4: 10.200.10.100
+	    Server-ID (54), length 4: 10.200.11.2
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 12: "udhcp 1.37.0"
+	    Client-ID (61), length 7: ether 02:11:00:00:00:10
+20:40:17.246844 02:11:00:00:00:01 > 02:11:00:00:00:10, ethertype IPv4 (0x0800), length 342: (tos 0x10, ttl 128, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    10.200.10.1.67 > 10.200.10.100.68: BOOTP/DHCP, Reply, length 300, hops 1, xid 0xbb265d2e, Flags [none]
+	  Your-IP 10.200.10.100
+	  Gateway-IP 10.200.10.1
+	  Client-Ethernet-Address 02:11:00:00:00:10
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 10.200.10.1
+	    Lease-Time (51), length 4: 120
+	    Server-ID (54), length 4: 10.200.11.2
+	    Client-ID (61), length 7: ether 02:11:00:00:00:10

@@ -39,6 +39,10 @@ peers="source=$source_mgmt_ip"
 [ -z "$partner_mgmt_addr" ] || peers="$peers partner=${partner_mgmt_addr%%/*}"
 plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 previous_plugin_tag=$(jq -r '.cell.docker_host.previous_plugin_tag // empty' <<<"$RESOLVED")
+# A relay cell (#11): empty in every other cell.
+relay_mgmt_addr=$(jq -r '.cell.relay.mgmt_address // empty' <<<"$RESOLVED")
+relay_mgmt_ip=${relay_mgmt_addr%%/*}
+server_bridge=$(jq -r '.cell.relay.server_segment.bridge // empty' <<<"$RESOLVED")
 
 if [ -z "$source_type" ]; then
 	echo "run-cell: cell $CELL has no source; nothing can run against it" >&2
@@ -69,6 +73,11 @@ echo "== versions =="
 	for peer in $peers; do
 		echo "${peer%%=*} kernel: $(ssh_run "${peer#*=}" "uname -r")"
 	done
+	if [ -n "$relay_mgmt_ip" ]; then
+		echo "relay distro: $(ssh_run "$relay_mgmt_ip" ". /etc/os-release && echo \$PRETTY_NAME")"
+		echo "relay kernel: $(ssh_run "$relay_mgmt_ip" "uname -r")"
+		echo "relay isc-dhcp-relay: $(ssh_run "$relay_mgmt_ip" "dpkg-query -W -f '\${Version}' isc-dhcp-relay")"
+	fi
 } >"$EVIDENCE_DIR/${CELL}-versions.txt"
 
 echo "== config diff from stock =="
@@ -77,19 +86,53 @@ for peer in $peers; do
 	[ "${peer%%=*}" = source ] || label="${CELL}-${peer%%=*}"
 	"$REPO_ROOT/scripts/capture-source-config-diff.sh" "$label" "$source_type" "${peer#*=}" "$WORK" "$EVIDENCE_DIR"
 done
+if [ -n "$relay_mgmt_ip" ]; then
+	# The relay's two files against the package's own (#11); diff exits 1
+	# whenever they differ, which they always do.
+	ssh_run "$relay_mgmt_ip" "sudo diff -u /root/lab-stock-config/isc-dhcp-relay.stock /etc/default/isc-dhcp-relay; sudo diff -u /root/lab-stock-config/nftables.conf.stock /etc/nftables.conf" \
+		>"$EVIDENCE_DIR/${CELL}-relay-config-diff.txt" || true
+fi
 
 echo "== capture: start (spans every shape below) =="
+wait_observer() {
+	local waited=0
+	until [ -f "$1/observer.ready" ]; do
+		waited=$((waited + 1))
+		if [ "$waited" -ge 200 ]; then
+			echo "run-cell: FAIL -- observer in $1 did not become ready inside the 60s bound" >&2
+			exit 1
+		fi
+		sleep 0.3
+	done
+}
 "$REPO_ROOT/scripts/capture-start.sh" "$CELL" "$bridge" "$WORK"
-READY="$WORK/observer.ready"
-waited=0
-until [ -f "$READY" ]; do
-	waited=$((waited + 1))
-	if [ "$waited" -ge 200 ]; then
-		echo "run-cell: FAIL -- observer did not become ready inside the 60s bound" >&2
+wait_observer "$WORK"
+# A relay cell's second observer, on the source's server segment (#11).
+if [ -n "$server_bridge" ]; then
+	mkdir -p "$WORK/srv"
+	"$REPO_ROOT/scripts/capture-start.sh" "$CELL-srv" "$server_bridge" "$WORK/srv"
+	wait_observer "$WORK/srv"
+fi
+
+stop_server_capture() {
+	if [ -n "$server_bridge" ]; then
+		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL-srv" "$WORK/srv"
+		cp "$WORK/srv/observer.pcap" "$EVIDENCE_DIR/${CELL}-server.pcap" 2>/dev/null || true
+	fi
+}
+
+# The relay must carry one lease end to end before any shape runs (#11);
+# a shape run through a broken relay would read as plugin FAILs.
+if [ -n "$relay_mgmt_ip" ]; then
+	echo "== relay probe =="
+	if ! "$REPO_ROOT/scripts/relay-probe.sh" "$CELL" "$mgmt_ip" "$relay_mgmt_ip" "$WORK"; then
+		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK" || true
+		cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+		stop_server_capture
+		echo "run-cell: FAIL -- the relay probe failed; no shape was run (lab error, not a plugin finding)" >&2
 		exit 1
 	fi
-	sleep 0.3
-done
+fi
 
 # One shape at a time, never overlapping: each labctl run tears its own
 # network down (deferred inside cmdRun) before returning, so the next
@@ -129,6 +172,7 @@ done
 echo "== capture: stop =="
 "$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK"
 cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+stop_server_capture
 
 echo "== capture: regenerate the capture-check evidence against the final pcap (issue #8) =="
 "$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR"
