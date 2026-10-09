@@ -1,0 +1,28 @@
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.3-P1
+
+# authoring-byte-order entry is generated, DO NOT DELETE
+authoring-byte-order little-endian;
+
+server-duid "\000\001\000\0012[\347a\256\320\275%(\250";
+
+ia-na "\001\000\000\000\000\003\000\001\002\000\000\000#\321" {
+  cltt 5 2026/10/09 17:57:01;
+  iaaddr fd42:200:0:200::1aa {
+    binding state active;
+    preferred-life 3600;
+    max-life 7200;
+    ends 5 2026/10/09 19:57:01;
+  }
+}
+
+ia-ta "\002\000\000\000\000\003\000\001\002\000\000\000#\321" {
+  cltt 5 2026/10/09 17:57:01;
+  iaaddr fd42:200:0:200::22f {
+    binding state active;
+    preferred-life 3600;
+    max-life 7200;
+    ends 5 2026/10/09 19:57:01;
+  }
+}
+
