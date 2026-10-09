@@ -3,6 +3,7 @@ package sourceadapter
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
 	"strings"
@@ -252,4 +253,24 @@ func routeVia(out, via, dev string) bool {
 		}
 	}
 	return gotVia && gotDev
+}
+
+// RelayMACs reads the relay's client and server leg MACs once (#11): a
+// renewal on the client segment is unicast to the client leg's MAC, and
+// the relay design's scenarios match frames on it.
+func RelayMACs(ctx context.Context, relay Runner) (client, server string, err error) {
+	out, err := relay.Run(ctx, "cat /sys/class/net/"+relayClientNIC+"/address /sys/class/net/"+relayServerNIC+"/address")
+	if err != nil {
+		return "", "", fmt.Errorf("relay MACs: %w", err)
+	}
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return "", "", fmt.Errorf("relay MACs: want two addresses, got %q", out)
+	}
+	for _, f := range fields {
+		if _, err := net.ParseMAC(f); err != nil {
+			return "", "", fmt.Errorf("relay MACs: %w", err)
+		}
+	}
+	return fields[0], fields[1], nil
 }

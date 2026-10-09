@@ -136,13 +136,20 @@ func cmdResolve(args []string) {
 		}
 		sourceImage = &si
 	}
+	relayImage, relayCfg, err := resolveRelay(cell)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl resolve:", err)
+		os.Exit(1)
+	}
 	out := struct {
 		Management      labyaml.Management `json:"management"`
 		ULAPrefix       string             `json:"ula_prefix"`
 		Cell            *labyaml.Cell      `json:"cell"`
 		DockerHostImage labyaml.BaseImage  `json:"docker_host_image"`
 		SourceImage     *labyaml.BaseImage `json:"source_image"`
-	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage}
+		RelayImage      *labyaml.BaseImage `json:"relay_image"`
+		RelayFiles      *relayFiles        `json:"relay_files"`
+	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
@@ -150,6 +157,43 @@ func cmdResolve(args []string) {
 		os.Exit(1)
 	}
 }
+
+// relayFiles are the relay VM's two config files, rendered by the same
+// Go code its Ready check compares against (#11), so up-relay.sh never
+// keeps a second copy.
+type relayFiles struct {
+	Defaults string `json:"defaults"`
+	Nft      string `json:"nft"`
+}
+
+func resolveRelay(cell *labyaml.Cell) (*labyaml.BaseImage, *relayFiles, error) {
+	if cell.Relay == nil {
+		return nil, nil, nil
+	}
+	img, err := labyaml.LookupBaseImage(cell.Relay.BaseImage)
+	if err != nil {
+		return nil, nil, err
+	}
+	defaults, err := sourceadapter.RenderRelayDefaults(relayParams(cell))
+	if err != nil {
+		return nil, nil, err
+	}
+	return &img, &relayFiles{Defaults: defaults, Nft: sourceadapter.RelayNftRuleset}, nil
+}
+
+// relayParams maps a relay cell's lab.yaml addresses onto WithRelay (#11).
+func relayParams(cell *labyaml.Cell) sourceadapter.RelayParams {
+	return sourceadapter.RelayParams{
+		ClientAddr:   cell.Relay.ClientAddress,
+		ServerAddr:   cell.Relay.ServerAddress,
+		SourceAddr:   hostPart(cell.Source.SegAddress),
+		ClientSubnet: cell.Segment.Subnet,
+		PoolStart:    cell.Source.PoolStart,
+		AgentOptions: cell.Relay.AgentOptions,
+	}
+}
+
+func hostPart(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
 
 // newSourceAdapter is the one place that maps a lab.yaml source.type to
 // its adapter; cmdLeases and cmdRun both call it so the mapping cannot
@@ -363,6 +407,20 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
 		return 1
 	}
+	var relayClientMAC, relayServerMAC, serverPCAP string
+	var serverCapture scenario.CaptureReader
+	if cell.Relay != nil {
+		relayRunner := sourceadapter.SSHRunner{Host: hostPart(cell.Relay.MgmtAddress), User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
+		p := relayParams(cell)
+		p.Source = sourceRunner
+		source = sourceadapter.WithRelay(source, relayRunner, p)
+		if relayClientMAC, relayServerMAC, err = sourceadapter.RelayMACs(context.Background(), relayRunner); err != nil {
+			fmt.Fprintln(os.Stderr, "labctl run:", err)
+			return 1
+		}
+		serverPCAP = filepath.Join(workDir, "srv", "observer.pcap")
+		serverCapture = scenario.ObserverCapture{Cell: cellName + "-srv", RepoRoot: repoRoot}
+	}
 
 	gitSHA, err := gitRevParseHEAD(repoRoot)
 	if err != nil {
@@ -492,7 +550,7 @@ func cmdRun(args []string) int {
 	}
 	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
 
-	segGateway, sourceAddr := segAddresses(cell.Source)
+	segGateway, sourceAddr := segAddresses(cell)
 	env := scenario.Env{
 		Host:              hostRunner,
 		Source:            source,
@@ -513,6 +571,10 @@ func cmdRun(args []string) int {
 		PoolEnd:           cell.Source.PoolEnd,
 		HostInfo:          hi,
 		Capture:           scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
+		ServerPCAP:        serverPCAP,
+		ServerCapture:     serverCapture,
+		RelayClientMAC:    relayClientMAC,
+		RelayServerMAC:    relayServerMAC,
 	}
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a
@@ -629,8 +691,12 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 }
 
 // segAddresses is the router and the source address a cell's Env carries;
-// without a relay both are seg_address stripped of its CIDR suffix (#11).
-func segAddresses(src *labyaml.Source) (segGateway, sourceAddr string) {
-	a := strings.SplitN(src.SegAddress, "/", 2)[0]
-	return a, a
+// without a relay both are seg_address stripped of its CIDR suffix, behind
+// a relay the router is the relay's client leg (#11).
+func segAddresses(cell *labyaml.Cell) (segGateway, sourceAddr string) {
+	sourceAddr = hostPart(cell.Source.SegAddress)
+	if cell.Relay != nil {
+		return hostPart(cell.Relay.ClientAddress), sourceAddr
+	}
+	return sourceAddr, sourceAddr
 }

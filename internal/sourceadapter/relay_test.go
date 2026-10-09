@@ -191,3 +191,18 @@ func TestRelayCapabilities(t *testing.T) {
 		t.Fatalf("the inner adapter's slice was changed: %v", inner.caps)
 	}
 }
+
+func TestRelayMACs(t *testing.T) {
+	r := &scriptRunner{replies: map[string]string{"cat /sys/class/net/eth1/address /sys/class/net/eth2/address": "52:54:00:aa:bb:01\n52:54:00:aa:bb:02\n"}}
+	cli, srv, err := RelayMACs(context.Background(), r)
+	if err != nil || cli != "52:54:00:aa:bb:01" || srv != "52:54:00:aa:bb:02" {
+		t.Fatalf("got %q %q %v", cli, srv, err)
+	}
+	for _, bad := range []string{"", "52:54:00:aa:bb:01\n", "52:54:00:aa:bb:01\nnot-a-mac\n"} {
+		r.replies["cat "] = bad
+		delete(r.replies, "cat /sys/class/net/eth1/address /sys/class/net/eth2/address")
+		if _, _, err := RelayMACs(context.Background(), r); err == nil {
+			t.Errorf("reply %q accepted", bad)
+		}
+	}
+}
