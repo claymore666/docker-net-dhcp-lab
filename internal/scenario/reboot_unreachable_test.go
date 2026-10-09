@@ -14,10 +14,15 @@ import (
 
 var errGuestNoRoute = errors.New("ssh lab@10.200.255.40: exit status 255: ssh: connect to host 10.200.255.40 port 22: No route to host\r\n")
 
-// bootStep is one boot id poll's answer: an id, or an error.
+var errGuestKilled = errors.New("ssh lab@10.200.255.40: signal: killed: ")
+
+// bootStep is one boot id poll's answer: an id, an error, or (hang) an
+// attempt that ends when the caller's deadline kills it (2 s at most, so
+// a broken bound fails instead of hanging).
 type bootStep struct {
-	id  string
-	err error
+	id   string
+	err  error
+	hang bool
 }
 
 type steppedBootRunner struct {
@@ -26,7 +31,7 @@ type steppedBootRunner struct {
 	dockerErr error
 }
 
-func (f *steppedBootRunner) Run(_ context.Context, cmd string) (string, error) {
+func (f *steppedBootRunner) Run(ctx context.Context, cmd string) (string, error) {
 	switch {
 	case cmd == bootIDCmd:
 		i := f.i
@@ -34,6 +39,13 @@ func (f *steppedBootRunner) Run(_ context.Context, cmd string) (string, error) {
 			i = len(f.steps) - 1
 		}
 		f.i++
+		if f.steps[i].hang {
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+			}
+			return "", errGuestKilled
+		}
 		return f.steps[i].id, f.steps[i].err
 	case strings.HasPrefix(cmd, "sudo docker info"):
 		return "", f.dockerErr
@@ -128,5 +140,27 @@ func TestWaitHostRebootedKeepsItsBoundWhenTheNewBootStopsAnsweringUnderARetrying
 	var u *HostUnreachableError
 	if !errors.As(err, &u) {
 		t.Fatalf("expected HostUnreachableError at the bound, got %T %v", err, err)
+	}
+}
+
+func TestWaitHostRebootedJudgesByThePollBeforeOneItsBoundCut(t *testing.T) {
+	var u *HostUnreachableError
+	for _, steps := range [][]bootStep{
+		{{id: "old"}, {err: errGuestNoRoute}, {hang: true}},
+		{{id: "new"}, {err: errGuestNoRoute}, {hang: true}},
+	} {
+		err := waitHostRebootedTuned(context.Background(), &steppedBootRunner{steps: steps}, "old", 60*time.Millisecond, 10*time.Millisecond, 2*time.Millisecond)
+		if !errors.As(err, &u) || !strings.Contains(err.Error(), "No route to host") || strings.Contains(err.Error(), "killed") {
+			t.Fatalf("%v: expected unreachable judged by the poll before the cut one, got %T %v", steps, err, err)
+		}
+	}
+	for _, steps := range [][]bootStep{
+		{{id: "old"}, {hang: true}},
+		{{err: errGuestNoRoute}, {err: errors.New("ssh lab@10.200.255.40: exit status 1: cat: boot_id: Permission denied")}},
+	} {
+		err := waitHostRebootedTuned(context.Background(), &steppedBootRunner{steps: steps}, "old", 60*time.Millisecond, 10*time.Millisecond, 2*time.Millisecond)
+		if err == nil || errors.As(err, &u) {
+			t.Fatalf("%v: the host answered last: expected a plain failure, got %T %v", steps, err, err)
+		}
 	}
 }

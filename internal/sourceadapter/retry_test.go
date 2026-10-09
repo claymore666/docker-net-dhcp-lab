@@ -122,7 +122,7 @@ func TestRetryRunnerGivesUpAtItsBoundThenFailsFastUntilASuccess(t *testing.T) {
 
 func TestRetryRunnerStopsAtTheCallersDeadlineWithoutMarkingDown(t *testing.T) {
 	inner := &scriptedRunner{errs: []error{errNoRoute}}
-	r := &RetryRunner{Inner: inner, Bound: 2 * time.Second, Poll: time.Millisecond}
+	r := &RetryRunner{Inner: inner, Bound: 5 * time.Second, Poll: 2 * time.Second}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -134,7 +134,30 @@ func TestRetryRunnerStopsAtTheCallersDeadlineWithoutMarkingDown(t *testing.T) {
 	}
 	inner.errs = []error{errNoRoute, nil}
 	inner.calls = 0
+	r.Poll = time.Millisecond
 	if _, err := r.Run(context.Background(), "true"); err != nil || inner.calls != 2 {
 		t.Fatalf("a caller's deadline must not mark the runner down: err %v, attempts %d", err, inner.calls)
+	}
+}
+
+// cutRunner fails its first call with a connect error and holds every later
+// one until the caller's deadline kills it, as exec.CommandContext does.
+type cutRunner struct{ calls int }
+
+func (c *cutRunner) Run(ctx context.Context, _ string) (string, error) {
+	c.calls++
+	if c.calls == 1 {
+		return "", errBanner
+	}
+	<-ctx.Done()
+	return "", errors.New("ssh lab@10.200.255.20: signal: killed: ")
+}
+
+func TestRetryRunnerReturnsTheConnectErrorWhenTheDeadlineCutsARetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	r := &RetryRunner{Inner: &cutRunner{}, Bound: 2 * time.Second, Poll: time.Millisecond}
+	if _, err := r.Run(ctx, "true"); !IsConnectError(err) || r.down.Load() {
+		t.Fatalf("expected the connect error and no down mark, got %v (down %v)", err, r.down.Load())
 	}
 }

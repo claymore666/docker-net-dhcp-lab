@@ -41,7 +41,7 @@ func (r *RetryRunner) Run(ctx context.Context, remoteCmd string) (string, error)
 	// whole shapes. After one exhausted Bound a call makes a single attempt
 	// until one succeeds, so a dead guest costs Bound once per process.
 	start := time.Now()
-	var first error
+	var first, last error
 	for attempt := 1; ; attempt++ {
 		out, err := r.Inner.Run(ctx, remoteCmd)
 		if err == nil {
@@ -52,12 +52,17 @@ func (r *RetryRunner) Run(ctx context.Context, remoteCmd string) (string, error)
 			}
 			return out, nil
 		}
+		if last != nil && ctx.Err() != nil {
+			// The caller's deadline cut this attempt; the connect failure before it is the answer.
+			return out, last
+		}
 		if !IsConnectError(err) || r.down.Load() {
 			return out, err
 		}
 		if first == nil {
 			first = err
 		}
+		last = err
 		if time.Since(start) >= r.Bound {
 			r.down.Store(true)
 			return out, fmt.Errorf("%w (unreachable for %s of retries)", err, r.Bound)

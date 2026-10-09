@@ -385,7 +385,11 @@ func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBo
 	var lastErr error
 	for time.Now().Before(deadline) {
 		id, err := bootID(pollCtx, r)
-		lastErr = err
+		// An attempt the bound itself cut ends as "signal: killed" and says
+		// nothing about the host; the poll before it does (#38).
+		if err == nil || pollCtx.Err() == nil || sourceadapter.IsConnectError(err) {
+			lastErr = err
+		}
 		if err == nil && id != beforeBootID {
 			newID = id
 			break
@@ -405,7 +409,9 @@ func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBo
 	for time.Now().Before(deadline) {
 		if time.Since(firstSeen) >= settle {
 			id, err := bootID(pollCtx, r)
-			lastErr = err
+			if err == nil || pollCtx.Err() == nil || sourceadapter.IsConnectError(err) {
+				lastErr = err
+			}
 			if err == nil && id == newID {
 				settled = true
 				break
