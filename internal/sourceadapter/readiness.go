@@ -12,6 +12,11 @@ import (
 // eth1); netem and the address check apply there only (#23).
 const segmentNIC = "eth1"
 
+// tcBin is spelled absolute: the ssh user's non-login shell has no
+// /usr/sbin in PATH, so a bare "tc" is not found and the read-back that
+// guards C10 failed with "command not found" on the first kea run (#23).
+const tcBin = "/usr/sbin/tc"
+
 // baseline is the state the first Ready of an adapter saw: the segment
 // addresses and the main config bytes. Reservations live in include
 // files, so B1/B2 never move it (group C defeat A8, #23).
@@ -33,9 +38,9 @@ type sourceState struct {
 // comes last, after a "cfg:" line, so its bytes stay exact.
 func stateCmd(cfgPath string) string {
 	return fmt.Sprintf(`printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^labc-/ {printf "%%s ", $1}'; echo; `+
-		`printf 'netem:'; tc qdisc show dev %[2]s root 2>/dev/null | grep -c netem; `+
+		`printf 'netem:'; %[3]s qdisc show dev %[2]s root 2>/dev/null | grep -c netem; `+
 		`printf 'addr:'; ip -4 -o addr show dev %[2]s | awk '{printf "%%s ", $4}'; echo; `+
-		`echo 'cfg:'; sudo cat %[1]s`, cfgPath, segmentNIC)
+		`echo 'cfg:'; sudo cat %[1]s`, cfgPath, segmentNIC, tcBin)
 }
 
 func parseState(out string) (sourceState, error) {
@@ -115,7 +120,7 @@ func sourceReady(ctx context.Context, r Runner, service, cfgPath string, leases 
 // differs, and restart the service. Segment addresses are PR 2's
 // Renumber restore and are not rewritten here.
 func sourceRecover(ctx context.Context, r Runner, service, cfgPath string, b *baseline) error {
-	clean := fmt.Sprintf(`for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^labc-/ {print $1}'); do sudo ip netns del "$n"; done; sudo tc qdisc del dev %s root 2>/dev/null; true`, segmentNIC)
+	clean := fmt.Sprintf(`for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^labc-/ {print $1}'); do sudo ip netns del "$n"; done; sudo %s qdisc del dev %s root 2>/dev/null; true`, tcBin, segmentNIC)
 	if _, err := r.Run(ctx, clean); err != nil {
 		return fmt.Errorf("recover: clear netns and qdisc: %w", err)
 	}
@@ -159,13 +164,13 @@ func impair(ctx context.Context, r Runner, delay time.Duration, lossPct int) (fu
 		return nil, fmt.Errorf("impair: neither a delay nor a loss given")
 	}
 	del := func(ctx context.Context) error {
-		if _, err := r.Run(ctx, fmt.Sprintf("sudo tc qdisc del dev %s root", segmentNIC)); err != nil {
+		if _, err := r.Run(ctx, fmt.Sprintf("sudo %s qdisc del dev %s root", tcBin, segmentNIC)); err != nil {
 			return fmt.Errorf("impair: remove netem from %s: %w", segmentNIC, err)
 		}
 		return nil
 	}
-	cmd := fmt.Sprintf("sudo modprobe sch_netem 2>/dev/null; sudo tc qdisc replace dev %[1]s root netem delay %[2]dms loss %[3]d%% && tc qdisc show dev %[1]s root | grep -q netem",
-		segmentNIC, delay.Milliseconds(), lossPct)
+	cmd := fmt.Sprintf("sudo modprobe sch_netem 2>/dev/null; sudo %[4]s qdisc replace dev %[1]s root netem delay %[2]dms loss %[3]d%% && %[4]s qdisc show dev %[1]s root | grep -q netem",
+		segmentNIC, delay.Milliseconds(), lossPct, tcBin)
 	if _, err := r.Run(ctx, cmd); err != nil {
 		_ = del(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("impair: netem on %s not in place: %w", segmentNIC, err)

@@ -461,14 +461,46 @@ func TestRunC1PassesWhenBothCreatesFailOnSchedule(t *testing.T) {
 	needCleanup(t, r.h.bRunner, "c1", base+"-c1")
 }
 
+// The kea run of plugin v2.5.0 measured c1b at 15.26-15.46 s and c1 at
+// 31.13-31.29 s (#23); both ends of each bound are inclusive.
+func TestRunC1WallBoundsAreInclusiveAndHoldTheMeasuredWalls(t *testing.T) {
+	cases := []struct {
+		name         string
+		c1b, c1      time.Duration
+		wantPass     bool
+		wantInReason string
+	}{
+		{"the measured walls", 15460 * time.Millisecond, 31290 * time.Millisecond, true, ""},
+		{"both at the lower bound", c1bWallMin, c1WallMin, true, ""},
+		{"both at the upper bound", c1bWallMax, c1WallMax, true, ""},
+		{"c1b just under its lower bound", c1bWallMin - time.Millisecond, 31 * time.Second, false, "c1b failed after"},
+		{"c1b just over its upper bound", c1bWallMax + time.Millisecond, 31 * time.Second, false, "c1b failed after"},
+		{"c1 just under its lower bound", 15 * time.Second, c1WallMin - time.Millisecond, false, "c1 failed after"},
+		{"c1 just over its upper bound", 15 * time.Second, c1WallMax + time.Millisecond, false, "c1 failed after"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, _, base := c1Rig(t)
+			r.h.wall[base+"-c1b"], r.h.wall[base+"-c1"] = c.c1b, c.c1
+			v := runC1Tuned(context.Background(), r.e, cFast)
+			if c.wantPass {
+				needResult(t, v, PASS)
+				return
+			}
+			needResult(t, v, FAIL)
+			needReason(t, v, c.wantInReason)
+		})
+	}
+}
+
 func TestRunC1Fails(t *testing.T) {
 	cases := []struct {
 		name, want string
 		edit       func(r *cRig, offs map[string][]time.Duration, base string)
 	}{
 		{"a container started with the source down", "c1 started with the source down", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.rc[base+"-c1"] = 0 }},
-		{"the short timeout failed late", "c1b failed after 20s, outside 10s-16s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1b"] = 20 * time.Second }},
-		{"the default timeout failed early", "c1 failed after 20s, outside 25s-44s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
+		{"the short timeout failed late", "c1b failed after 20s, outside 12s-18.5s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1b"] = 20 * time.Second }},
+		{"the default timeout failed early", "c1 failed after 20s, outside 28s-37s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
 		{"the second gap is off schedule", "c1: DISCOVER gap 2 was 10.2s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1"][2] = 14 * time.Second }},
 		{"the first gap is off schedule", "c1b: DISCOVER gap 1 was 5.5s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"][1] = 5500 * ms }},
 		{"too few DISCOVERs", "c1b: the capture shows 1 DISCOVER(s)", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"] = offs["c1b"][:1] }},

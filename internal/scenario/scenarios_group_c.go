@@ -45,19 +45,22 @@ var cDefault = cTiming{
 
 // The plugin's documented client timing (docs/reference.md): DISCOVER
 // retransmits at 4, 8, 16, 32 s with ±1 s jitter each; lease_timeout
-// fails a create at about 34 s by default; validate_dhcp waits 8 s. The
-// C1 wall bounds are the design's ranges until the kea run pins them
-// (defeat 3). cGapSlack adds timer and capture latency to the jitter, so
-// a retransmit at the jitter's edge is not read as a FAIL.
+// fails a create at about 34 s by default; validate_dhcp waits 8 s.
+// C1 wall bounds, pinned from the kea run of plugin v2.5.0 (#23): c1b
+// 15.26-15.46 s and c1 31.13-31.29 s over bridge, macvlan and ipvlan,
+// spread 0.2 s. Min is the configured 12 s timeout for c1b and the
+// measured wall less 3 s for c1; max is measured plus 3 s, and for c1
+// the documented 34 s plus 3 s. cGapSlack adds timer and capture
+// latency to the jitter, so a retransmit at its edge is not a FAIL.
 const (
 	cJitter      = time.Second
 	cGapSlack    = 250 * time.Millisecond
 	cGap1        = 4 * time.Second
 	cGap2        = 8 * time.Second
-	c1bWallMin   = 10 * time.Second
-	c1bWallMax   = 16 * time.Second
-	c1WallMin    = 25 * time.Second
-	c1WallMax    = 44 * time.Second
+	c1bWallMin   = 12 * time.Second
+	c1bWallMax   = 18500 * time.Millisecond
+	c1WallMin    = 28 * time.Second
+	c1WallMax    = 37 * time.Second
 	c10Delay     = 2 * time.Second
 	c10MinWall   = 4 * time.Second
 	c11RefuseMax = 12 * time.Second

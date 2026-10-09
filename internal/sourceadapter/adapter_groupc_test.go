@@ -3,6 +3,7 @@ package sourceadapter
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +108,7 @@ func TestRecoverPutsTheBaselineBackAndRestarts(t *testing.T) {
 	}
 	var sawQdiscDel bool
 	for _, c := range h.calls {
-		if strings.Contains(c, "tc qdisc del dev eth1 root") {
+		if strings.Contains(c, "/usr/sbin/tc qdisc del dev eth1 root") {
 			sawQdiscDel = true
 		}
 	}
@@ -153,14 +154,14 @@ func TestImpairAppliesReadsBackAndRestores(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		want := "sudo tc qdisc replace dev eth1 root netem delay 2000ms loss 0% && tc qdisc show dev eth1 root | grep -q netem"
+		want := "sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 2000ms loss 0% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
 		if len(r.calls) != 1 || !strings.Contains(r.calls[0], want) {
 			t.Fatalf("%s: calls = %v, want one containing %q", name, r.calls, want)
 		}
 		if err := restore(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if r.calls[1] != "sudo tc qdisc del dev eth1 root" {
+		if r.calls[1] != "sudo /usr/sbin/tc qdisc del dev eth1 root" {
 			t.Fatalf("%s: restore ran %q", name, r.calls[1])
 		}
 	}
@@ -190,7 +191,7 @@ func TestImpairNotInPlaceIsAnErrorAndCleansUp(t *testing.T) {
 	if err == nil || restore != nil {
 		t.Fatalf("Impair = (%v, %v), want an error and no restore", restore != nil, err)
 	}
-	if len(r.calls) != 2 || r.calls[1] != "sudo tc qdisc del dev eth1 root" {
+	if len(r.calls) != 2 || r.calls[1] != "sudo /usr/sbin/tc qdisc del dev eth1 root" {
 		t.Fatalf("calls = %v, want the replace then a cleanup delete", r.calls)
 	}
 }
@@ -221,5 +222,41 @@ func TestResetLeasesClearsEveryReloadedFile(t *testing.T) {
 		if strings.Contains(r.calls[0], "rm ") {
 			t.Errorf("%s reset removes files it does not reload: %q", name, r.calls[0])
 		}
+	}
+}
+
+// bareTC matches a tc that is not spelled with a path: the ssh user's
+// non-login shell has no /usr/sbin in PATH (first kea run, #23).
+var bareTC = regexp.MustCompile(`(^|[^/\w-])tc\s`)
+
+func TestEveryTCCommandNamesTheAbsolutePath(t *testing.T) {
+	ctx := context.Background()
+	h := healthyHost()
+	adapters := map[string]Adapter{"kea": &KeaAdapter{Runner: h}, "isc-dhcp": &ISCDHCPAdapter{Runner: h}, "dnsmasq": &DnsmasqAdapter{Runner: h}}
+	phase := func(name string, run func() error) {
+		before := len(h.calls)
+		if err := run(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var named int
+		for _, c := range h.calls[before:] {
+			if bareTC.MatchString(c) {
+				t.Errorf("%s calls tc by name: %q", name, c)
+			}
+			if strings.Contains(c, "/usr/sbin/tc ") {
+				named++
+			}
+		}
+		if named == 0 {
+			t.Errorf("%s ran no command naming /usr/sbin/tc: %v", name, h.calls[before:])
+		}
+	}
+	// Ready reads the qdisc on the dnsmasq source (Kea's Ready also needs its control agent).
+	phase("Ready", func() error { return adapters["dnsmasq"].Ready(ctx) })
+	for name, a := range adapters {
+		var restore func(context.Context) error
+		phase(name+" Impair", func() (err error) { restore, err = a.Impair(ctx, time.Second, 5); return })
+		phase(name+" restore", func() error { return restore(ctx) })
+		phase(name+" Recover", func() error { return a.Recover(ctx) })
 	}
 }
