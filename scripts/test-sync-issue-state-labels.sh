@@ -502,7 +502,7 @@ SYNC_ABS="$(cd "$(dirname "$SYNC")" && pwd)/$(basename "$SYNC")"
 hop_case() { # hop_case <name> <pulls-status> <want-exit> <want-not-in-output>
     local name="$1" status="$2" want_exit="$3" forbid="$4"
     local dir got_exit
-    dir=$(mktemp -d)
+    dir=$(mktemp -d -p "$TMP")
     [ -d "$dir" ] || { echo "mktemp -d failed" >&2; exit 2; }
     mkdir -p "$dir/bin" "$dir/repo"
 
