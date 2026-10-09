@@ -374,16 +374,18 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 
 // Preservation: every adapter's declared capabilities are a fixed, known
 // set -- a change here is a deliberate claim, not an accident. Group B
-// (#23) added four; only dnsmasq serves DNS from its own leases.
+// (#23) added four; only dnsmasq serves DNS from its own leases. Group C
+// (#23) adds CapImpair to all three; none declares a failover pair or a
+// relay, so C5 and C12 stay N/A.
 func TestDeclaredCapabilities(t *testing.T) {
 	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
 	cases := map[string]struct {
 		got  []Capability
 		want []Capability
 	}{
-		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange)},
-		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange)},
-		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange)},
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair)},
 	}
 	for name, c := range cases {
 		if len(c.got) != len(c.want) {
@@ -392,6 +394,11 @@ func TestDeclaredCapabilities(t *testing.T) {
 		for i := range c.want {
 			if c.got[i] != c.want[i] {
 				t.Fatalf("%s: capability %d = %s, want %s", name, i, c.got[i], c.want[i])
+			}
+		}
+		for _, have := range c.got {
+			if have == CapFailoverPair || have == CapRelay {
+				t.Fatalf("%s declares %s, which needs a cell that does not exist yet", name, have)
 			}
 		}
 	}

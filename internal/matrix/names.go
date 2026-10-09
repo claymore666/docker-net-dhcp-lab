@@ -39,6 +39,14 @@ var PlainNames = map[string]string{
 	scenario.NameB6:  "option change on renewal",
 	scenario.NameB7:  "lease release on remove",
 	scenario.NameB8:  "three containers at once",
+	scenario.NameC1:  "source down at create",
+	scenario.NameC2:  "source down past T1",
+	scenario.NameC3:  "source down past expiry",
+	scenario.NameC4:  "source restart without its lease file",
+	scenario.NameC5:  "failover, primary killed",
+	scenario.NameC10: "reply delay and loss",
+	scenario.NameC11: "validate_dhcp at create",
+	scenario.NameC12: "relay",
 }
 
 // Order is the row order the results page renders in: scenario.Catalog's

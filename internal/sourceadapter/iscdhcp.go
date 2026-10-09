@@ -16,10 +16,11 @@ import (
 // start are implemented but not yet exercised against a live instance.
 type ISCDHCPAdapter struct {
 	Runner Runner
+	base   baseline
 }
 
 func (a *ISCDHCPAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair}
 }
 
 // iscLeaseFile is the on-disk lease table this adapter reads directly
@@ -193,7 +194,7 @@ func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
 // ResetLeases stops isc-dhcp-server, truncates iscLeaseFile, and starts
 // it again (issue #3 part 2).
 func (a *ISCDHCPAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, "isc-dhcp-server", "isc-dhcp")
+	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, nil, "isc-dhcp-server", "isc-dhcp")
 }
 
 func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {
@@ -240,4 +241,17 @@ func (a *ISCDHCPAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
 		iscRoutersRE, repl, "option domain-name-servers",
 		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
+}
+
+// Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
+func (a *ISCDHCPAdapter) Ready(ctx context.Context) error {
+	return sourceReady(ctx, a.Runner, "isc-dhcp-server", "/etc/dhcp/dhcpd.conf", a.Leases, &a.base)
+}
+
+func (a *ISCDHCPAdapter) Recover(ctx context.Context) error {
+	return sourceRecover(ctx, a.Runner, "isc-dhcp-server", "/etc/dhcp/dhcpd.conf", &a.base)
+}
+
+func (a *ISCDHCPAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
+	return impair(ctx, a.Runner, delay, lossPct)
 }

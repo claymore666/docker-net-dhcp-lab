@@ -459,6 +459,7 @@ func cmdRun(args []string) int {
 		PoolStart:         cell.Source.PoolStart,
 		PoolEnd:           cell.Source.PoolEnd,
 		HostInfo:          hi,
+		Capture:           scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
 	}
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a

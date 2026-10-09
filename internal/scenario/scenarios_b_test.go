@@ -626,3 +626,9 @@ func TestRunA16FailsWhenLeaseIsGoneAfterForceRemove(t *testing.T) {
 		t.Fatalf("want the reason to name the unwanted release, got %q", v.Reason)
 	}
 }
+
+func (a *sequencedLeaseAdapter) Ready(_ context.Context) error   { return nil }
+func (a *sequencedLeaseAdapter) Recover(_ context.Context) error { return nil }
+func (a *sequencedLeaseAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

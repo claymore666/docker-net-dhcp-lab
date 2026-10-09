@@ -873,6 +873,9 @@ func TestRunB7FailsWhenTheLeaseStays(t *testing.T) {
 	src.fn = staticLeases(sourceadapter.Lease{MAC: "aa:bb:cc:00:00:01", Address: "10.200.1.101"})
 	v := runB7Tuned(context.Background(), e, 20*time.Millisecond, time.Millisecond)
 	needResult(t, v, FAIL)
+	if !strings.Contains(v.Reason, "claymore666/docker-net-dhcp#1288") {
+		t.Fatalf("B7 FAIL reason does not name the plugin issue: %q", v.Reason)
+	}
 	needCleanup(t, h, "b7", containerName(e, NameB7))
 }
 
@@ -1080,25 +1083,35 @@ func TestRunB8FailsOnIpvlanWhenTheTableShowsMoreThanOneMAC(t *testing.T) {
 
 // ---- docs against code (defeat list 10) ----
 
-func TestReadmeGroupBTableMatchesTheCatalog(t *testing.T) {
+func TestReadmeGroupBTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "B") }
+
+func TestReadmeGroupCTableMatchesTheCatalog(t *testing.T) { readmeGroupMatchesCatalog(t, "C") }
+
+func readmeGroupMatchesCatalog(t *testing.T, group string) {
+	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	readme := string(raw)
-	i := strings.Index(readme, "Group B runs today")
+	i := strings.Index(readme, "Group "+group+" runs today")
 	if i < 0 {
-		t.Fatal("README has no 'Group B runs today' table")
+		t.Fatalf("README has no 'Group %s runs today' table", group)
 	}
 	section := readme[i:]
-	rows := regexp.MustCompile(`(?m)^\| (B\d+) \|`).FindAllStringSubmatch(section, -1)
+	if j := strings.Index(section, "\n\n|"); j >= 0 {
+		if k := strings.Index(section[j+2:], "\n\n"); k >= 0 {
+			section = section[:j+2+k]
+		}
+	}
+	rows := regexp.MustCompile(`(?m)^\| (`+group+`\d+) \|`).FindAllStringSubmatch(section, -1)
 	inReadme := map[string]bool{}
 	for _, m := range rows {
 		inReadme[m[1]] = true
 	}
 	inCatalog := map[string]bool{}
 	for _, s := range Catalog {
-		if strings.HasPrefix(s.Name, "B") {
+		if strings.HasPrefix(s.Name, group) {
 			inCatalog[strings.SplitN(s.Name, "-", 2)[0]] = true
 		}
 	}

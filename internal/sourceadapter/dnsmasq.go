@@ -25,10 +25,11 @@ var dnsmasqRangeRE = regexp.MustCompile(`(?m)^(dhcp-range=(?:tag:[^,\n]+,)?[^,\n
 // exercised against a live instance.
 type DnsmasqAdapter struct {
 	Runner Runner
+	base   baseline
 }
 
 func (a *DnsmasqAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair}
 }
 
 // dnsmasqLeaseFile is the on-disk lease table this adapter reads
@@ -134,7 +135,7 @@ func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
 // ResetLeases stops dnsmasq, truncates dnsmasqLeaseFile, and starts it
 // again (issue #3 part 2).
 func (a *DnsmasqAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, dnsmasqLeaseFile, "dnsmasq", "dnsmasq")
+	return resetLeasesViaTruncate(ctx, a.Runner, dnsmasqLeaseFile, nil, "dnsmasq", "dnsmasq")
 }
 
 func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {
@@ -177,4 +178,17 @@ func (a *DnsmasqAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/dnsmasq.conf",
 		dnsmasqRouterOptionRE, repl, "dhcp-option=6,",
 		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
+}
+
+// Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
+func (a *DnsmasqAdapter) Ready(ctx context.Context) error {
+	return sourceReady(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", a.Leases, &a.base)
+}
+
+func (a *DnsmasqAdapter) Recover(ctx context.Context) error {
+	return sourceRecover(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", &a.base)
+}
+
+func (a *DnsmasqAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
+	return impair(ctx, a.Runner, delay, lossPct)
 }

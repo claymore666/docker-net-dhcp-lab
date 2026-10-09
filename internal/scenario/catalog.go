@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
@@ -47,6 +48,9 @@ type Env struct {
 	// scenario body has to carry it. Zero value when the read failed;
 	// never blocks a run.
 	HostInfo HostInfo
+	// Capture reads the live observer capture (group C, #23); nil
+	// leaves a group C scenario BLOCKED, never judged without it.
+	Capture CaptureReader
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -70,10 +74,21 @@ func Applicable(s Scenario, source sourceadapter.Adapter) (bool, string) {
 	}
 	for _, need := range s.Needs {
 		if !have[need] {
-			return false, fmt.Sprintf("source does not declare capability %q", need)
+			reason := fmt.Sprintf("source does not declare capability %q", need)
+			if why, ok := capabilityNAReason[need]; ok {
+				reason += ": " + why
+			}
+			return false, reason
 		}
 	}
 	return true, ""
+}
+
+// capabilityNAReason names, for a capability no adapter declares yet,
+// the lab issue that builds the cell it needs (C5, C12; #23).
+var capabilityNAReason = map[sourceadapter.Capability]string{
+	sourceadapter.CapFailoverPair: "needs a failover pair cell, claymore666/docker-net-dhcp-lab#12",
+	sourceadapter.CapRelay:        "needs a relay cell, claymore666/docker-net-dhcp-lab#11",
 }
 
 // Scenario name constants: the single source of truth for both Catalog
@@ -113,6 +128,15 @@ const (
 	NameB6 = "B6-option-change-on-renewal"
 	NameB7 = "B7-lease-release"
 	NameB8 = "B8-three-at-once"
+
+	NameC1  = "C1-source-down-at-start"
+	NameC2  = "C2-source-down-past-t1"
+	NameC3  = "C3-source-down-past-expiry"
+	NameC4  = "C4-restart-without-lease-db"
+	NameC5  = "C5-failover-primary-killed"
+	NameC10 = "C10-loss-and-latency"
+	NameC11 = "C11-validate-dhcp-create"
+	NameC12 = "C12-relay"
 )
 
 // MinPoolAddresses is the most pool addresses one full pass under one
@@ -129,11 +153,14 @@ const (
 // A10(2) + A11(1, pause/unpause mints nothing new) + A12(2) + A13(1,
 // its own second network is Docker's default IPAM, never this pool) +
 // A14(1) + A15(5, peak replica count) + A16(1) = 38, plus group B's 11
-// (poolDemand, counted as if every reservation and the class pool missed).
+// (poolDemand, counted as if every reservation and the class pool missed),
+// plus group C's 10: C1(2, if a failed run still kept a lease) + C2(1) +
+// C3(2, a new address after expiry) + C4(2, the reset may hand out a
+// second) + C10(2) + C11(1, the validate_dhcp probe); C5 and C12 never run.
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against this and aborts the cell as a lab error, never as a scenario
 // FAIL. TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 49
+const MinPoolAddresses = 59
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -143,6 +170,8 @@ var poolDemand = map[string]int{
 	NameA12: 2, NameA13: 1, NameA14: 1, NameA15: 5, NameA16: 1,
 	NameB1: 1, NameB2: 1, NameB3: 1, NameB4: 2, NameB5: 1, NameB6: 1,
 	NameB7: 1, NameB8: 3,
+	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 0, NameC10: 2,
+	NameC11: 1, NameC12: 0,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -183,12 +212,54 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	if ok, reason := Applicable(s, e.Source); !ok {
 		return na(s.Name, e.Cell, e.Shape, reason, e.GitSHA)
 	}
-	return s.Run(ctx, e)
+	recovered, err := ensureSourceReady(ctx, e.Source)
+	if err != nil {
+		return blocked(s.Name, e.Cell, e.Shape,
+			fmt.Sprintf("source not in a known state before this scenario: %v", err), e.GitSHA)
+	}
+	v := s.Run(ctx, e)
+	if recovered != "" {
+		v.Reason += "; the source was recovered before this scenario from: " + recovered
+	}
+	return v
+}
+
+// sourceReadyTries and sourceReadyGap bound the wait for Ready after a
+// Recover: a restarted Kea answers its control API a few seconds late
+// (group C defeat A7, #23). Variables so tests run without the wait.
+var (
+	sourceReadyTries = 6
+	sourceReadyGap   = 5 * time.Second
+)
+
+// ensureSourceReady is the group C gate (#23 defeat 1): Ready, else
+// Recover once and poll Ready; still not ready is an error the caller
+// turns into BLOCKED, never a FAIL of the next scenario. recovered names
+// what the first Ready found when Recover fixed it.
+func ensureSourceReady(ctx context.Context, src sourceadapter.Adapter) (recovered string, err error) {
+	first := src.Ready(ctx)
+	if first == nil {
+		return "", nil
+	}
+	if err := src.Recover(ctx); err != nil {
+		return "", fmt.Errorf("%v; recover failed: %w", first, err)
+	}
+	var last error
+	for i := 0; i < sourceReadyTries; i++ {
+		if last = src.Ready(ctx); last == nil {
+			return first.Error(), nil
+		}
+		if err := sleepCtx(ctx, sourceReadyGap); err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("%v; still not ready after recover: %w", first, last)
 }
 
 // Catalog is the scenario list: first lease, container restart, compose down/up,
 // daemon restart, host reboot, plugin upgrade, plugin killed, fleet
-// burst (issue #3), then group B (#23). Groups C and D are later PRs.
+// burst (issue #3), then groups B and C (#23). Group C's C6-C9 and
+// group D are later PRs.
 var Catalog = []Scenario{
 	{Name: NameA1, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA1},
 	{Name: NameA2, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runA2},
@@ -215,4 +286,12 @@ var Catalog = []Scenario{
 	{Name: NameB6, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapOptionChange}, Run: runB6},
 	{Name: NameB7, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runB7},
 	{Name: NameB8, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runB8},
+	{Name: NameC1, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}, Run: runC1},
+	{Name: NameC2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart}, Run: runC2},
+	{Name: NameC3, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart}, Run: runC3},
+	{Name: NameC4, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease}, Run: runC4},
+	{Name: NameC5, Needs: []sourceadapter.Capability{sourceadapter.CapFailoverPair}, Run: runNeverReached},
+	{Name: NameC10, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapImpair}, Run: runC10},
+	{Name: NameC11, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}, Run: runC11},
+	{Name: NameC12, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runNeverReached},
 }

@@ -39,6 +39,21 @@ type fakeAdapter struct {
 	reservedID  []string
 	dnsSet      string
 	dnsRestored bool
+
+	// group C (#23): readyErrs is consumed one per Ready call, nil after.
+	readyErrs      []error
+	readyCalls     int
+	recoverErr     error
+	recovered      int
+	stopErr        error
+	startErr       error
+	stops, starts  int
+	impairErr      error
+	impaired       []string
+	impairRestored int
+	resets         int
+	// onStop/onStart/onReset let a test change the table at that call.
+	onStop, onStart, onReset func()
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -64,10 +79,45 @@ func (f *fakeAdapter) SetDNSOption(_ context.Context, addr string) (func(context
 	f.dnsSet = addr
 	return func(context.Context) error { f.dnsRestored = true; return nil }, nil
 }
-func (f *fakeAdapter) ResetLeases(_ context.Context) error         { return f.resetErr }
-func (f *fakeAdapter) Restart(_ context.Context) error             { return nil }
-func (f *fakeAdapter) Stop(_ context.Context) error                { return nil }
-func (f *fakeAdapter) Start(_ context.Context) error               { return nil }
+func (f *fakeAdapter) ResetLeases(_ context.Context) error {
+	f.resets++
+	if f.onReset != nil {
+		f.onReset()
+	}
+	return f.resetErr
+}
+func (f *fakeAdapter) Restart(_ context.Context) error { return nil }
+func (f *fakeAdapter) Stop(_ context.Context) error {
+	f.stops++
+	if f.onStop != nil {
+		f.onStop()
+	}
+	return f.stopErr
+}
+func (f *fakeAdapter) Start(_ context.Context) error {
+	f.starts++
+	if f.onStart != nil {
+		f.onStart()
+	}
+	return f.startErr
+}
+func (f *fakeAdapter) Ready(_ context.Context) error {
+	f.readyCalls++
+	if len(f.readyErrs) > 0 {
+		err := f.readyErrs[0]
+		f.readyErrs = f.readyErrs[1:]
+		return err
+	}
+	return nil
+}
+func (f *fakeAdapter) Recover(_ context.Context) error { f.recovered++; return f.recoverErr }
+func (f *fakeAdapter) Impair(_ context.Context, delay time.Duration, loss int) (func(context.Context) error, error) {
+	if f.impairErr != nil {
+		return nil, f.impairErr
+	}
+	f.impaired = append(f.impaired, fmt.Sprintf("%s/%d", delay, loss))
+	return func(context.Context) error { f.impairRestored++; return nil }, nil
+}
 func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	if f.shortenErr != nil {

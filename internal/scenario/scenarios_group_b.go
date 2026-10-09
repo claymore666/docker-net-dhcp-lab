@@ -502,7 +502,7 @@ func runB7Tuned(ctx context.Context, e Env, wait, poll time.Duration) Verdict {
 			return pass(NameB7, e.Cell, e.Shape, fmt.Sprintf("%s no longer shows an active lease for %s %ds after the remove", "the source's table", addr, int(time.Since(start).Round(time.Second)/time.Second)), ev, e.GitSHA)
 		}
 		if time.Now().After(deadline) {
-			return fail(NameB7, e.Cell, e.Shape, fmt.Sprintf("the source's table still shows an active lease for %s %s after the remove (the release leaves 65-80 s after it)", addr, wait), ev, e.GitSHA)
+			return fail(NameB7, e.Cell, e.Shape, fmt.Sprintf("the source's table still shows an active lease for %s %s after the remove (the release leaves 65-80 s after it; an address-less parent sends none, claymore666/docker-net-dhcp#1288)", addr, wait), ev, e.GitSHA)
 		}
 		if err := sleepCtx(ctx, poll); err != nil {
 			return fail(NameB7, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
