@@ -582,6 +582,9 @@ if run_capture pihole "$tree" "$ev"; then
 elif ! grep -qF 'code lines only' "$tmp/capture.err"; then
 	echo "pack-test: FAIL -- pihole-code-address-refused: refusal did not name the line scope" >&2
 	fail=1
+elif ! grep -qF "line(s) $(grep -nF 'router = "192.168.0.1"' "$tree/etc/pihole/pihole.toml" | cut -d: -f1)," "$tmp/capture.err"; then
+	echo "pack-test: FAIL -- pihole-code-address-refused: refusal did not name the line of the address in the file (comment lines must be blanked, not dropped)" >&2
+	fail=1
 fi
 tree="$tmp/tree-pihole-trailing"
 source_tree pihole "$tree"
