@@ -376,8 +376,9 @@ func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge ma
 	return srvPrefix, nil
 }
 
-// legAddress parses one relay leg's address: inside its segment and with
-// the segment's prefix length, because netplan gets it as is (#11).
+// legAddress parses one relay leg's address: a host inside its segment
+// (not the network or broadcast address) with the segment's prefix
+// length, because netplan gets it as is (#11).
 func legAddress(s string, seg netip.Prefix) (netip.Addr, error) {
 	p, err := netip.ParsePrefix(s)
 	if err != nil {
@@ -388,6 +389,15 @@ func legAddress(s string, seg netip.Prefix) (netip.Addr, error) {
 	}
 	if p.Bits() != seg.Bits() {
 		return netip.Addr{}, fmt.Errorf("prefix length /%d differs from its segment's /%d", p.Bits(), seg.Bits())
+	}
+	network := seg.Masked().Addr().As4()
+	bcast := network
+	for i := range bcast {
+		hostBits := 8 - max(0, min(8, seg.Bits()-8*i))
+		bcast[i] |= byte(1<<hostBits - 1)
+	}
+	if a := p.Addr().As4(); a == network || a == bcast {
+		return netip.Addr{}, fmt.Errorf("%s is the network or broadcast address of %s", p.Addr(), seg.Masked())
 	}
 	return p.Addr(), nil
 }
