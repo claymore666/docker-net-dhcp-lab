@@ -106,6 +106,14 @@ archive)
 		gz) gzip -dc "$ARCHIVE" >"$raw" ;;
 		bz2) bzip2 -dc "$ARCHIVE" >"$raw" ;;
 		esac
+		# convert -f raw takes any payload and only the boot would fail;
+		# a qcow2 or vmdk inside the archive is refused here instead.
+		fmt=$(qemu-img info --output=json "$raw" | jq -r .format)
+		if [ "$fmt" != raw ]; then
+			echo "fetch-base-image: REFUSED -- $ARCHIVE holds a $fmt image, not a raw disk" >&2
+			rm -f "$raw"
+			exit 1
+		fi
 		qemu-img convert -f raw -O qcow2 "$raw" "$DEST.part"
 		rm -f "$raw"
 		mv "$DEST.part" "$DEST"
