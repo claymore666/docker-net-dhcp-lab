@@ -38,7 +38,7 @@ cat >"$tmp/bin/sudo" <<'EOF'
 { printf 'sudo'; printf ' %q' "$@"; echo; } >>"$STUB_LOG"
 [ "$2 $3" != "virsh dominfo" ]
 EOF
-for s in qemu-img ssh ssh-keygen sleep; do
+for s in qemu-img ssh-keygen sleep ssh; do
 	# shellcheck disable=SC2016 # the stub expands $@ when it runs, not here
 	printf '#!/bin/bash\n{ printf %q; printf " %%q" "$@"; echo; } >>"$STUB_LOG"\n' "$s" >"$tmp/bin/$s"
 done
@@ -94,7 +94,7 @@ for seed in qga baked; do
 	variant ".source_image.seed = \"$seed\""
 	{ grep -qx 'exit=1' "$tmp/got-variant" && grep -q "the $seed seed hook is not built" "$tmp/got-variant"; } ||
 		bad "$seed: the stub did not refuse"
-	grep -qE '^(genisoimage|sudo -n virt-install|ssh )' "$tmp/got-variant" && bad "$seed: another seed kind's hook ran"
+	grep -qE '^(genisoimage|sudo -n virt-install|ssh[ ])' "$tmp/got-variant" && bad "$seed: another seed kind's hook ran"
 done
 variant '.source_image.seed = "floppy"'
 { grep -qx 'exit=1' "$tmp/got-variant" && grep -q "unknown seed kind 'floppy'" "$tmp/got-variant"; } || bad "an unknown seed kind was not refused"
