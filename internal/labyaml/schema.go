@@ -102,11 +102,27 @@ const (
 
 var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true}
 
+// Relay is a DHCP relay VM between the cell's segment (the Docker host's
+// side) and a second, server-side segment that holds the source (#11).
+// ClientAddress is the giaddr and the router the source advertises.
+type Relay struct {
+	BaseImage     string  `yaml:"base_image" json:"base_image"`
+	MgmtAddress   string  `yaml:"mgmt_address" json:"mgmt_address"`
+	ClientAddress string  `yaml:"client_address" json:"client_address"`
+	ServerAddress string  `yaml:"server_address" json:"server_address"`
+	ServerSegment Segment `yaml:"server_segment" json:"server_segment"`
+	AgentOptions  bool    `yaml:"agent_options" json:"agent_options"`
+	VCPUs         int     `yaml:"vcpus" json:"vcpus"`
+	MemoryMiB     int     `yaml:"memory_mib" json:"memory_mib"`
+	DiskGiB       int     `yaml:"disk_gib" json:"disk_gib"`
+}
+
 type Cell struct {
 	Name        string     `yaml:"name" json:"name"`
 	Description string     `yaml:"description" json:"description"`
 	Segment     Segment    `yaml:"segment" json:"segment"`
 	Source      *Source    `yaml:"source" json:"source"` // null when the cell has no IP source (issue #1)
+	Relay       *Relay     `yaml:"relay" json:"relay"`   // null unless the source sits behind a relay (#11)
 	DockerHost  DockerHost `yaml:"docker_host" json:"docker_host"`
 }
 
@@ -159,7 +175,7 @@ func (c *Config) Validate() error {
 	}
 	var seen6 []netip.Prefix
 	seenBridge := map[string]bool{}
-	seenSubnet := map[string]bool{}
+	var seenSubnets []netip.Prefix
 	seenMgmt := map[string]bool{}
 	for i, cell := range c.Cells {
 		if cell.Name == "" {
@@ -186,13 +202,10 @@ func (c *Config) Validate() error {
 		if err := mustBeLabRange(segPrefix); err != nil {
 			return fmt.Errorf("cell %s: segment.subnet: %w", cell.Name, err)
 		}
-		if seenSubnet[segPrefix.String()] {
-			return fmt.Errorf("cell %s: subnet %s reused by another cell", cell.Name, segPrefix)
+		if err := checkSubnetFree(segPrefix, mgmtPrefix, seenSubnets); err != nil {
+			return fmt.Errorf("cell %s: segment.subnet %w", cell.Name, err)
 		}
-		seenSubnet[segPrefix.String()] = true
-		if overlaps(segPrefix, mgmtPrefix) {
-			return fmt.Errorf("cell %s: segment.subnet overlaps the management subnet", cell.Name)
-		}
+		seenSubnets = append(seenSubnets, segPrefix)
 		var seg6 netip.Prefix
 		if cell.Segment.Subnet6 != "" {
 			if !ula.IsValid() {
@@ -232,8 +245,18 @@ func (c *Config) Validate() error {
 		}
 		seenMgmt[mgmtAddr.Addr().String()] = true
 
+		// Behind a relay the source's own address lives on the server
+		// segment while its pool stays on the client segment (#11).
+		addrPrefix, addrField := segPrefix, "segment.subnet"
+		if cell.Relay != nil {
+			p, err := validateRelay(&cell, mgmtPrefix, segPrefix, seenBridge, &seenSubnets, seenMgmt)
+			if err != nil {
+				return err
+			}
+			addrPrefix, addrField = p, "relay.server_segment.subnet"
+		}
 		if cell.Source != nil {
-			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, seenMgmt); err != nil {
+			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, addrPrefix, addrField, seenMgmt); err != nil {
 				return err
 			}
 			if err := validateSource6(cell.Name, cell.Source, seg6); err != nil {
@@ -249,10 +272,127 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// checkSubnetFree refuses a subnet that overlaps management or any
+// segment subnet seen so far, of either kind: an exact-match check let
+// a /23 swallow a sibling /24 (#11).
+func checkSubnetFree(p, mgmtPrefix netip.Prefix, seen []netip.Prefix) error {
+	if overlaps(p, mgmtPrefix) {
+		return fmt.Errorf("overlaps the management subnet")
+	}
+	for _, q := range seen {
+		if overlaps(p, q) {
+			return fmt.Errorf("%s overlaps segment subnet %s", p, q)
+		}
+	}
+	return nil
+}
+
+// validateRelay checks a cell's relay block and returns its server
+// segment's prefix. The client address is the giaddr and the router, so
+// it must sit on the client segment, outside the pool and outside the
+// host octets group B and F claim at run time (ReservedGroupHost, #11).
+func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge map[string]bool, seenSubnets *[]netip.Prefix, seenMgmt map[string]bool) (netip.Prefix, error) {
+	r := cell.Relay
+	fail := func(format string, a ...any) (netip.Prefix, error) {
+		return netip.Prefix{}, fmt.Errorf("cell %s: relay.%s", cell.Name, fmt.Sprintf(format, a...))
+	}
+	if cell.Source == nil {
+		return fail("needs a source behind it")
+	}
+	if cell.Source.Type != "kea" {
+		return fail("is only built for a kea source; isc-dhcp needs an empty server-segment subnet stanza first")
+	}
+	if r.BaseImage == "" {
+		return fail("base_image is required")
+	}
+	if _, err := LookupBaseImage(r.BaseImage); err != nil {
+		return fail("base_image: %v", err)
+	}
+	b := r.ServerSegment.Bridge
+	if b == "" {
+		return fail("server_segment.bridge is required")
+	}
+	if len(b) > maxIfnameLen {
+		return fail("server_segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", b, len(b), maxIfnameLen)
+	}
+	if seenBridge[b] {
+		return fail("server_segment.bridge %s reused by another segment", b)
+	}
+	seenBridge[b] = true
+	srvPrefix, err := netip.ParsePrefix(r.ServerSegment.Subnet)
+	if err != nil {
+		return fail("server_segment.subnet: %v", err)
+	}
+	if err := mustBeLabRange(srvPrefix); err != nil {
+		return fail("server_segment.subnet: %v", err)
+	}
+	if err := checkSubnetFree(srvPrefix, mgmtPrefix, *seenSubnets); err != nil {
+		return fail("server_segment.subnet %v", err)
+	}
+	*seenSubnets = append(*seenSubnets, srvPrefix)
+
+	mgmtAddr, err := netip.ParsePrefix(r.MgmtAddress)
+	if err != nil {
+		return fail("mgmt_address: %v", err)
+	}
+	if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+		return fail("mgmt_address is not inside management.subnet")
+	}
+	if seenMgmt[mgmtAddr.Addr().String()] {
+		return fail("mgmt_address %s reused by another host in lab.yaml", mgmtAddr.Addr())
+	}
+	seenMgmt[mgmtAddr.Addr().String()] = true
+
+	client, err := legAddress(r.ClientAddress, segPrefix)
+	if err != nil {
+		return fail("client_address: %v", err)
+	}
+	start, err1 := netip.ParseAddr(cell.Source.PoolStart)
+	end, err2 := netip.ParseAddr(cell.Source.PoolEnd)
+	if err1 == nil && err2 == nil && client.Compare(start) >= 0 && client.Compare(end) <= 0 {
+		return fail("client_address %s lies inside the source pool", client)
+	}
+	if ReservedGroupHost(int(client.As4()[3])) {
+		return fail("client_address %s is a host octet group B or F reserves", client)
+	}
+	server, err := legAddress(r.ServerAddress, srvPrefix)
+	if err != nil {
+		return fail("server_address: %v", err)
+	}
+	if seg, err := netip.ParsePrefix(cell.Source.SegAddress); err == nil && seg.Addr() == server {
+		return fail("server_address %s is also source.seg_address", server)
+	}
+	return srvPrefix, nil
+}
+
+// legAddress parses one relay leg's address: inside its segment and with
+// the segment's prefix length, because netplan gets it as is (#11).
+func legAddress(s string, seg netip.Prefix) (netip.Addr, error) {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if !seg.Contains(p.Addr()) {
+		return netip.Addr{}, fmt.Errorf("%s is not inside %s", p.Addr(), seg)
+	}
+	if p.Bits() != seg.Bits() {
+		return netip.Addr{}, fmt.Errorf("prefix length /%d differs from its segment's /%d", p.Bits(), seg.Bits())
+	}
+	return p.Addr(), nil
+}
+
+// ReservedGroupHost reports whether a /24 host octet is one group B or F
+// claims at run time: 203-210 user-class pool, 211-220 reservations,
+// 221-230 class pool, 253 DNS option. internal/scenario/groupb_addrs.go
+// owns the numbers; TestRelayReservedHostsMatchGroupB keeps them equal.
+func ReservedGroupHost(host int) bool {
+	return (host >= 203 && host <= 230) || host == 253
+}
+
 // validateSource checks one cell's IP source: it must sit inside the
 // cell's own segment (never management.subnet, issue #2), and its pool
 // must be a real range inside that same segment.
-func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
+func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefix netip.Prefix, addrField string, seenMgmt map[string]bool) error {
 	if !sourceTypes[s.Type] {
 		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq", cellName, s.Type)
 	}
@@ -278,8 +418,8 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 	if err != nil {
 		return fmt.Errorf("cell %s: source.seg_address: %w", cellName, err)
 	}
-	if !segPrefix.Contains(segAddr.Addr()) {
-		return fmt.Errorf("cell %s: source.seg_address is not inside segment.subnet", cellName)
+	if !addrPrefix.Contains(segAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.seg_address is not inside %s", cellName, addrField)
 	}
 
 	start, err := netip.ParseAddr(s.PoolStart)
