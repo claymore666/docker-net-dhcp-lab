@@ -1,0 +1,131 @@
+== source VM (isc-dhcp, primary) ==
+== wait for cloud-init (bounded) ==
+up-source: isc-dhcp source (isc-dhcp, primary) ready at 10.200.255.31, segment address 10.200.2.2
+exit=0
+=== calls
+fetch-base-image debian-13-generic-amd64 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b /srv/lab/images/debian-13-generic-amd64.qcow2 @TMP@/work-isc-dhcp/lab-isc-dhcp-source.qcow2 6G
+genisoimage -output @TMP@/work-isc-dhcp/lab-isc-dhcp-source-seed.iso -volid cidata -joliet -rock @TMP@/work-isc-dhcp/seed-source/user-data @TMP@/work-isc-dhcp/seed-source/meta-data @TMP@/work-isc-dhcp/seed-source/network-config
+--- user-data
+#cloud-config
+# ISC dhcpd source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-isc-dhcp-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaGolden lab-controller
+package_update: true
+runcmd:
+  # noninteractive: the kea cell hit a debconf prompt that hung apt-get
+  # with no frontend (issue #2, measured live 2026-09-25); same guard
+  # here in case any future isc-dhcp-server package version adds one.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server radvd dnsmasq-base iputils-arping
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
+  - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock
+  - touch /etc/dhcp/lab-reservations.conf /var/lib/dhcp/dhcpd6.leases
+  - |
+    cat >/etc/dhcp/dhcpd.conf <<'DHCPDEOF'
+    default-lease-time 600;
+    max-lease-time 7200;
+    authoritative;
+    class "b5" {
+      match if option vendor-class-identifier = "lab-class-b5";
+    }
+    subnet 10.200.2.0 netmask 255.255.255.0 {
+      pool {
+        deny members of "b5";
+        range 10.200.2.100 10.200.2.200;
+      }
+      pool {
+        allow members of "b5";
+        range 10.200.2.221 10.200.2.230;
+      }
+      option routers 10.200.2.2;
+    }
+    include "/etc/dhcp/lab-reservations.conf";
+    DHCPDEOF
+  # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the rapid commit
+  # and temporary address features uncomment; the init script runs -4 and -6 together.
+  - |
+    cat >/etc/dhcp/dhcpd6.conf <<'DHCPDEOF'
+    default-lease-time 7200;
+    preferred-lifetime 3600;
+    #lab-rapid-commit option dhcp6.rapid-commit;
+    subnet6 fd42:200:0:200::/64 {
+      range6 fd42:200:0:200::100 fd42:200:0:200::1ff;
+      #lab-temporary range6 fd42:200:0:200::200/120 temporary;
+    }
+    DHCPDEOF
+  # IPv6 RA for the segment (#23 group D): M=1 A=1, router lifetime 1800,
+  # the cell's /64. radvd needs no forwarding (measured with forwarding 0).
+  - |
+    cat >/etc/radvd.conf <<'RADVDEOF'
+    interface eth1 {
+      AdvSendAdvert on;
+      MinRtrAdvInterval 3;
+      MaxRtrAdvInterval 10;
+      AdvManagedFlag on;
+      AdvOtherConfigFlag off;
+      AdvDefaultLifetime 1800;
+      prefix fd42:200:0:200::/64 {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 7200;
+        AdvPreferredLifetime 3600;
+      };
+    };
+    RADVDEOF
+  - |
+    cat >/etc/default/isc-dhcp-server <<'DHCPDEOF'
+    INTERFACESv4="eth1"
+    INTERFACESv6="eth1"
+    DHCPDEOF
+  # restart, not enable --now: the kea cell found that apt-get's postinst
+  # can already have started the service against a stock config, making
+  # enable --now a no-op that leaves the stock config running instead of
+  # ours (issue #2, measured live 2026-09-25).
+  - systemctl enable isc-dhcp-server radvd
+  - systemctl restart isc-dhcp-server radvd
+  - touch /var/lib/cloud/lab-bootstrap-done
+--- meta-data
+instance-id: lab-isc-dhcp-source
+local-hostname: lab-isc-dhcp-source
+--- network-config
+# Source VM networking (issue #2): dual-homed like the docker host --
+# eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
+# naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
+# base image). eth1 carries a real address here: the source binds and
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
+# the segment's own router (none exists) reconfigure this NIC.
+# macaddress quoted and no top-level `network:` key, both for the same
+# reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
+# MAC parses as a YAML int, and the wrapper key makes cloud-init's
+# NoCloud datasource skip applying the config entirely.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "52:54:00:7d:81:a0"
+    set-name: eth0
+    addresses: [10.200.255.31/24]
+    gateway4: 10.200.255.1
+    nameservers:
+      addresses: [10.200.255.1]
+  seg0:
+    match:
+      macaddress: "52:54:00:b7:a1:e8"
+    set-name: eth1
+    addresses: [10.200.2.2/24, "fd42:200:0:200::2/64"]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+sudo -n virsh dominfo lab-isc-dhcp-source
+sudo -n virt-install --name lab-isc-dhcp-source --memory 1024 --vcpus 1 --disk path=@TMP@/work-isc-dhcp/lab-isc-dhcp-source.qcow2\,format=qcow2\,bus=virtio --disk path=@TMP@/work-isc-dhcp/lab-isc-dhcp-source-seed.iso\,device=cdrom --network network=net-mgmt\,model=virtio\,mac=52:54:00:7d:81:a0 --network bridge=lab-br-isc-dhcp\,model=virtio\,mac=52:54:00:b7:a1:e8 --os-variant debian13 --cpu host-model --boot loader=/usr/share/OVMF/OVMF_CODE_4M.fd\,loader_ro=yes\,loader_type=pflash\,loader_secure=off\,nvram_template=/usr/share/OVMF/OVMF_VARS_4M.fd\,nvram=@TMP@/work-isc-dhcp/lab-isc-dhcp-source-VARS.fd --graphics none --noautoconsole --import
+ssh -o UserKnownHostsFile=@TMP@/work-isc-dhcp/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o ControlMaster=no -o ControlPath=none -i @TMP@/home/.ssh/id_ed25519_lab lab@10.200.255.31 test\ -f\ /var/lib/cloud/lab-bootstrap-done

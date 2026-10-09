@@ -1,0 +1,82 @@
+== source VM (udhcpd, primary) ==
+== wait for cloud-init (bounded) ==
+up-source: udhcpd source (udhcpd, primary) ready at 10.200.255.121, segment address 10.200.12.2
+exit=0
+=== calls
+fetch-base-image debian-13-generic-amd64 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b /srv/lab/images/debian-13-generic-amd64.qcow2 @TMP@/work-udhcpd/lab-udhcpd-source.qcow2 6G
+genisoimage -output @TMP@/work-udhcpd/lab-udhcpd-source-seed.iso -volid cidata -joliet -rock @TMP@/work-udhcpd/seed-source/user-data @TMP@/work-udhcpd/seed-source/meta-data @TMP@/work-udhcpd/seed-source/network-config
+--- user-data
+#cloud-config
+# busybox udhcpd source cell (issue #10). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-udhcpd-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaGolden lab-controller
+package_update: true
+runcmd:
+  # The Debian udhcpd postinst starts the service on the stock config
+  # (interface eth0, the management leg); policy-rc.d keeps it from
+  # running there even for a second. dnsmasq-base and iputils-arping are
+  # what the rogue-server and squatter actors need (group C).
+  - printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y udhcpd dnsmasq-base iputils-arping
+  - rm -f /usr/sbin/policy-rc.d
+  - mkdir -p /root/lab-stock-config /var/lib/misc
+  - cp /etc/udhcpd.conf /root/lab-stock-config/udhcpd.conf.stock
+  - |
+    cat >/etc/udhcpd.conf <<'UDHCPDEOF'
+    interface eth1
+    start 10.200.12.100
+    end 10.200.12.200
+    option subnet 255.255.255.0
+    option router 10.200.12.2
+    option lease 43200
+    min_lease 60
+    lease_file /var/lib/misc/udhcpd.leases
+    UDHCPDEOF
+  - systemctl enable udhcpd
+  - systemctl restart udhcpd
+  - touch /var/lib/cloud/lab-bootstrap-done
+--- meta-data
+instance-id: lab-udhcpd-source
+local-hostname: lab-udhcpd-source
+--- network-config
+# Source VM networking (issue #2): dual-homed like the docker host --
+# eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
+# naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
+# base image). eth1 carries a real address here: the source binds and
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
+# the segment's own router (none exists) reconfigure this NIC.
+# macaddress quoted and no top-level `network:` key, both for the same
+# reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
+# MAC parses as a YAML int, and the wrapper key makes cloud-init's
+# NoCloud datasource skip applying the config entirely.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "52:54:00:3d:3b:dc"
+    set-name: eth0
+    addresses: [10.200.255.121/24]
+    gateway4: 10.200.255.1
+    nameservers:
+      addresses: [10.200.255.1]
+  seg0:
+    match:
+      macaddress: "52:54:00:e1:da:e4"
+    set-name: eth1
+    addresses: [10.200.12.2/24]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+sudo -n virsh dominfo lab-udhcpd-source
+sudo -n virt-install --name lab-udhcpd-source --memory 1024 --vcpus 1 --disk path=@TMP@/work-udhcpd/lab-udhcpd-source.qcow2\,format=qcow2\,bus=virtio --disk path=@TMP@/work-udhcpd/lab-udhcpd-source-seed.iso\,device=cdrom --network network=net-mgmt\,model=virtio\,mac=52:54:00:3d:3b:dc --network bridge=lab-br-udhcpd\,model=virtio\,mac=52:54:00:e1:da:e4 --os-variant debian13 --cpu host-model --boot loader=/usr/share/OVMF/OVMF_CODE_4M.fd\,loader_ro=yes\,loader_type=pflash\,loader_secure=off\,nvram_template=/usr/share/OVMF/OVMF_VARS_4M.fd\,nvram=@TMP@/work-udhcpd/lab-udhcpd-source-VARS.fd --graphics none --noautoconsole --import
+ssh -o UserKnownHostsFile=@TMP@/work-udhcpd/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o ControlMaster=no -o ControlPath=none -i @TMP@/home/.ssh/id_ed25519_lab lab@10.200.255.121 test\ -f\ /var/lib/cloud/lab-bootstrap-done
