@@ -188,8 +188,9 @@ func TestRelayCapabilities(t *testing.T) {
 	// The squatter and the rogue server would sit on the source's server
 	// segment, not the client one, and C9 cannot move a source that is
 	// not on the client segment: behind a relay C6, C6b, C7 and C9 are
-	// N/A (#11, #23). The narrowed pool still works through the relay.
-	all := []Capability{CapV4, CapRestart, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber}
+	// N/A (#11, #23). dhcrelay relays v4 only and an RA never crosses a
+	// router, so group D is N/A too. The narrowed pool still works.
+	all := []Capability{CapV4, CapRestart, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64}
 	inner := &innerStub{caps: slices.Clone(all)}
 	got := WithRelay(inner, &scriptRunner{}, testRelayParams).Capabilities()
 	if !slices.Equal(got, []Capability{CapV4, CapRestart, CapNarrowPool, CapRelay}) {

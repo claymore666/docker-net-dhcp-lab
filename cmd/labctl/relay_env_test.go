@@ -140,7 +140,8 @@ func TestCellEnvWiresTheRelay(t *testing.T) {
 	}
 	src := &fakeHost{replies: map[string]string{
 		"lease4-get-all":  `[{"result":3,"text":"0 IPv4 lease(s) found."}]`,
-		"printf 'netns:'": "netns:\nlinks:\nprocs:0\nnetem:0\naddr:10.200.11.2/24 \ncfg:\n{}\n",
+		"lease6-get-all":  `[{"result":3,"text":"0 IPv6 lease(s) found."}]`,
+		"printf 'netns:'": "netns:\nlinks:\nprocs:0\nnetem:0\naddr:10.200.11.2/24 \naddr6:fd42:200:0:a00::2/64 \ncfg6:/etc/kea/kea-dhcp6.conf:e30K\ncfg6:/etc/radvd.conf:e30K\ncfg:\n{}\n",
 	}}
 	relay := &fakeHost{reply: "02:11:00:00:00:01\n02:11:00:00:00:02\n"}
 	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): src, hostPart(cell.Relay.MgmtAddress): relay}
@@ -161,8 +162,19 @@ func TestCellEnvWiresTheRelay(t *testing.T) {
 	if c, ok := env.ServerCapture.(scenario.ObserverCapture); !ok || c.Cell != "kea-relay-srv" {
 		t.Errorf("ServerCapture %#v, want the kea-relay-srv observer", env.ServerCapture)
 	}
-	if !slices.Contains(env.Source.Capabilities(), sourceadapter.CapRelay) {
-		t.Errorf("capabilities %v lack CapRelay", env.Source.Capabilities())
+	if caps := env.Source.Capabilities(); !slices.Contains(caps, sourceadapter.CapRelay) || slices.Contains(caps, sourceadapter.CapV6) {
+		t.Errorf("capabilities %v, want CapRelay and no CapV6", caps)
+	}
+	// The pre-shape pool check counts only what the wrapped source can
+	// run: the group D scenarios the relay declares N/A add nothing (#11, #12).
+	plain := &sourceadapter.KeaAdapter{}
+	if got, all := scenario.PoolDemand(scenario.Catalog, env.Source), scenario.PoolDemand(scenario.Catalog, plain); got >= all {
+		t.Errorf("relay cell pool demand %d, want less than the plain source's %d", got, all)
+	}
+	if capacity, err := poolCapacity(cell.Source.PoolStart, cell.Source.PoolEnd); err != nil {
+		t.Fatal(err)
+	} else if ok, reason := poolHasCapacityFor(capacity, 0, scenario.PoolDemand(scenario.Catalog, env.Source)); !ok {
+		t.Errorf("relay cell pool: %s", reason)
 	}
 	if err := env.Source.Recover(context.Background()); err != nil {
 		t.Fatalf("Recover: %v", err)
