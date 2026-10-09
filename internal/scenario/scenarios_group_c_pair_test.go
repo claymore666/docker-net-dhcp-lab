@@ -145,7 +145,7 @@ type c5Rig struct {
 	grant                               string
 	no51, noRenewal, noUnicast, deadACK bool
 	lateRenewal, noRebind, rebindByDead bool
-	noSurvivorRenew                     bool
+	noSurvivorRenew, renewToSurvivor    bool
 	bindServer                          string
 }
 
@@ -180,6 +180,8 @@ func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 		case r.noRenewal:
 		case r.lateRenewal:
 			out = append(out, req(t2.Add(5*ms), "r", addr, gid))
+		case r.renewToSurvivor:
+			out = append(out, req(t1.Add(10*ms), "r", addr, sid))
 		default:
 			out = append(out, req(t1.Add(10*ms), "r", addr, gid))
 		}
@@ -236,6 +238,7 @@ func TestRunC5Judges(t *testing.T) {
 		{"no renewal and no unicast seen", func(r *c5Rig) { r.noRenewal, r.noUnicast = true, true }, BLOCKED, "absence is not judged"},
 		{"no renewal", func(r *c5Rig) { r.noRenewal = true }, FAIL, "no REQUEST from"},
 		{"renewal only after T2", func(r *c5Rig) { r.lateRenewal = true }, FAIL, "between T1"},
+		{"renewal unicast to the survivor", func(r *c5Rig) { r.renewToSurvivor = true }, FAIL, "no REQUEST from"},
 		{"no rebind", func(r *c5Rig) { r.noRebind = true }, FAIL, "no broadcast REQUEST"},
 		{"rebind ACKed by the stopped peer", func(r *c5Rig) { r.rebindByDead, r.deadACK = true, false }, BLOCKED, "the stop did not land"},
 		{"the survivor never extends", func(r *c5Rig) { r.noSurvivorRenew = true }, FAIL, "shows no renewed lease"},
@@ -433,7 +436,10 @@ func TestRunC5cJudges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newC5bRig(t, NameC5c)
 			tc.set(r)
-			v := runC5cTuned(context.Background(), r.e, cFast)
+			// A judge that never returns has failed; the slowest case takes 0.8 s (#12).
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			v := runC5cTuned(ctx, r.e, cFast)
 			needResult(t, v, tc.result)
 			needReason(t, v, tc.reason)
 			needWritten(t, r.e, v)
@@ -580,6 +586,9 @@ func TestRunC5dJudges(t *testing.T) {
 			m.CHAddr = "aa:bb:cc:99:00:02"
 			r.extraACK = []DHCPMsg{m}
 		}, FAIL, "overlapping leases"},
+		{"a container loses its address", func(r *c5dRig) {
+			r.h.setAddrs(containerName(r.e, NameC5d)+"-03", "10.200.1.250")
+		}, FAIL, "does not carry its address 10.200.1.103"},
 		{"an ACK without option 51", func(r *c5dRig) { r.no51 = true }, BLOCKED, "carries no option 51"},
 		{"the observer missed a container", func(r *c5dRig) { r.blind = true }, BLOCKED, "holds no ACK of 10.200.1.107"},
 		{"the partner never takes over", func(r *c5dRig) {
