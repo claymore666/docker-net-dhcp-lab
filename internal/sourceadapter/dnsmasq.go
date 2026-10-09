@@ -49,7 +49,9 @@ func (a *DnsmasqAdapter) Leases(ctx context.Context) ([]Lease, error) {
 // <client-id>". A blank file (dnsmasq creates it at startup even with
 // zero leases) is a genuine empty table; a line with too few fields, or
 // a MAC that does not parse, is a truncated or malformed read and must
-// fail rather than silently drop that row (issue #2).
+// fail rather than silently drop that row (issue #2). The v4 table ends
+// at the "duid" line; the DHCPv6 rows after it are parseDnsmasqLeases6's
+// (#23 group D).
 func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	trimmed := strings.TrimRight(raw, "\n")
 	if trimmed == "" {
@@ -59,6 +61,9 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 	leases := make([]Lease, 0, len(lines))
 	for i, line := range lines {
 		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "duid" {
+			break
+		}
 		if len(fields) < 4 {
 			return nil, fmt.Errorf("dnsmasq: lease line %d has %d field(s), want at least 4: %q", i+1, len(fields), line)
 		}

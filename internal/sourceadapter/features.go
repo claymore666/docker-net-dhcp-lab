@@ -28,6 +28,12 @@ const (
 	// the ACK, an option 90 carrying Nonce, so a FORCERENEW signed with
 	// it can be checked (F8-forcerenew, RFC 6704 3.1.2).
 	FeatureForceRenewNonce Feature = "forcerenew-nonce"
+	// FeatureRapidCommit6 answers a Solicit with option 14 by a Reply
+	// (F4-rapid-commit-v6, RFC 8415 section 18.3.1).
+	FeatureRapidCommit6 Feature = "rapid-commit-6"
+	// FeatureTemporary6 grants IA_TA from the source's temp6_pool
+	// (F5-temporary-address, RFC 8415 section 21.5).
+	FeatureTemporary6 Feature = "temporary-6"
 )
 
 // ForceRenewNonceLen is the nonce length RFC 6704 3.1.2 fixes for
@@ -89,7 +95,7 @@ func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
 			}
 			v.clientID = id
 		}
-	case FeatureRapidCommit4:
+	case FeatureRapidCommit4, FeatureRapidCommit6, FeatureTemporary6:
 	case FeatureForceRenewNonce:
 		if len(p.Nonce) != ForceRenewNonceLen {
 			return v, fmt.Errorf("forcerenew nonce is %d bytes, want %d", len(p.Nonce), ForceRenewNonceLen)

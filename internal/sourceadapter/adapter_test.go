@@ -93,7 +93,7 @@ func TestReserveMACSendsNormalizedValues(t *testing.T) {
 // reach the runner at all, across
 // every adapter, not just one.
 func TestReachableRejectsInjectionBeforeAnySSH(t *testing.T) {
-	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fd42:200::1", ""}
+	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fe80::1%eth1", "::ffff:10.200.1.1", ""}
 	adapters := map[string]Adapter{
 		"kea":      &KeaAdapter{},
 		"isc-dhcp": &ISCDHCPAdapter{},
@@ -402,7 +402,7 @@ func TestDeclaredCapabilities(t *testing.T) {
 			}
 		}
 		for _, have := range c.got {
-			if have == CapFailoverPair || have == CapRelay || have == CapV6 {
+			if have == CapFailoverPair || have == CapRelay || have == CapPD || have == CapPref64 {
 				t.Fatalf("%s declares %s, which needs a cell that does not exist yet", name, have)
 			}
 		}

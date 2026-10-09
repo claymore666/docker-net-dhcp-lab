@@ -159,10 +159,13 @@ func TestEnableFeatureRefusesWhatTheSourceCannotDo(t *testing.T) {
 			t.Errorf("%s wrote a config for a refused feature", name)
 		}
 	}
-	for name := range baselines {
-		if hasCap(featureAdapter(name, nil), CapV6) {
-			t.Errorf("%s declares CapV6 before the IPv6 segment exists (#23 group D)", name)
-		}
+	r := baselineRunner(t, "kea")
+	a := featureAdapter("kea", r)
+	if hasCap(a, CapTemporary6) {
+		t.Error("kea declares CapTemporary6; Kea 2.6.3 grants no IA_TA")
+	}
+	if _, err := a.EnableFeature(context.Background(), FeatureTemporary6, FeatureParams{}); err == nil || len(r.writes) != 0 {
+		t.Errorf("kea accepted FeatureTemporary6 (err %v, %d writes)", err, len(r.writes))
 	}
 }
 

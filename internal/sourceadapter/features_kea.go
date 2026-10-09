@@ -15,15 +15,25 @@ var (
 	// keaLeaseCmdsHookRE anchors the flex_option hook on the lease_cmds
 	// line and reuses its directory, which is per architecture.
 	keaLeaseCmdsHookRE = regexp.MustCompile(`(\{ "library": "([^"]*/)libdhcp_lease_cmds\.so" \})`)
+	// keaRapidCommit6RE anchors on the subnet6 flag kea-dhcp6.conf
+	// carries off at baseline (cloud-init/kea-user-data).
+	keaRapidCommit6RE = regexp.MustCompile(`"rapid-commit": false`)
 )
 
 // EnableFeature rewrites the running kea-dhcp4.conf (#20). Kea 2.6.3
 // has no DHCPv4 rapid commit (ARM, DHCPv4 page), so FeatureRapidCommit4
 // is refused here and the adapter does not declare CapRapidCommit4.
+// FeatureRapidCommit6 edits kea-dhcp6.conf instead. Kea 2.6.3 grants
+// no IA_TA whatever the config (MEASURED 2026-10-09,
+// #23), so FeatureTemporary6 is refused and CapTemporary6 not declared.
 func (a *KeaAdapter) EnableFeature(ctx context.Context, f Feature, p FeatureParams) (func(context.Context) error, error) {
 	v, err := validateFeature(f, p)
 	if err != nil {
 		return nil, err
+	}
+	if f == FeatureRapidCommit6 {
+		edits := []configEdit{{keaRapidCommit6RE, `"rapid-commit": true`, "the subnet6 rapid-commit flag"}}
+		return enableFeatureViaSubstitution(ctx, a.Runner, keaDHCP6Conf, `"rapid-commit": true`, edits, a.restart6, "kea")
 	}
 	var edits []configEdit
 	var already string
