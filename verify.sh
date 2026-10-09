@@ -326,6 +326,9 @@ echo "== pack fixture tests =="
 echo "== commit-message check fixture tests =="
 ./scripts/commit-message-check-test.sh
 
+echo "== issue state label sync: parser and reconciler tests (#41) =="
+./scripts/test-sync-issue-state-labels.sh
+
 echo "== no AI attribution =="
 if git rev-parse --verify origin/dev >/dev/null 2>&1; then
 	range="origin/dev..HEAD"
