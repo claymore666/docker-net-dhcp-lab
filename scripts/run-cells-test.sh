@@ -199,6 +199,15 @@ expect "case 4d (failover partner domain exists)" 1 "$e"
 has "case 4d" "$e" "REFUSED -- domain lab-kea-ha-partner already exists"
 [ "$(started "$e")" -eq 0 ] || { echo "run-cells-test: FAIL -- case 4d: a cell was started" >&2; fail=1; }
 
+# A relay VM left by an earlier run of a relay cell (#11).
+e=$(new_env)
+meminfo "$e" 60
+echo "lab-dnsmasq-relay" >"$e/state/existing"
+cells "$e" kea dnsmasq
+expect "case 4d (relay domain exists)" 1 "$e"
+has "case 4d" "$e" "REFUSED -- domain lab-dnsmasq-relay already exists"
+[ "$(started "$e")" -eq 0 ] || { echo "run-cells-test: FAIL -- case 4d: a cell was started" >&2; fail=1; }
+
 # Case 5: a cell that lab.yaml does not know refuses before any start,
 # even when it comes after cells that would have been fine.
 e=$(new_env)
