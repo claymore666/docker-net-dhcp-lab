@@ -249,6 +249,8 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.ISCDHCPAdapter{Runner: runner}, nil
 	case "dnsmasq":
 		return &sourceadapter.DnsmasqAdapter{Runner: runner}, nil
+	case "udhcpd":
+		return &sourceadapter.UdhcpdAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}

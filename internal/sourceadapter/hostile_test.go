@@ -388,7 +388,7 @@ func TestRogueLeasesReadsTheRoguesOwnFile(t *testing.T) {
 // arping from iputils-arping; a source VM without either reports C6-C9
 // BLOCKED (#23).
 func TestSourceTemplatesInstallTheHostileTools(t *testing.T) {
-	for _, tmpl := range []string{"kea-user-data.tmpl.yaml", "isc-dhcp-user-data.tmpl.yaml", "dnsmasq-user-data.tmpl.yaml"} {
+	for _, tmpl := range []string{"kea-user-data.tmpl.yaml", "isc-dhcp-user-data.tmpl.yaml", "dnsmasq-user-data.tmpl.yaml", "udhcpd-user-data.tmpl.yaml"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "cloud-init", tmpl))
 		if err != nil {
 			t.Fatal(err)
@@ -406,6 +406,15 @@ func TestSourceTemplatesInstallTheHostileTools(t *testing.T) {
 			}
 			if !found {
 				t.Errorf("%s: apt-get install lists %v, missing %s", tmpl, install, pkg)
+			}
+		}
+		// udhcpd must not pull the dnsmasq package: its postinst starts a
+		// resolver on the segment (lab #10).
+		if strings.HasPrefix(tmpl, "udhcpd") {
+			for _, f := range install {
+				if f == "dnsmasq" {
+					t.Errorf("%s installs the dnsmasq package, not dnsmasq-base", tmpl)
+				}
 			}
 		}
 	}
