@@ -402,3 +402,21 @@ func TestRealLabYAMLSourcesHaveV6(t *testing.T) {
 		}
 	}
 }
+
+// The exact-match subnet check let a wider prefix swallow a sibling cell's
+// /24 (#11); a duplicate subnet must stay refused too.
+func TestRejectsOverlappingCellSubnets(t *testing.T) {
+	cases := []struct{ subnet, seg, start, end string }{
+		{"10.200.0.0/24", "10.200.0.2/24", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.0/23", "10.200.0.2/23", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.64/26", "10.200.0.66/26", "10.200.0.70", "10.200.0.80"},
+	}
+	for _, tc := range cases {
+		r := strings.NewReplacer("      subnet: 10.200.1.0/24", "      subnet: "+tc.subnet,
+			"10.200.1.2/24", tc.seg, "10.200.1.100", tc.start, "10.200.1.200", tc.end)
+		_, err := Load(write(t, r.Replace(withSource)))
+		if err == nil || !strings.Contains(err.Error(), "overlaps segment subnet 10.200.0.0/24") {
+			t.Fatalf("%s beside 10.200.0.0/24: want an overlap error, got %v", tc.subnet, err)
+		}
+	}
+}
