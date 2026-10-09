@@ -22,11 +22,12 @@ DISK_WAIT=${LAB_DISK_WAIT:-600}
 DISK_POLL=${LAB_DISK_POLL:-30}
 
 usage() {
-	echo "usage: run-cells.sh [-j N] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
+	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
 }
 
 JOBS=""
 ROOT=""
+STAGGER=60
 CHECK_ONLY=0
 CELLS=()
 while [ $# -gt 0 ]; do
@@ -37,6 +38,14 @@ while [ $# -gt 0 ]; do
 			exit 2
 		fi
 		if [ "$1" = "-j" ]; then JOBS=$2; else ROOT=$2; fi
+		shift 2
+		;;
+	--stagger)
+		if [ $# -lt 2 ]; then
+			usage
+			exit 2
+		fi
+		STAGGER=$2
 		shift 2
 		;;
 	--check)
@@ -55,6 +64,10 @@ while [ $# -gt 0 ]; do
 done
 if [ "${#CELLS[@]}" -eq 0 ]; then
 	usage
+	exit 2
+fi
+if ! [[ "$STAGGER" =~ ^[0-9]+$ ]]; then
+	echo "run-cells: REFUSED -- --stagger wants a non-negative integer, got '$STAGGER'" >&2
 	exit 2
 fi
 if [ -n "$JOBS" ] && ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
@@ -192,6 +205,7 @@ declare -A PID_CELL=() RC=() START=() END=()
 RUNNING=0
 TERMINATING=0
 NAP_PID=""
+LAST_LAUNCH=""
 
 # Interruptible sleep: a signal ends the wait at once, not after $1 s.
 nap() {
@@ -219,6 +233,18 @@ wait_for_disk() {
 	done
 }
 
+# A gap between launches, not between finishes: every cell's cloud-init,
+# ssh and plugin install ran at once in the first -j 6 run (#38), and the
+# slowest guests missed their boot-time bounds. 0 disables.
+stagger_gap() {
+	local left
+	[ "$((10#$STAGGER))" -gt 0 ] && [ -n "$LAST_LAUNCH" ] || return 0
+	left=$((10#$STAGGER - (EPOCHSECONDS - LAST_LAUNCH)))
+	[ "$left" -gt 0 ] || return 0
+	echo "run-cells: waiting ${left}s before the next start (--stagger $STAGGER)"
+	nap "$left"
+}
+
 start_cell() {
 	local cell=$1 pid
 	rm -f "$ROOT/logs/$cell.rc"
@@ -243,8 +269,20 @@ start_cell() {
 		>"$ROOT/logs/$cell.log" 2>&1 </dev/null &
 	pid=$!
 	PID_CELL[$pid]=$cell
+	LAST_LAUNCH=$EPOCHSECONDS
 	RUNNING=$((RUNNING + 1))
 	echo "run-cells: started $cell (pid $pid), log $ROOT/logs/$cell.log"
+}
+
+# One teardown routine for a signal and for a cell that exited non-zero
+# (#38): run-cell.sh tears down only on its own success path, so a failed
+# cell left its VMs and bridge behind in the first -j 6 run.
+teardown_cell() {
+	local cell=$1
+	echo "run-cells: tearing down $cell"
+	echo "run-cells: tearing down $cell" >>"$ROOT/logs/$cell.log"
+	LAB_EVIDENCE_DIR="$ROOT/evidence/$cell" "$DOWN_CELL" "$cell" "$ROOT/work/$cell" >>"$ROOT/logs/$cell.log" 2>&1 ||
+		echo "run-cells: down-cell.sh failed for $cell; see $ROOT/logs/$cell.log" >&2
 }
 
 reap_one() {
@@ -258,6 +296,7 @@ reap_one() {
 	END[$cell]=$EPOCHSECONDS
 	echo "$rc" >"$ROOT/logs/$cell.rc"
 	echo "run-cells: $cell finished rc=$rc"
+	[ "$rc" -eq 0 ] || teardown_cell "$cell"
 }
 
 print_table() {
@@ -297,9 +336,7 @@ on_signal() {
 	done
 	for pid in "${!PID_CELL[@]}"; do
 		cell=${PID_CELL[$pid]}
-		echo "run-cells: tearing down $cell"
-		LAB_EVIDENCE_DIR="$ROOT/evidence/$cell" "$DOWN_CELL" "$cell" "$ROOT/work/$cell" >>"$ROOT/logs/$cell.log" 2>&1 ||
-			echo "run-cells: down-cell.sh failed for $cell; see $ROOT/logs/$cell.log" >&2
+		teardown_cell "$cell"
 		RC[$cell]=terminated
 		END[$cell]=$EPOCHSECONDS
 		echo "terminated" >"$ROOT/logs/$cell.rc"
@@ -312,6 +349,7 @@ trap on_signal INT TERM HUP
 next=0
 while [ "$next" -lt "$ncells" ] || [ "$RUNNING" -gt 0 ]; do
 	while [ "$next" -lt "$ncells" ] && [ "$RUNNING" -lt "$JOBS" ]; do
+		stagger_gap
 		start_cell "${CELLS[$next]}"
 		next=$((next + 1))
 	done

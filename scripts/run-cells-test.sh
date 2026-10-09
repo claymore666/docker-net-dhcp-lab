@@ -70,6 +70,7 @@ write_stub_down_cell() {
 	cat >"$1" <<'STUB'
 #!/bin/bash
 echo "down $1 $2 evidence=${LAB_EVIDENCE_DIR:-}" >>"$LAB_TEST_DIR/down.log"
+echo "down $1 $(date +%s%N)" >>"$LAB_TEST_DIR/calls.log"
 STUB
 }
 
@@ -94,7 +95,7 @@ cells() {
 	local d=$1 rc=0
 	shift
 	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" PATH="$tmp/bin:$PATH" \
-		"$d/repo/scripts/run-cells.sh" --root "$d/root" "$@" >"$d/out" 2>&1 || rc=$?
+		"$d/repo/scripts/run-cells.sh" --root "$d/root" --stagger 0 "$@" >"$d/out" 2>&1 || rc=$?
 	echo "$rc" >"$d/rc"
 }
 
@@ -216,7 +217,7 @@ meminfo "$e" 60
 (
 	cd "$e"
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
-		"$e/repo/scripts/run-cells.sh" --root rel-root kea >"$e/out" 2>&1
+		"$e/repo/scripts/run-cells.sh" --root rel-root --stagger 0 kea >"$e/out" 2>&1
 ) || {
 	echo "run-cells-test: FAIL -- case 7: run failed" >&2
 	cat "$e/out" >&2
@@ -337,7 +338,7 @@ echo "30 0" >"$e/state/spec.c"
 t0=$SECONDS
 (
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
-		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" -j 2 a b c >"$e/out" 2>&1
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 -j 2 a b c >"$e/out" 2>&1
 ) &
 wpid=$!
 n=0
@@ -380,7 +381,7 @@ echo 1000 >"$e/state/free_mib"
 t0=$SECONDS
 (
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" LAB_DISK_WAIT=300 LAB_DISK_POLL=100 \
-		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" a >"$e/out" 2>&1
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 a >"$e/out" 2>&1
 ) &
 wpid=$!
 n=0
@@ -408,7 +409,7 @@ mkdir -p "$e/root/logs"
 echo 7 >"$e/root/logs/a.rc"
 (
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
-		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" a >"$e/out" 2>&1
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 a >"$e/out" 2>&1
 ) &
 wpid=$!
 n=0
@@ -431,7 +432,7 @@ meminfo "$e" 60
 echo "2 0" >"$e/state/spec.a"
 (
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
-		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" -j 1 a b >"$e/out" 2>&1
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 -j 1 a b >"$e/out" 2>&1
 ) &
 wpid=$!
 n=0
@@ -466,7 +467,7 @@ STUB
 chmod +x "$e/repo/scripts/run-cell.sh"
 (
 	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" PATH="$tmp/bin:$PATH" \
-		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" a >"$e/out" 2>&1
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 a >"$e/out" 2>&1
 ) &
 wpid=$!
 n=0
@@ -486,6 +487,86 @@ if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
 	fail=1
 fi
 [ -n "$child" ] || { echo "run-cells-test: FAIL -- case 16: the stand-in never started" >&2; fail=1; }
+
+# Case 17: --stagger puts a gap between launches, asserted as call order
+# against a stub sleep that logs "gap" for the stagger-sized value and
+# returns once the start before it is logged; no wall time is measured. 100 s keeps the remaining
+# gap (100 or 99, depending on the second boundary) apart from every
+# other sleep the wrapper and the stubs make.
+mkdir "$tmp/gapbin"
+cat >"$tmp/gapbin/sleep" <<STUB
+#!/bin/bash
+case "\$1" in
+[5-9][0-9] | 1[0-9][0-9])
+	# the cell stub logs its start from the background: wait for the
+	# start this gap follows, or the log order says nothing
+	for _ in \$(seq 1 100); do
+		[ "\$(grep -c '^start ' "\$LAB_TEST_DIR/calls.log")" -gt "\$(grep -c '^gap ' "\$LAB_TEST_DIR/calls.log")" ] && break
+		$(command -v sleep) 0.05
+	done
+	echo "gap \$1" >>"\$LAB_TEST_DIR/calls.log"
+	exit 0
+	;;
+esac
+exec $(command -v sleep) "\$@"
+STUB
+chmod +x "$tmp/gapbin/sleep"
+order() { awk '$1=="start"||$1=="gap"{print $1}' "$1/state/calls.log" | tr '\n' ' '; }
+gapped() { # env, args...: like cells, with the gap stub first on PATH
+	local d=$1 rc=0
+	shift
+	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" PATH="$tmp/gapbin:$tmp/bin:$PATH" \
+		"$d/repo/scripts/run-cells.sh" --root "$d/root" "$@" >"$d/out" 2>&1 || rc=$?
+	echo "$rc" >"$d/rc"
+}
+e=$(new_env)
+meminfo "$e" 60
+gapped "$e" --stagger 100 -j 3 a b c
+expect "case 17 (stagger)" 0 "$e"
+[ "$(order "$e")" = "start gap start gap start " ] || { echo "run-cells-test: FAIL -- case 17: order is '$(order "$e")', wanted start gap start gap start (no gap before the first or after the last)" >&2; fail=1; }
+e=$(new_env)
+meminfo "$e" 60
+gapped "$e" -j 2 a b
+expect "case 17b (default stagger)" 0 "$e"
+[ "$(order "$e")" = "start gap start " ] || { echo "run-cells-test: FAIL -- case 17b: no gap with the default --stagger: '$(order "$e")'" >&2; fail=1; }
+grep -qE '^gap (59|60)$' "$e/state/calls.log" || { echo "run-cells-test: FAIL -- case 17b: the default gap is not 60 s" >&2; fail=1; }
+e=$(new_env)
+meminfo "$e" 60
+gapped "$e" --stagger 0 -j 3 a b c
+expect "case 17c (stagger 0)" 0 "$e"
+[ "$(order "$e")" = "start start start " ] || { echo "run-cells-test: FAIL -- case 17c: --stagger 0 still leaves a gap: '$(order "$e")'" >&2; fail=1; }
+for bad in -5 x 1.5 ""; do
+	e=$(new_env)
+	meminfo "$e" 60
+	cells "$e" --stagger "$bad" a
+	expect "case 17d (--stagger '$bad')" 2 "$e"
+	has "case 17d" "$e" "REFUSED -- --stagger wants a non-negative integer"
+done
+
+# Case 18: a cell whose run-cell.sh exits non-zero is torn down at once,
+# through down-cell.sh with its evidence dir, logged in its own cell log;
+# a cell that exits 0 is not, and the other cell keeps running meanwhile.
+e=$(new_env)
+meminfo "$e" 60
+echo "0 1" >"$e/state/spec.a"
+cells "$e" -j 2 a b
+expect "case 18 (a fails, b passes)" 1 "$e"
+want=$(printf 'down a %s evidence=%s' "$e/root/work/a" "$e/root/evidence/a")
+[ "$(cat "$e/state/down.log")" = "$want" ] || { echo "run-cells-test: FAIL -- case 18: down.log is not exactly the failed cell:" >&2; cat "$e/state/down.log" >&2; fail=1; }
+grep -q 'tearing down a' "$e/root/logs/a.log" || { echo "run-cells-test: FAIL -- case 18: the teardown is not logged in a's cell log" >&2; fail=1; }
+if grep -q 'tearing down' "$e/root/logs/b.log"; then echo "run-cells-test: FAIL -- case 18: b (rc 0) was torn down" >&2; fail=1; fi
+e=$(new_env)
+meminfo "$e" 60
+cells "$e" -j 2 a b
+expect "case 18b (both pass)" 0 "$e"
+[ ! -s "$e/state/down.log" ] || { echo "run-cells-test: FAIL -- case 18b: a cell that exited 0 was torn down" >&2; fail=1; }
+e=$(new_env)
+meminfo "$e" 60
+echo "0 1" >"$e/state/spec.a"
+echo "3 0" >"$e/state/spec.b"
+cells "$e" -j 2 a b
+got=$(awk '$1=="end"||$1=="down"{print $1, $2}' "$e/state/calls.log" | tr '\n' ',')
+[ "$got" = "end a,down a,end b," ] || { echo "run-cells-test: FAIL -- case 18c: the failed cell waited for the other: '$got'" >&2; fail=1; }
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

@@ -233,14 +233,17 @@ plugin/engine/kernel versions, a config diff from the source's stock
 install, one packet capture for the whole run, lease-table snapshots,
 the plugin's own log, and one verdict file per scenario and shape.
 
-`scripts/run-cells.sh [-j N] [--root DIR] [--check] <cell-name>...` runs
+`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name>...` runs
 several cells at once on one host and leaves one evidence bundle per cell
 under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
 `/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
 `(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1; a
-larger `-j` is accepted and reported as an overcommit. A cell that fails
-does not stop the others, and the exit code is 1 if any cell's was not 0.
+larger `-j` is accepted and reported as an overcommit. Starts are spaced
+`--stagger` seconds apart (default 60, `0` disables) so that the guests do
+not all boot, install the plugin and open ssh at the same moment. A cell
+that fails does not stop the others, is torn down with `down-cell.sh` as
+soon as it exits, and the exit code is 1 if any cell's was not 0.
 Before the first start it resolves every cell and refuses if two share a
 name, VM name, bridge, management address, observer container, observer
 veth or directory, or if any of those VMs or containers already exists on
