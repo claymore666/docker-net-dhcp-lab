@@ -463,6 +463,8 @@ func TestRelayValidatorRules(t *testing.T) {
 		{"client address at the DNS option octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.253/24", "group B or F reserves"},
 		{"client address at the user-class octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.203/24", "group B or F reserves"},
 		{"client address prefix length", "client_address: 10.200.10.1/24", "client_address: 10.200.10.1/25", "prefix length /25"},
+		{"client address is the network address", "client_address: 10.200.10.1/24", "client_address: 10.200.10.0/24", "client_address: 10.200.10.0 is the network or broadcast address of 10.200.10.0/24"},
+		{"server address is the broadcast address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.255/24", "server_address: 10.200.11.255 is the network or broadcast address of 10.200.11.0/24"},
 		{"server address outside server segment", "server_address: 10.200.11.1/24", "server_address: 10.200.10.2/24", "server_address: 10.200.10.2 is not inside"},
 		{"server address equals source seg_address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.2/24", "is also source.seg_address"},
 		{"seg_address on the client segment", "seg_address: 10.200.11.2/24", "seg_address: 10.200.10.2/24", "source.seg_address is not inside relay.server_segment.subnet"},
