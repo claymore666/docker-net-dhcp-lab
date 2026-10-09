@@ -385,6 +385,34 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 			return blocked(NameC5c, e.Cell, e.Shape, err.Error(), e.GitSHA)
 		}
 	}
+	for _, m := range messagesOfType(messagesBetween(msgs, normalAt, renewed.At), "REQUEST") {
+		if m.Dst == o.primaryID {
+			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("%s renewed with a REQUEST unicast to the returned primary %s at %s, not to %s, the server that granted the lease", o.ident, o.primaryID, m.At.UTC().Format("15:04:05.000"), o.partnerID), o.ev, e.GitSHA)
+		}
+	}
+	renewals := 0
+	if prof.StandbySilent {
+		req, ack, ok := c5Rebind(msgs, o.addr, o.primaryID, normalAt, deadline)
+		if !ok {
+			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's ACK of %s at %s answers no broadcast REQUEST: the rebind after the standby's silence was not seen", o.addr, renewed.At.UTC().Format("15:04:05.000")), o.ev, e.GitSHA)
+		}
+		for _, m := range messagesOfType(messagesBetween(msgs, normalAt, req.At), "REQUEST") {
+			if m.Dst == o.partnerID {
+				renewals++
+			}
+		}
+		if renewals == 0 {
+			all, err := readCapture(ctx, e, NameC5c, "capture-all", "*", o.ev)
+			if err != nil {
+				return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("could not read the whole capture: %v", err), e.GitSHA)
+			}
+			if !sawClientUnicast(all) {
+				return blocked(NameC5c, e.Cell, e.Shape, "the capture holds no REQUEST to the standby "+o.partnerID+" before the rebind and no client-sent unicast frame from any client: the observer cannot see a unicast renewal, so its absence is not judged", e.GitSHA)
+			}
+			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("no REQUEST from %s unicast to the granting standby %s between the pair's return and the rebind at %s", o.ident, o.partnerID, req.At.UTC().Format("15:04:05.000")), o.ev, e.GitSHA)
+		}
+		renewed = ack
+	}
 	second := o.name + "-new"
 	defer removeContainer(bCleanupCtx(ctx), e.Host, second)
 	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, second)
@@ -402,8 +430,12 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if prof.StandbySilent && ack.Server != o.primaryID {
 		return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the new container was ACKed by %s, not the primary %s", ack.Server, o.primaryID), o.ev, e.GitSHA)
 	}
-	return pass(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's table holds %s for %s; the container kept it and the primary ACKed it at %s (secs %d); a new container was leased %s by %s",
-		o.addr, o.ident, renewed.At.UTC().Format("15:04:05"), renewed.Secs, addr, ack.Server), o.ev, e.GitSHA)
+	path := ""
+	if prof.StandbySilent {
+		path = fmt.Sprintf("%d renewal(s) unicast to the standby %s went unanswered; ", renewals, o.partnerID)
+	}
+	return pass(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's table holds %s for %s; %sthe container kept it and the primary ACKed it at %s (secs %d); a new container was leased %s by %s",
+		o.addr, o.ident, path, renewed.At.UTC().Format("15:04:05"), renewed.Secs, addr, ack.Server), o.ev, e.GitSHA)
 }
 
 // c5dIdent is an ACK's client identity: option 61, else chaddr.
