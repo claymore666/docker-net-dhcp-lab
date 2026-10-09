@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -376,24 +377,41 @@ func waitHostRebooted(ctx context.Context, r sourceadapter.Runner, beforeBootID 
 // is a test-speed concern only, never a way to weaken the check itself).
 func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBootID string, timeout, settle, poll time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	// A retrying runner must not stretch the bound: every poll ends at it (#38).
+	pollCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 
 	var newID string
+	var lastErr error
 	for time.Now().Before(deadline) {
-		if id, err := bootID(ctx, r); err == nil && id != beforeBootID {
+		id, err := bootID(pollCtx, r)
+		// An attempt the bound itself cut ends as "signal: killed" and says
+		// nothing about the host; the poll before it does (#38).
+		if err == nil || pollCtx.Err() == nil || sourceadapter.IsConnectError(err) {
+			lastErr = err
+		}
+		if err == nil && id != beforeBootID {
 			newID = id
 			break
 		}
 		time.Sleep(poll)
 	}
 	if newID == "" {
-		return fmt.Errorf("boot id never changed from %s within %s: host did not come back on a new boot", beforeBootID, timeout)
+		msg := fmt.Sprintf("boot id never changed from %s within %s: host did not come back on a new boot", beforeBootID, timeout)
+		if sourceadapter.IsConnectError(lastErr) {
+			return &HostUnreachableError{Msg: msg, Err: lastErr}
+		}
+		return errors.New(msg)
 	}
 	firstSeen := time.Now()
 
 	settled := false
 	for time.Now().Before(deadline) {
 		if time.Since(firstSeen) >= settle {
-			id, err := bootID(ctx, r)
+			id, err := bootID(pollCtx, r)
+			if err == nil || pollCtx.Err() == nil || sourceadapter.IsConnectError(err) {
+				lastErr = err
+			}
 			if err == nil && id == newID {
 				settled = true
 				break
@@ -405,14 +423,33 @@ func waitHostRebootedTuned(ctx context.Context, r sourceadapter.Runner, beforeBo
 		time.Sleep(poll)
 	}
 	if !settled {
-		return fmt.Errorf("boot id %s never got a second confirmation >=%s later within %s", newID, settle, timeout)
+		msg := fmt.Sprintf("boot id %s never got a second confirmation >=%s later within %s", newID, settle, timeout)
+		if sourceadapter.IsConnectError(lastErr) {
+			return &HostUnreachableError{Msg: msg, Err: lastErr}
+		}
+		return errors.New(msg)
 	}
 
 	if _, err := r.Run(ctx, "sudo docker info >/dev/null"); err != nil {
-		return fmt.Errorf("boot id %s confirmed twice, but docker info did not answer: %w", newID, err)
+		msg := fmt.Sprintf("boot id %s confirmed twice, but docker info did not answer", newID)
+		if sourceadapter.IsConnectError(err) {
+			return &HostUnreachableError{Msg: msg, Err: err}
+		}
+		return fmt.Errorf("%s: %w", msg, err)
 	}
 	return nil
 }
+
+// HostUnreachableError is a reboot wait that ended with the docker host not answering ssh at all.
+type HostUnreachableError struct {
+	Msg string
+	Err error
+}
+
+func (e *HostUnreachableError) Error() string {
+	return e.Msg + ": host unreachable over ssh: " + e.Err.Error()
+}
+func (e *HostUnreachableError) Unwrap() error { return e.Err }
 
 // pluginPID finds the plugin's own process by exact name. The plugin
 // manifest asks for the host PID namespace (docs/index.md in the plugin

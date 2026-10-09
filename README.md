@@ -187,6 +187,13 @@ Each scenario on each shape and source gets one verdict:
   before and after, packet capture, plugin log).
 - **FAIL**: a finding about the plugin. The lab never retries or tunes a
   scenario to make it pass.
+- **BLOCKED**: the lab could not reach a known starting state, with the
+  reason. Before every shape it waits, at most 30 s, for the
+  segment NIC to lose the previous shape's child link and records the wait
+  in the evidence bundle (`<cell>-<shape>-parent-ready.txt`); a child that
+  is still there blocks the shape and is named. A reboot scenario whose
+  docker host never answers ssh again within its 3 min bound is BLOCKED
+  too; a host that answers but stays on the old boot is a FAIL.
 - **N/A**: the scenario does not apply, with the reason. Example: an
   `ipvlan` container shares its parent's MAC, so the fixed-MAC reboot
   cannot run there.
@@ -232,6 +239,36 @@ down. It leaves one evidence bundle: the resolved `lab.yaml`,
 plugin/engine/kernel versions, a config diff from the source's stock
 install, one packet capture for the whole run, lease-table snapshots,
 the plugin's own log, and one verdict file per scenario and shape.
+
+`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name>...` runs
+several cells at once on one host and leaves one evidence bundle per cell
+under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
+and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
+`/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
+`(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1; a
+larger `-j` is accepted and reported as an overcommit: six cells are 18
+guest vCPUs, and on a 16-vCPU host with three of them rebooting at once
+their guests stopped accepting new ssh connections for about four minutes
+(#38). `labctl run` therefore retries an ssh call whose connection failed
+before the remote command ran, for up to 5 min; once that bound is used up,
+later calls to the same guest try once each until one succeeds. Starts are spaced
+`--stagger` seconds apart (default 60, `0` disables) so that the guests do
+not all boot, install the plugin and open ssh at the same moment. A cell
+that fails does not stop the others, is torn down with `down-cell.sh` as
+soon as it exits, and the exit code is 1 if any cell's was not 0.
+Before the first start it resolves every cell and refuses if two share a
+name, VM name, bridge, management address, observer container, observer
+veth or directory, or if any of those VMs or containers already exists on
+the host; `--check` prints that table and stops there. Before each start it
+wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
+minutes for it, and otherwise marks the cell `skipped-disk`; it also looks
+again for that cell's VMs and observer and marks the cell `skipped-exists`
+if they have appeared meanwhile. INT or TERM
+stops every running cell and tears it down with `down-cell.sh`. Two
+`run-cells.sh` started within the same minutes on overlapping cells are only
+caught once the first has defined its VMs, so do not do that. Render the
+results the same way as for one cell:
+`labctl matrix --root <root>/evidence <root>/evidence/<cell>...`.
 
 `labctl run <lab.yaml> <repo-root> <cell-name> <shape> <work-dir>
 <evidence-dir> <pcap-path|->` runs one shape's scenarios directly, for a

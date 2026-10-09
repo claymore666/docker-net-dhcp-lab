@@ -334,8 +334,11 @@ func cmdRun(args []string) int {
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
 	sourceMgmtIP := strings.SplitN(cell.Source.MgmtAddress, "/", 2)[0]
 
-	hostRunner := sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
-	sourceRunner := sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
+	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
+	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	sourceRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+		Inner: sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
 	source, err := newSourceAdapter(cell.Source.Type, sourceRunner)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
@@ -432,6 +435,35 @@ func cmdRun(args []string) int {
 		}
 		fmt.Fprintf(os.Stderr, "labctl run: %s\n", reason)
 		return labErrorExitCode
+	}
+
+	// The previous shape's macvlan/ipvlan network can still hold the
+	// parent NIC when this process starts, and the plugin then refuses
+	// every container with "would not accept another child" (23 kea
+	// FAILs in the first six-cell run, lab#38). Wait, bounded, for a
+	// clean parent and keep the wait in the evidence bundle; a parent
+	// that never clears is plugin evidence, so the shape is BLOCKED and
+	// names the leftover link. No scenario is ever retried. A bridge shape
+	// cannot take a NIC with a child as its port, so this runs before every shape.
+	blockedReason, perr := scenario.ParentReady(ctx, hostRunner, cellName, shape, evidenceDir, scenario.ParentCleanWindow, scenario.ParentCleanPoll)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, "labctl run:", perr)
+		return 1
+	}
+	if blockedReason != "" {
+		for _, s := range scenariosToRun {
+			v := scenario.Verdict{
+				Scenario: s.Name, Cell: cellName, Shape: shape,
+				Result: scenario.BLOCKED, Reason: blockedReason,
+				GitSHA: gitSHA, Timestamp: time.Now(), Host: hi,
+			}
+			if werr := scenario.Write(evidenceDir, v); werr != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+		}
+		return 0
 	}
 
 	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
