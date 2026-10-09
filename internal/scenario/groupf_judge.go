@@ -280,7 +280,8 @@ func judgeF3Wire(present, serverRapid bool, msgs []OptMsg) fOutcome {
 }
 
 // f8Send is one FORCERENEW the sender put on the wire: its mode, when
-// labctl ran it, and the xid the sender reported.
+// labctl started it (before the sender's ssh calls, so only named in a
+// reason; the windows use the frame's capture time), and its xid.
 type f8Send struct {
 	Mode string
 	At   time.Time
@@ -289,11 +290,13 @@ type f8Send struct {
 
 // f8Obs is what F8-forcerenew judges after the three sends: the identity's messages
 // and option bytes (54, 90, 145) since its ACK, the source table's lease
-// expiry read after the ACK and after each wait, and the lease address
-// before and after.
+// expiry read after the ACK and after each wait, the lease address before
+// and after, and the addresses inside the container after the signed wait.
 type f8Obs struct {
 	present     bool
 	lease, addr string
+	server      string // option 54 of the ACK (RFC 2132 9.7)
+	own         []string
 	bind        time.Time
 	sends       [3]f8Send // unsigned, badkey, signed
 	msgs        []DHCPMsg
@@ -328,7 +331,7 @@ func judgeF8Ack(present bool, opts []OptMsg, want []byte) (OptMsg, fOutcome) {
 	for _, m := range cm {
 		has := m.Has(145) && bytes.Equal(m.Opts[145], []byte{1})
 		if present && !has {
-			return ack, fFail("%s %s carries no option 145 = 01, which the plugin documents on every DISCOVER and REQUEST (RFC 6704 3.1.1)", m.Type, m.XID)
+			return ack, fFail("%s %s carries no option 145 = 01, which the plugin documents on every DISCOVER and REQUEST (RFC 6704 3.1.1, 3.1.4)", m.Type, m.XID)
 		}
 		if !present && m.Has(145) {
 			return ack, fBlocked("%s %s carries option 145 although the plugin tag predates FORCERENEW support: the lab's version table is wrong", m.Type, m.XID)
@@ -366,25 +369,24 @@ func f8Requests(msgs []DHCPMsg, from, to time.Time) []DHCPMsg {
 	return out
 }
 
-// judgeF8: RFC 3203 and RFC 6704 3.1.4 -- a client drops a FORCERENEW
+// judgeF8: RFC 6704 section 3 and 3.1.4 -- a client drops a FORCERENEW
 // without option 90 and one whose HMAC fails, and answers a valid one by
-// entering RENEWING (a unicast REQUEST, ciaddr set, RFC 2131 4.3.2). The
-// drops count only next to an obeyed signed send through the same code
-// path (defeat 12); a send past T1 could be a natural renewal (defeat 11).
+// entering RENEWING (a REQUEST unicast to the server, ciaddr set, RFC 2131
+// 4.4.5). The drops count only next to an obeyed signed send (defeat 12);
+// a send past T1 could be a natural renewal (defeat 11). Windows open at
+// each frame's capture time, the capture's own clock.
 func judgeF8(o f8Obs) fOutcome {
 	names := [3]string{"unsigned", "wrongly signed", "signed"}
 	if o.expires[0].IsZero() {
 		return fBlocked("the source's table gives no expiry for %s, so a renewal cannot be shown in it", o.lease)
 	}
-	half := o.bind.Add(o.expires[0].Sub(o.bind) / 2)
-	if last := o.sends[2].At; last.After(half) {
-		return fBlocked("the last FORCERENEW went out at %s, after half the lease (%s), where a natural renewal could answer it", last.UTC().Format("15:04:05"), half.UTC().Format("15:04:05"))
-	}
+	var at [3]time.Time
 	for i, s := range o.sends {
 		m, ok := f8Find(o.msgs, "FORCERENEW", s.XID)
 		if !ok {
-			return fBlocked("the observer did not see the %s FORCERENEW (xid %s), so the client's answer to it cannot be judged", names[i], s.XID)
+			return fBlocked("the observer did not see the %s FORCERENEW (xid %s, started %s), so the client's answer to it cannot be judged", names[i], s.XID, s.At.UTC().Format("15:04:05"))
 		}
+		at[i] = m.At
 		if m.Dst != o.lease || m.CIAddr != o.lease {
 			return fBlocked("the %s FORCERENEW (xid %s) went to %s with ciaddr %s, not to the lease %s (lab error)", names[i], s.XID, m.Dst, m.CIAddr, o.lease)
 		}
@@ -393,20 +395,24 @@ func judgeF8(o f8Obs) fOutcome {
 			return fBlocked("the %s FORCERENEW (xid %s) does not carry option 90 as its mode says (lab error)", names[i], s.XID)
 		}
 	}
+	half := o.bind.Add(o.expires[0].Sub(o.bind) / 2)
+	if at[2].After(half) {
+		return fBlocked("the last FORCERENEW went out at %s, after half the lease (%s), where a natural renewal could answer it", at[2].UTC().Format("15:04:05"), half.UTC().Format("15:04:05"))
+	}
 	judged := 1
 	if o.present {
 		judged = 2
 	}
 	for i := 0; i < judged; i++ {
-		if r := f8Requests(o.msgs, o.sends[i].At, o.sends[i+1].At); len(r) > 0 {
-			return fFail("the client sent REQUEST %s after the %s FORCERENEW (xid %s), which RFC 6704 3.1.4 says it must discard", r[0].XID, names[i], o.sends[i].XID)
+		if r := f8Requests(o.msgs, at[i], at[i+1]); len(r) > 0 {
+			return fFail("the client sent REQUEST %s after the %s FORCERENEW (xid %s), which RFC 6704 section 3 says it must not act on", r[0].XID, names[i], o.sends[i].XID)
 		}
 		if !o.expires[i+1].Equal(o.expires[0]) {
 			return fFail("the lease expiry moved from %s to %s after the %s FORCERENEW, which must be discarded", o.expires[0].UTC().Format(time.RFC3339), o.expires[i+1].UTC().Format(time.RFC3339), names[i])
 		}
 	}
 	s := o.sends[2]
-	reqs := f8Requests(o.msgs, s.At, s.At.Add(o.signedWait))
+	reqs := f8Requests(o.msgs, at[2], at[2].Add(o.signedWait))
 	if !o.present {
 		return fOK("the plugin predates FORCERENEW support: no renewal after the unsigned FORCERENEW; the signed one drew %d REQUEST(s), recorded, not judged", len(reqs))
 	}
@@ -414,8 +420,8 @@ func judgeF8(o f8Obs) fOutcome {
 		return fBlocked("no REQUEST within %s of the signed FORCERENEW (xid %s) the observer saw reach %s, so the two drops cannot count (design defeat 12): a plugin that ignores it and a frame the client cannot verify look the same here", o.signedWait, s.XID, o.lease)
 	}
 	r := reqs[0]
-	if r.CIAddr != o.lease || r.Dst == "" || r.Dst == "255.255.255.255" {
-		return fFail("REQUEST %s after the signed FORCERENEW went to %s with ciaddr %q, not the unicast RENEWING request RFC 2131 4.3.2 describes", r.XID, r.Dst, r.CIAddr)
+	if r.CIAddr != o.lease || r.Dst != o.server {
+		return fFail("REQUEST %s after the signed FORCERENEW went to %q with ciaddr %q, not the RENEWING request to the server %s that RFC 2131 4.4.5 describes", r.XID, r.Dst, r.CIAddr, o.server)
 	}
 	acked := false
 	for _, m := range o.msgs {
@@ -426,13 +432,19 @@ func judgeF8(o f8Obs) fOutcome {
 	if !acked {
 		return fFail("REQUEST %s after the signed FORCERENEW drew no ACK in the capture", r.XID)
 	}
+	if am, ok := f8Opt(o.opts, "ACK", r.XID); ok && am.Has(90) {
+		return fBlocked("the renewal's ACK %s carries option 90 again, which RFC 6704 3.1.3 says a server should not send: the snippet is not scoped to the first ACK (lab error)", r.XID)
+	}
 	if !o.expires[3].After(o.expires[0]) {
 		return fFail("the client renewed (REQUEST/ACK %s) but the source's table still shows the expiry %s", r.XID, o.expires[0].UTC().Format(time.RFC3339))
 	}
 	if o.addrAfter != o.addr {
-		return fFail("the address changed from %s to %s across the forced renewal", o.addr, o.addrAfter)
+		return fFail("the source's table moved the lease from %s to %s across the forced renewal", o.addr, o.addrAfter)
 	}
-	return fOK("the unsigned and the wrongly signed FORCERENEW were dropped (no REQUEST, expiry unchanged); the signed one drew the unicast REQUEST %s within %s, an ACK, and moved the expiry to %s", r.XID, r.At.Sub(s.At).Round(time.Second), o.expires[3].UTC().Format(time.RFC3339))
+	if !containsAddr(o.own, o.addr) {
+		return fFail("after the forced renewal the container carries %v, not its address %s", o.own, o.addr)
+	}
+	return fOK("the unsigned and the wrongly signed FORCERENEW were dropped (no REQUEST, expiry unchanged); the signed one drew the unicast REQUEST %s within %s, an ACK, and moved the expiry to %s; the container kept its address", r.XID, r.At.Sub(at[2]).Round(time.Second), o.expires[3].UTC().Format(time.RFC3339))
 }
 
 // judgeF8Control (defeat 16): a client outside F8-forcerenew's client id gets its

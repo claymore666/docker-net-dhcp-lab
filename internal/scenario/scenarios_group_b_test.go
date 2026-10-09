@@ -29,6 +29,8 @@ type bRunner struct {
 	resolv     []string
 	resolvN    int
 	runErr     error
+	own        map[string][]string // ip addr inside a container, else its address (#21)
+	ownErr     error
 }
 
 type bIdent struct{ mac, addr, endpointID string }
@@ -91,6 +93,17 @@ func (f *bRunner) Run(_ context.Context, cmd string) (string, error) {
 		default:
 			return c.endpointID, nil
 		}
+	case strings.Contains(cmd, "ip -4 -o addr show"):
+		name := strings.Fields(cmd)[3]
+		addrs, ok := f.own[name]
+		if c := f.containers[name]; !ok && c != nil {
+			addrs = []string{c.addr}
+		}
+		var b strings.Builder
+		for _, a := range addrs {
+			fmt.Fprintf(&b, "2: eth0    inet %s/24 scope global eth0\n", a)
+		}
+		return b.String(), f.ownErr
 	case strings.Contains(cmd, "nslookup"):
 		return f.nslookup, nil
 	case strings.Contains(cmd, "cat /etc/resolv.conf"):

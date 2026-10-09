@@ -49,7 +49,12 @@ func TestJudgeF8AckReadsTheNonceAndOption145(t *testing.T) {
 		"ACK with another nonce":   {true, f8Opts(true, other), BLOCKED},
 		"no ACK":                   {true, f8Opts(true, want)[:3], BLOCKED},
 		"no 145 from a new plugin": {true, f8Opts(false, want), FAIL},
-		"145 from an old plugin":   {false, f8Opts(true, want), BLOCKED},
+		"145 = 02 from a new plugin": {true, func() []OptMsg {
+			o := f8Opts(true, want)
+			o[2].Opts[145] = []byte{2}
+			return o
+		}(), FAIL},
+		"145 from an old plugin": {false, f8Opts(true, want), BLOCKED},
 	}
 	for name, c := range cases {
 		if _, o := judgeF8Ack(c.present, c.opts, want); o.Result != c.want {
@@ -68,7 +73,7 @@ func TestJudgeF8AckReadsTheNonceAndOption145(t *testing.T) {
 func f8Base() f8Obs {
 	bind := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	at := func(s int) time.Time { return bind.Add(time.Duration(s) * time.Second) }
-	o := f8Obs{present: true, lease: f8Lease, addr: f8Lease, addrAfter: f8Lease, bind: bind, signedWait: 10 * time.Second}
+	o := f8Obs{present: true, lease: f8Lease, addr: f8Lease, addrAfter: f8Lease, server: f8Server, own: []string{f8Lease}, bind: bind, signedWait: 10 * time.Second}
 	o.sends = [3]f8Send{{"unsigned", at(20), "000000a1"}, {"badkey", at(35), "000000a2"}, {"signed", at(50), "000000a3"}}
 	for _, s := range o.sends {
 		o.msgs = append(o.msgs, DHCPMsg{At: s.At, Type: "FORCERENEW", XID: s.XID, CIAddr: f8Lease, Dst: f8Lease})
@@ -108,6 +113,7 @@ func TestJudgeF8(t *testing.T) {
 		"signed frame unseen":   {func(o *f8Obs) { o.msgs = append(o.msgs[:2:2], o.msgs[3:]...) }, BLOCKED},
 		"unsigned frame unseen": {func(o *f8Obs) { o.msgs[0].XID = "ffffffff" }, BLOCKED},
 		"frame to the wrong IP": {func(o *f8Obs) { o.msgs[1].Dst = "255.255.255.255" }, BLOCKED},
+		"frame without ciaddr":  {func(o *f8Obs) { o.msgs[1].CIAddr = "0.0.0.0" }, BLOCKED},
 		"unsigned carries 90":   {func(o *f8Obs) { o.opts[0].Opts[90] = []byte{3} }, BLOCKED},
 		"signed lacks 90":       {func(o *f8Obs) { delete(o.opts[2].Opts, 90) }, BLOCKED},
 		// the drops.
@@ -118,9 +124,16 @@ func TestJudgeF8(t *testing.T) {
 		// the signed renewal.
 		"broadcast REQUEST":      {func(o *f8Obs) { o.msgs[3].Dst = "255.255.255.255" }, FAIL},
 		"REQUEST without ciaddr": {func(o *f8Obs) { o.msgs[3].CIAddr = "" }, FAIL},
+		"REQUEST without dst":    {func(o *f8Obs) { o.msgs[3].Dst = "" }, FAIL},
+		"REQUEST to another IP":  {func(o *f8Obs) { o.msgs[3].Dst = "10.200.1.3" }, FAIL},
 		"REQUEST not ACKed":      {func(o *f8Obs) { o.msgs = o.msgs[:4] }, FAIL},
+		"ACK before the REQUEST": {func(o *f8Obs) { o.msgs[4].At = o.msgs[3].At.Add(-time.Second) }, FAIL},
+		// RFC 6704 3.1.3: the renewal's ACK must not repeat the nonce.
+		"renewal ACK repeats 90": {func(o *f8Obs) { o.opts = append(o.opts, om("ACK", "000000b1", map[int][]byte{90: {3}})) }, BLOCKED},
 		"expiry not moved":       {func(o *f8Obs) { o.expires[3] = o.expires[0] }, FAIL},
 		"address changed":        {func(o *f8Obs) { o.addrAfter = "10.200.1.151" }, FAIL},
+		"container lost it":      {func(o *f8Obs) { o.own = []string{"10.200.1.151"} }, FAIL},
+		"container has none":     {func(o *f8Obs) { o.own = nil }, FAIL},
 	}
 	for name, c := range cases {
 		o := f8Base()
@@ -128,6 +141,20 @@ func TestJudgeF8(t *testing.T) {
 		if got := judgeF8(o); got.Result != c.want {
 			t.Errorf("%s: got %s (%s), want %s", name, got.Result, got.Reason, c.want)
 		}
+	}
+}
+
+// The windows open at the frame's capture time, not at labctl's start
+// before the sender's ssh calls: a REQUEST 8 s after the signed frame
+// counts although labctl started it 5 s earlier (#21).
+func TestJudgeF8WindowsOpenAtTheFrame(t *testing.T) {
+	o := f8Base()
+	for i := range o.sends {
+		o.sends[i].At = o.sends[i].At.Add(-5 * time.Second)
+	}
+	o.msgs[3].At, o.msgs[4].At = o.msgs[2].At.Add(8*time.Second), o.msgs[2].At.Add(8*time.Second)
+	if got := judgeF8(o); got.Result != PASS {
+		t.Errorf("REQUEST 8 s after the signed frame = %s: %s", got.Result, got.Reason)
 	}
 }
 
@@ -315,8 +342,8 @@ func TestRunF8Paths(t *testing.T) {
 		want Result
 		why  string
 	}{
-		"unsigned obeyed":   {tagNew, func(f *f8Fix) { f.obey["unsigned"] = true }, FAIL, "must discard"},
-		"badkey obeyed":     {tagNew, func(f *f8Fix) { f.obey["badkey"] = true }, FAIL, "must discard"},
+		"unsigned obeyed":   {tagNew, func(f *f8Fix) { f.obey["unsigned"] = true }, FAIL, "must not act on"},
+		"badkey obeyed":     {tagNew, func(f *f8Fix) { f.obey["badkey"] = true }, FAIL, "must not act on"},
 		"signed not obeyed": {tagNew, func(f *f8Fix) { f.obey["signed"] = false }, BLOCKED, "cannot count"},
 		"no nonce in ACK":   {tagNew, func(f *f8Fix) { delete(f.cap.opts[3].Opts, 90) }, BLOCKED, "option 90"},
 		"leaky control":     {tagNew, func(f *f8Fix) { f.cap.ctl[1] = om("OFFER", "2", map[int][]byte{90: {1}}) }, BLOCKED, "not scoped"},
@@ -329,8 +356,10 @@ func TestRunF8Paths(t *testing.T) {
 			f.src.onForceRenew = func(sourceadapter.ForceRenewParams) (string, error) { return "ok", nil }
 		}, BLOCKED, "no xid"},
 		"no expiry":                   {tagNew, func(f *f8Fix) { f.expires = time.Time{} }, BLOCKED, "no expiry"},
+		"container lost its address":  {tagNew, func(f *f8Fix) { f.h.own = map[string][]string{containerName(f.e, NameF8): {"10.200.1.151"}} }, FAIL, "container carries"},
+		"container unreadable":        {tagNew, func(f *f8Fix) { f.h.ownErr = errors.New("exec failed") }, BLOCKED, "own address"},
 		"old plugin, signed":          {tagOld, nil, PASS, "recorded, not judged"},
-		"old plugin, unsigned obeyed": {tagOld, func(f *f8Fix) { f.obey["unsigned"] = true }, FAIL, "must discard"},
+		"old plugin, unsigned obeyed": {tagOld, func(f *f8Fix) { f.obey["unsigned"] = true }, FAIL, "must not act on"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

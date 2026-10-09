@@ -26,11 +26,11 @@ const (
 	FeatureRapidCommit4 Feature = "rapid-commit-4"
 	// FeatureForceRenewNonce hands ClientID's client option 145 and, in
 	// the ACK, an option 90 carrying Nonce, so a FORCERENEW signed with
-	// it can be checked (F8-forcerenew, RFC 6704 section 4).
+	// it can be checked (F8-forcerenew, RFC 6704 3.1.2).
 	FeatureForceRenewNonce Feature = "forcerenew-nonce"
 )
 
-// ForceRenewNonceLen is the nonce length RFC 6704 section 4 fixes for
+// ForceRenewNonceLen is the nonce length RFC 6704 3.1.2 fixes for
 // HMAC-MD5 (algorithm 1).
 const ForceRenewNonceLen = 16
 
@@ -112,7 +112,7 @@ func (v validatedFeature) hex108() string {
 
 // ForceRenewNonceOption is the option 90 value a server hands out with
 // nonce: protocol 3, algorithm 1 (HMAC-MD5), RDM 0, replay 1, type 1
-// (nonce), the nonce (RFC 6704 section 4). The replay value 1 is the
+// (nonce), the nonce (RFC 6704 3.1.2). The replay value 1 is the
 // floor a FORCERENEW must exceed (RFC 3118 section 2).
 func ForceRenewNonceOption(nonce []byte) []byte {
 	b := []byte{3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1}

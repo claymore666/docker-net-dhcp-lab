@@ -504,10 +504,10 @@ func runF8(ctx context.Context, e Env) (v Verdict) {
 	if !ok || ackMsg.CHAddr == "" {
 		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("the message log has no ACK %s with a chaddr to address the FORCERENEW to", ack.XID), e.GitSHA)
 	}
-	obs := f8Obs{present: present, lease: lease.Address, addr: addr, bind: ackMsg.At, signedWait: f8SignedWait}
+	obs := f8Obs{present: present, lease: lease.Address, addr: addr, server: net4(ack.Opts[54]), bind: ackMsg.At, signedWait: f8SignedWait}
 	obs.expires[0] = lease.Expires
 	p := sourceadapter.ForceRenewParams{
-		Addr: lease.Address, CHAddr: ackMsg.CHAddr, ClientID: wire, Server: net4(ack.Opts[54]),
+		Addr: lease.Address, CHAddr: ackMsg.CHAddr, ClientID: wire, Server: obs.server,
 		Nonce: nonce, AckReplay: binary.BigEndian.Uint64(ack.Opts[90][3:11]),
 	}
 	for i, mode := range []string{"unsigned", "badkey", "signed"} {
@@ -534,6 +534,9 @@ func runF8(ctx context.Context, e Env) (v Verdict) {
 			return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the lease after the %s FORCERENEW: %v", mode, err), e.GitSHA)
 		}
 		obs.expires[i+1], obs.addrAfter = l.Expires, l.Address
+	}
+	if obs.own, err = containerAddrs(ctx, e.Host, name); err != nil {
+		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the container's own address after the signed FORCERENEW: %v", err), e.GitSHA)
 	}
 	sentAll := func(m []OptMsg) bool {
 		for _, s := range obs.sends {

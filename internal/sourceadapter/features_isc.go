@@ -42,10 +42,11 @@ func (a *ISCDHCPAdapter) EnableFeature(ctx context.Context, f Feature, p Feature
 		class := fmt.Sprintf("${1}class \"f2b\" {\n${1}  match if option dhcp-client-identifier = %s;\n${1}  option v6-only-preferred %d;\n${1}  option dhcp-parameter-request-list = concat(option dhcp-parameter-request-list, encode-int(108, 8));\n${1}}\n${1}${2}", v.clientID, v.seconds)
 		edits = []configEdit{{iscSubnetRE, class, "the subnet block"}}
 	case FeatureForceRenewNonce:
-		// 90 only under message type 3 puts it in the ACK, not the
-		// OFFER (RFC 6704 section 4; MEASURED 4.4.3-P1, lab #21).
+		// 90 only for a REQUEST with option 50: the first ACK, not the
+		// OFFER or a renewal's ACK (RFC 6704 3.1.3, RFC 2131 table 5;
+		// MEASURED 4.4.3-P1, lab #21).
 		already = `class "f8"`
-		class := fmt.Sprintf("${1}option lab-fr-capable code 145 = unsigned integer 8;\n${1}option lab-fr-auth code 90 = string;\n${1}class \"f8\" {\n${1}  match if option dhcp-client-identifier = %s;\n${1}  option lab-fr-capable 1;\n${1}  option dhcp-parameter-request-list = concat(option dhcp-parameter-request-list, encode-int(145, 8), encode-int(90, 8));\n${1}  if option dhcp-message-type = 3 {\n${1}    option lab-fr-auth %s;\n${1}  }\n${1}}\n${1}${2}", v.clientID, v.auth90Hex())
+		class := fmt.Sprintf("${1}option lab-fr-capable code 145 = unsigned integer 8;\n${1}option lab-fr-auth code 90 = string;\n${1}class \"f8\" {\n${1}  match if option dhcp-client-identifier = %s;\n${1}  option lab-fr-capable 1;\n${1}  option dhcp-parameter-request-list = concat(option dhcp-parameter-request-list, encode-int(145, 8), encode-int(90, 8));\n${1}  if option dhcp-message-type = 3 and exists dhcp-requested-address {\n${1}    option lab-fr-auth %s;\n${1}  }\n${1}}\n${1}${2}", v.clientID, v.auth90Hex())
 		edits = []configEdit{{iscSubnetRE, class, "the subnet block"}}
 	default:
 		return nil, fmt.Errorf("isc-dhcp: %s is not supported by ISC dhcpd 4.4.3", f)
