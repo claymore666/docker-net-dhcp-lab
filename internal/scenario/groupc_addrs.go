@@ -3,6 +3,8 @@ package scenario
 import (
 	"fmt"
 	"net/netip"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 )
 
 // Group C's actors take fixed host octets of the cell's /24 clear of the
@@ -17,8 +19,9 @@ const (
 	rogueFirstHost = 241
 	rogueLastHost  = 250
 	// c9OctetShift is how far C9 moves the third octet of the cell's
-	// /24; every lab.yaml cell sits on 10.200.0-7.0/24 (#23).
-	c9OctetShift = 100
+	// /24 (#23); labyaml.Validate refuses a cell whose target is another
+	// cell's segment, from the same constant.
+	c9OctetShift = labyaml.C9OctetShift
 )
 
 // groupCAddr is groupBAddr that also refuses the user-class pool, the

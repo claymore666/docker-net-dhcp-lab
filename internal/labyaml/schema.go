@@ -65,7 +65,7 @@ type DockerHost struct {
 // the pool this source hands to ordinary clients; the adapter's
 // ReserveMAC keeps a separate per-MAC reservation outside that range.
 type Source struct {
-	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq
+	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd
 	BaseImage   string `yaml:"base_image" json:"base_image"`
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
@@ -105,7 +105,17 @@ const (
 	DNSOptionHost       = 253
 )
 
-var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true}
+var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true}
+
+// v4OnlySources are the source types whose server has no DHCPv6 (lab #10:
+// busybox udhcpd). Their cells carry no IPv6 block, and every other type
+// must (#23 group D). The adapter's own CapV6 absence is the other half.
+var v4OnlySources = map[string]bool{"udhcpd": true}
+
+// SourceServesV6 reports whether a source of this type serves DHCPv6, so a
+// cell of that type needs the IPv6 block; up-source.sh reads it from
+// `labctl resolve`.
+func SourceServesV6(sourceType string) bool { return !v4OnlySources[sourceType] }
 
 // Relay is a DHCP relay VM between the cell's segment (the Docker host's
 // side) and a second, server-side segment that holds the source (#11).
@@ -277,6 +287,40 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	return validateC9Targets(c.Cells)
+}
+
+// C9OctetShift is how far scenario C9 (Renumber) moves the third octet of
+// a cell's segment (#23). internal/scenario takes its shift from here so
+// the collision check below cannot drift from what C9 does.
+const C9OctetShift = 100
+
+// validateC9Targets refuses a cell whose C9 target, its segment with the
+// third octet raised by C9OctetShift, is another cell's segment: the
+// renumbered source would then share a bridge with an unrelated cell
+// (DESIGN-910 D18).
+func validateC9Targets(cells []Cell) error {
+	owner := map[netip.Prefix]string{}
+	for _, cell := range cells {
+		if p, err := netip.ParsePrefix(cell.Segment.Subnet); err == nil {
+			owner[p.Masked()] = cell.Name
+		}
+	}
+	for _, cell := range cells {
+		p, err := netip.ParsePrefix(cell.Segment.Subnet)
+		if err != nil || !p.Addr().Is4() {
+			continue
+		}
+		b := p.Addr().As4()
+		if int(b[2])+C9OctetShift > 254 {
+			continue
+		}
+		b[2] += C9OctetShift
+		target := netip.PrefixFrom(netip.AddrFrom4(b), p.Bits()).Masked()
+		if other, ok := owner[target]; ok {
+			return fmt.Errorf("cell %s: its C9 renumber target %s is the segment of cell %s", cell.Name, target, other)
+		}
+	}
 	return nil
 }
 
@@ -417,7 +461,7 @@ func ReservedGroupHost(host int) bool {
 // must be a real range inside that same segment.
 func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefix netip.Prefix, addrField string, seenMgmt map[string]bool) error {
 	if !sourceTypes[s.Type] {
-		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq", cellName, s.Type)
+		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd", cellName, s.Type)
 	}
 	if s.BaseImage == "" {
 		return fmt.Errorf("cell %s: source.base_image is required", cellName)
@@ -532,6 +576,9 @@ func mustBeLabRange(p netip.Prefix) error {
 // segment.subnet6 (invalid when the cell has none, and then every v6 field
 // must be empty).
 func validateSource6(cellName string, s *Source, seg6 netip.Prefix) error {
+	if !SourceServesV6(s.Type) && seg6.IsValid() {
+		return fmt.Errorf("cell %s: source.type %s is DHCPv4 only, so the cell cannot carry segment.subnet6", cellName, s.Type)
+	}
 	fields := []struct{ name, v string }{
 		{"seg_address6", s.SegAddress6}, {"pool6_start", s.Pool6Start},
 		{"pool6_end", s.Pool6End}, {"temp6_pool", s.Temp6Pool},
