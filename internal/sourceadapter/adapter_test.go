@@ -379,16 +379,18 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 // relay, so C5 and C12 stay N/A. Group F (#20) adds the three feature
 // capabilities (rapid commit only on dnsmasq); none declares CapV6.
 // #21 adds CapForceRenewNonce to all three (each nonce snippet passed the
-// daemon's own syntax check and a local wire exchange).
+// daemon's own syntax check and a local wire exchange). Group C PR 2
+// (#23) adds the four hostile-segment capabilities to all three: the
+// actors are shared netns helpers, the rewrites per-adapter renderers.
 func TestDeclaredCapabilities(t *testing.T) {
 	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
 	cases := map[string]struct {
 		got  []Capability
 		want []Capability
 	}{
-		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce)},
-		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce)},
-		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce)},
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber)},
 	}
 	for name, c := range cases {
 		if len(c.got) != len(c.want) {

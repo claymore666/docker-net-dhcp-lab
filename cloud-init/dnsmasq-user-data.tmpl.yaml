@@ -15,7 +15,7 @@ package_update: true
 runcmd:
   # noninteractive: same debconf-hang guard as the kea and isc-dhcp
   # templates (issue #2, measured live 2026-09-25).
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq dnsmasq-base iputils-arping
   - systemctl stop dnsmasq
   - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
   - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock

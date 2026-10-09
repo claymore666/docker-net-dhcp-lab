@@ -3,6 +3,7 @@ package sourceadapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 type hostRunner struct {
 	active  bool
 	netns   string
+	links   string
+	procs   int
 	netem   bool
 	addrs   string
 	cfg     string
@@ -36,7 +39,16 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 		if h.netem {
 			n = "1"
 		}
-		return "netns:" + h.netns + "\nnetem:" + n + "\naddr:" + h.addrs + "\ncfg:\n" + h.cfg, nil
+		return fmt.Sprintf("netns:%s\nlinks:%s\nprocs:%d\nnetem:%s\naddr:%s\ncfg:\n%s", h.netns, h.links, h.procs, n, h.addrs, h.cfg), nil
+	case cmd == segAddrCmd:
+		return strings.ReplaceAll(strings.TrimSpace(h.addrs), " ", "\n") + "\n", nil
+	case strings.HasPrefix(cmd, "sudo ip -4 addr flush dev eth1"):
+		var a []string
+		for _, m := range regexp.MustCompile(`ip addr add (\S+) brd \+ dev eth1`).FindAllStringSubmatch(cmd, -1) {
+			a = append(a, m[1]+" ")
+		}
+		h.addrs = strings.Join(a, "")
+		return "", nil
 	case strings.HasPrefix(cmd, "sudo tee "):
 		body := cmd[strings.Index(cmd, "<<'LABEOF'\n")+len("<<'LABEOF'\n"):]
 		h.written = strings.TrimSuffix(body, "LABEOF\n")
@@ -44,6 +56,12 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 		return "", nil
 	case strings.Contains(cmd, "ip netns del"):
 		h.netns, h.netem = "", false
+		if strings.Contains(cmd, "pkill -f '"+actorRE+"'") {
+			h.procs = 0
+		}
+		if strings.Contains(cmd, `sudo ip link del "$l"`) {
+			h.links = ""
+		}
 		return "", nil
 	case strings.Contains(cmd, "systemctl restart"):
 		h.active = true
@@ -71,6 +89,8 @@ func TestReadyTakesTheBaselineThenHoldsTheSourceToIt(t *testing.T) {
 		{"service stopped", func(h *hostRunner) { h.active = false }, "not active"},
 		{"leftover netns", func(h *hostRunner) { h.netns = "labc-rogue " }, "labc-rogue"},
 		{"netem left on", func(h *hostRunner) { h.netem = true }, "netem"},
+		{"leftover link", func(h *hostRunner) { h.links = "labc-sq0 " }, "labc-sq0"},
+		{"leftover actor process", func(h *hostRunner) { h.procs = 1 }, "actor processes"},
 		{"segment address changed", func(h *hostRunner) { h.addrs = "10.200.101.2/24 " }, "eth1 carries"},
 		{"config drifted", func(h *hostRunner) { h.cfg = "dhcp-range=10.200.1.201,10.200.1.202\n" }, "differs"},
 	}
@@ -94,6 +114,7 @@ func TestRecoverPutsTheBaselineBackAndRestarts(t *testing.T) {
 	}
 	orig := h.cfg
 	h.active, h.netns, h.netem, h.cfg = false, "labc-squat ", true, "changed\n"
+	h.links, h.procs, h.addrs = "labc-rg0 ", 2, "10.200.101.2/24 "
 	if err := a.Ready(ctx); err == nil {
 		t.Fatal("Ready on a broken source passed")
 	}
@@ -114,6 +135,35 @@ func TestRecoverPutsTheBaselineBackAndRestarts(t *testing.T) {
 	}
 	if !sawQdiscDel {
 		t.Fatalf("Recover never removed the qdisc: %v", h.calls)
+	}
+}
+
+// The searches for leftover actors must not find the shell running
+// them: pgrep -f reads full argv, so a command carrying the text
+// "labc-" counts itself, and pkill kills its own shell (pgrep(1), #23).
+func TestActorSearchesNeverCarryTheirOwnPattern(t *testing.T) {
+	h := healthyHost()
+	a := &DnsmasqAdapter{Runner: h}
+	ctx := context.Background()
+	if err := a.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var sawPkill, sawPgrep bool
+	for _, c := range h.calls {
+		if strings.Contains(c, "labc-") {
+			t.Errorf("command carries the literal actor prefix: %q", c)
+		}
+		sawPkill = sawPkill || strings.Contains(c, "pkill -f '[l]abc-'")
+		sawPgrep = sawPgrep || strings.Contains(c, "pgrep -f '[l]abc-'")
+	}
+	if !sawPkill || !sawPgrep {
+		t.Fatalf("pkill seen %t, pgrep seen %t: %v", sawPkill, sawPgrep, h.calls)
+	}
+	if !regexp.MustCompile(actorRE).MatchString("labc-rogue") || regexp.MustCompile(actorRE).MatchString("[l]abc-") {
+		t.Fatalf("%q must match an actor name and not itself", actorRE)
 	}
 }
 
