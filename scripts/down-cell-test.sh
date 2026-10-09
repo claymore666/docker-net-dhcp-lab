@@ -1,7 +1,8 @@
 #!/bin/bash
 # Refusal and pcap-preservation tests for down-cell.sh (issue #1), plus
 # the source VM's own teardown (issue #2, cases 5-6) and a failover
-# pair's partner (#12, cases 8-9). CI-safe: every case
+# pair's partner (#12, cases 8-9) and a relay cell's (#11, cases 10-11).
+# CI-safe: every case
 # runs against a stubbed sudo/virsh on PATH, never real libvirt.
 set -euo pipefail
 
@@ -266,7 +267,7 @@ mkdir -p "$work6"
 cat >"$tmp/virsh" <<STUB
 #!/bin/bash
 case "\$2" in
-*-dockerhost | *-partner) exit 1 ;;
+*-dockerhost | *-partner | *-relay) exit 1 ;;
 *-source)
 	if [ "\$1" = "dominfo" ]; then
 		n=\$(cat "$case6/dominfo-n" 2>/dev/null || echo 0)
@@ -393,7 +394,104 @@ if ! grep -qF 'REFUSED -- lab-case9cell-partner still exists' <<<"${out9:-}" || 
 	fail=1
 fi
 
+# Case 10: a relay cell (#11). The relay domain exists once and is gone on
+# the recheck; both observers are targeted; the two observer.pcap files
+# keep distinct names; of the two bridges up-cell.sh recorded, the empty
+# one is deleted and the one that still has a port is left alone.
+case10=$(mktemp -d "$tmp/case10-XXXXXX")
+work10="$case10/work"
+mkdir -p "$work10/srv"
+echo client >"$work10/observer.pcap"
+echo server >"$work10/srv/observer.pcap"
+printf '%s\n' lab-br-c10cli lab-br-c10srv >"$work10/relay-bridges"
+calls10="$case10/calls.log"
+: >"$calls10"
+cat >"$tmp/virsh" <<STUB
+#!/bin/bash
+echo "virsh \$*" >>"$calls10"
+case "\$2" in
+*-relay)
+	if [ "\$1" = "dominfo" ]; then
+		n=\$(cat "$case10/dominfo-n" 2>/dev/null || echo 0)
+		n=\$((n + 1))
+		echo "\$n" >"$case10/dominfo-n"
+		[ "\$n" -eq 1 ] && exit 0 || exit 1
+	fi
+	exit 0
+	;;
+*) exit 1 ;;
+esac
+STUB
+cat >"$tmp/docker" <<STUB
+#!/bin/bash
+echo "docker \$*" >>"$calls10"
+exit 1
+STUB
+cat >"$tmp/ip" <<STUB
+#!/bin/bash
+echo "ip \$*" >>"$calls10"
+case "\$*" in
+"link show lab-br-c10cli" | "link show lab-br-c10srv") exit 0 ;;
+"-o link show master lab-br-c10cli") echo "9: vnet9: <BROADCAST> master lab-br-c10cli" ;;
+"-o link show master lab-br-c10srv") ;;
+*) exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/virsh" "$tmp/docker" "$tmp/ip"
+evdir10="$case10/evidence"
+out10=$(LAB_EVIDENCE_DIR="$evdir10" PATH="$tmp:$PATH" "$SCRIPT" case10cell "$work10" 2>&1) || {
+	echo "down-cell-test: FAIL -- case 10: relay cell teardown failed" >&2
+	echo "$out10" >&2
+	fail=1
+}
+hash10=$(echo -n case10cell-srv | md5sum | cut -c1-5)
+for want in "virsh destroy lab-case10cell-relay" "virsh undefine lab-case10cell-relay --nvram" \
+	"docker rm -f lab-observer-case10cell" "docker rm -f lab-observer-case10cell-srv" \
+	"ip link del veth-obs-${hash10}h" "ip link del lab-br-c10srv"; do
+	if ! grep -qxF "$want" "$calls10"; then
+		echo "down-cell-test: FAIL -- case 10: never ran \"$want\"" >&2
+		fail=1
+	fi
+done
+if grep -qxF "ip link del lab-br-c10cli" "$calls10"; then
+	echo "down-cell-test: FAIL -- case 10: deleted a bridge that still had a port" >&2
+	fail=1
+fi
+if [ "$(find "$evdir10" -name 'case10cell-*observer.pcap' 2>/dev/null | wc -l)" -ne 2 ] ||
+	! grep -qx server "$evdir10"/case10cell-*-srv-observer.pcap 2>/dev/null; then
+	echo "down-cell-test: FAIL -- case 10: the two observer.pcap files did not land under two names" >&2
+	ls -l "$evdir10" >&2 || true
+	fail=1
+fi
+if [ -d "$work10" ]; then
+	echo "down-cell-test: FAIL -- case 10: work dir was not removed" >&2
+	fail=1
+fi
+
+# Case 11: the relay domain survives destroy/undefine. Must refuse and
+# keep $WORK, the same guarantee as the docker host and the source.
+case11=$(mktemp -d "$tmp/case11-XXXXXX")
+work11="$case11/work"
+mkdir -p "$work11"
+echo fake >"$work11/observer.pcap"
+cat >"$tmp/virsh" <<'STUB'
+#!/bin/bash
+case "$2" in
+*-relay) exit 0 ;;
+*) exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/virsh"
+if LAB_EVIDENCE_DIR="$case11/evidence" PATH="$tmp:$PATH" "$SCRIPT" case11cell "$work11" >/dev/null 2>&1; then
+	echo "down-cell-test: FAIL -- case 11: exited 0 although the relay domain still exists" >&2
+	fail=1
+fi
+if [ ! -f "$work11/observer.pcap" ]; then
+	echo "down-cell-test: FAIL -- case 11: \$WORK was touched although the relay domain still exists" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "down-cell-test: PASS -- all nine cases behaved as expected"
+echo "down-cell-test: PASS -- all eleven cases behaved as expected"

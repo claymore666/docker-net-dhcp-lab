@@ -3,8 +3,8 @@
 # domain (its per-VM NVRAM copy included, issue #1), remove the
 # observer's own container and its host-side veth (issue #1/#3
 # direction: left behind by every prior version of this script), then
-# remove the work directory. Never touches the segment bridge or
-# net-mgmt themselves -- other cells may still use them. Idempotent:
+# remove the work directory. Never touches net-mgmt, nor a cell's
+# segment bridge, except a relay cell's two bridges (#11). Idempotent:
 # safe to run on a cell that is already down or was never fully brought
 # up, or one that never had an observer at all.
 set -euo pipefail
@@ -14,6 +14,7 @@ WORK=${2:?usage: down-cell.sh <cell-name> <work-dir>}
 domain="lab-${CELL}-dockerhost"
 source_domain="lab-${CELL}-source"
 partner_domain="lab-${CELL}-partner"
+relay_domain="lab-${CELL}-relay"
 
 # Same naming as observe-segment.sh's own container and host-side veth
 # (its comment there has the IFNAMSIZ reasoning for the hash); recomputed
@@ -25,6 +26,11 @@ observer_veth="veth-obs-${cell_hash}h"
 observer_container="lab-observer-${CELL}"
 sudo -n docker rm -f "$observer_container" >/dev/null 2>&1 || true
 sudo -n ip link del "$observer_veth" 2>/dev/null || true
+# A relay cell's second observer, on the server segment (#11), keyed
+# "$CELL-srv" by capture-start.sh; a no-op in every other cell.
+srv_hash=$(echo -n "$CELL-srv" | md5sum | cut -c1-5)
+sudo -n docker rm -f "lab-observer-${CELL}-srv" >/dev/null 2>&1 || true
+sudo -n ip link del "veth-obs-${srv_hash}h" 2>/dev/null || true
 
 # sudo -n, matching up-cell.sh: net-mgmt and this domain live under
 # qemu:///system, not the empty per-user qemu:///session a plain virsh
@@ -65,6 +71,16 @@ for d in "$source_domain" "$partner_domain"; do
 	fi
 done
 
+# A relay cell's relay VM (#11), same shape as the source above.
+if sudo -n virsh dominfo "$relay_domain" >/dev/null 2>&1; then
+	sudo -n virsh destroy "$relay_domain" >/dev/null 2>&1 || true
+	sudo -n virsh undefine "$relay_domain" --nvram >/dev/null 2>&1 || sudo -n virsh undefine "$relay_domain" >/dev/null 2>&1 || true
+fi
+if sudo -n virsh dominfo "$relay_domain" >/dev/null 2>&1; then
+	echo "down-cell: REFUSED -- $relay_domain still exists after destroy/undefine; not touching $WORK" >&2
+	exit 1
+fi
+
 # Move any observer pcaps out to an evidence directory, outside $WORK,
 # before it is removed below -- a real pcap was lost this way once
 # already (issue #1: captured, then deleted unread by this same rm -rf,
@@ -92,11 +108,29 @@ if [ -d "$WORK" ]; then
 	if [ "${#pcaps[@]}" -gt 0 ]; then
 		mkdir -p "$evidence_dir"
 		ts=$(date -u +%Y%m%dT%H%M%SZ)
+		# Named by the path under $WORK (#11): $WORK/observer.pcap and the
+		# relay cell's $WORK/srv/observer.pcap must not land on one name.
 		for f in "${pcaps[@]}"; do
-			mv "$f" "$evidence_dir/${CELL}-${ts}-$(basename "$f")"
+			rel=${f#"$WORK"/}
+			mv "$f" "$evidence_dir/${CELL}-${ts}-${rel//\//-}"
 		done
 		echo "down-cell: moved ${#pcaps[@]} pcap(s) to $evidence_dir"
 	fi
+fi
+
+# A relay cell's two bridges (#11), named by up-cell.sh in $WORK. Every
+# VM and observer port is gone by now; a bridge that still has a port is
+# someone else's and is left alone.
+if [ -f "$WORK/relay-bridges" ]; then
+	while read -r br; do
+		[ -n "$br" ] || continue
+		sudo -n ip link show "$br" >/dev/null 2>&1 || continue
+		if [ -n "$(sudo -n ip -o link show master "$br" 2>/dev/null)" ]; then
+			echo "down-cell: bridge $br still has ports, left in place" >&2
+			continue
+		fi
+		sudo -n ip link del "$br" 2>/dev/null || true
+	done <"$WORK/relay-bridges"
 fi
 
 # Named explicitly, ahead of the rm -rf below: the per-cell known_hosts
