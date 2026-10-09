@@ -1,7 +1,8 @@
 #cloud-config
 # Docker host (issue #1; host axis issue #8). __PLUGIN_TAG__, __MGMT_ADDR__,
 # __DOCKER_APT_DISTRO__, __DOCKER_APT_SUITE__ and __DOCKER_ENGINE_PACKAGE__
-# are substituted by scripts/up-cell.sh from lab.yaml via `labctl resolve`
+# (plus the bootcmd placeholder below) are substituted by
+# scripts/render-docker-host-user-data.sh from lab.yaml via `labctl resolve`
 # and internal/labyaml/baseimages.go's registry.
 hostname: lab-docker-host
 manage_etc_hosts: true
@@ -11,6 +12,15 @@ users:
     shell: /bin/bash
     ssh_authorized_keys:
       - __SSH_PUBKEY__
+# bootcmd is an init-stage module, package_update/packages run in the final
+# stage and runcmd's script after them (cloud-init 20.4.1 cloud.cfg on the
+# Debian 11 image, issue #27), so a sources rewrite in runcmd comes too
+# late. The substituted command is empty for every image but the archived
+# ones; the trailing "true" keeps the script valid when it is.
+bootcmd:
+  - |
+    __APT_SOURCES_FIX__
+    true
 package_update: true
 packages:
   - ca-certificates

@@ -37,6 +37,9 @@ go run ./cmd/labctl validate lab.yaml
 echo "== cloud-init network-config seed file stays valid (MAC quoting, no network: wrapper) =="
 ./scripts/cloud-init-mac-quote-test.sh
 
+echo "== Docker host user-data carries the Debian 11 archive rewrite, and only there (issue #27) =="
+./scripts/cloud-init-docker-host-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.

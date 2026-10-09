@@ -17,6 +17,25 @@ type BaseImage struct {
 	Suite  string `json:"suite"`  // trixie, bullseye, noble, ...
 	// OSVariant is virt-install's --os-variant value.
 	OSVariant string `json:"os_variant"`
+	// AptSourcesFix is a one-line shell command that rewrites
+	// /etc/apt/sources.list for a release whose pool left the regular
+	// mirrors; empty (the default) leaves the image's own sources alone.
+	// The docker-host template runs it from bootcmd, which cloud-init
+	// executes before package-update-upgrade-install (issue #27).
+	AptSourcesFix string `json:"apt_sources_fix"`
+}
+
+// archiveAptSourcesFix returns the AptSourcesFix command that points a
+// Debian suite and its updates/security pockets at archive.debian.org.
+// No '#', '&' or backslash in the result: scripts/render-docker-host-user-data.sh
+// substitutes it with sed. check-valid-until=no guards a Release file that
+// gains an expiry; none of the three carries one today (issue #27).
+func archiveAptSourcesFix(suite string) string {
+	const opt = "[check-valid-until=no] http://archive.debian.org/"
+	return "{ echo 'deb " + opt + "debian " + suite + " main';" +
+		" echo 'deb " + opt + "debian " + suite + "-updates main';" +
+		" echo 'deb " + opt + "debian-security " + suite + "-security main'; }" +
+		" > /etc/apt/sources.list"
 }
 
 var baseImages = map[string]BaseImage{
@@ -37,6 +56,10 @@ var baseImages = map[string]BaseImage{
 		Distro:    "debian",
 		Suite:     "bullseye",
 		OSVariant: "debian11",
+		// Debian 11 left LTS on 2026-08-31: its security pool files 404
+		// on the regular mirrors while the Release file is still served
+		// (issue #27, measured 2026-10-09).
+		AptSourcesFix: archiveAptSourcesFix("bullseye"),
 	},
 	"ubuntu-24.04-server-cloudimg-amd64": {
 		Name:      "ubuntu-24.04-server-cloudimg-amd64",
