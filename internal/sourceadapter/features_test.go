@@ -13,16 +13,18 @@ import (
 // baselineConfig renders the config block cloud-init/<name> writes to the
 // source VM, so the tests run the adapters against the real baseline and
 // a template change that moves an anchor fails here (#20).
-func baselineConfig(t *testing.T, tmpl, delim string) string {
+// baselineConfig renders the heredoc the template writes to path.
+func baselineConfig(t *testing.T, tmpl, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "cloud-init", tmpl))
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, after, ok := strings.Cut(string(raw), "<<'"+delim+"'\n")
+	_, after, ok := strings.Cut(string(raw), "cat >"+path+" <<'")
 	if !ok {
-		t.Fatalf("%s: no heredoc %s", tmpl, delim)
+		t.Fatalf("%s: no heredoc writes %s", tmpl, path)
 	}
+	delim, after, _ := strings.Cut(after, "'\n")
 	body, _, _ := strings.Cut(after, "\n    "+delim+"\n")
 	var out []string
 	for _, l := range strings.Split(body, "\n") {
@@ -33,6 +35,8 @@ func baselineConfig(t *testing.T, tmpl, delim string) string {
 		"__SEG_SUBNET__": "10.200.1.0/24", "__SEG_NETWORK__": "10.200.1.0", "__SEG_NETMASK__": "255.255.255.0",
 		"__SEG_GATEWAY__": "10.200.1.1", "__POOL_START__": "10.200.1.100", "__POOL_END__": "10.200.1.200",
 		"__CLASS_POOL_START__": "10.200.1.221", "__CLASS_POOL_END__": "10.200.1.230",
+		"__SEG_SUBNET6__": "fd42:200:0:100::/64", "__POOL6_START__": "fd42:200:0:100::100",
+		"__POOL6_END__": "fd42:200:0:100::1ff", "__TEMP6_POOL__": "fd42:200:0:100::200/120",
 	} {
 		cfg = strings.ReplaceAll(cfg, k, v)
 	}
@@ -42,10 +46,10 @@ func baselineConfig(t *testing.T, tmpl, delim string) string {
 	return cfg
 }
 
-var baselines = map[string]struct{ tmpl, delim, path string }{
-	"kea":      {"kea-user-data.tmpl.yaml", "KEAEOF", "/etc/kea/kea-dhcp4.conf"},
-	"isc-dhcp": {"isc-dhcp-user-data.tmpl.yaml", "DHCPDEOF", "/etc/dhcp/dhcpd.conf"},
-	"dnsmasq":  {"dnsmasq-user-data.tmpl.yaml", "DNSMASQEOF", "/etc/dnsmasq.conf"},
+var baselines = map[string]struct{ tmpl, path string }{
+	"kea":      {"kea-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
+	"isc-dhcp": {"isc-dhcp-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
+	"dnsmasq":  {"dnsmasq-user-data.tmpl.yaml", "/etc/dnsmasq.conf"},
 }
 
 // cfgRunner is a source whose config file the adapter reads and writes;
@@ -84,7 +88,7 @@ func featureAdapter(name string, r Runner) Adapter { return groupBAdapters(r)[na
 
 func baselineRunner(t *testing.T, name string) *cfgRunner {
 	b := baselines[name]
-	return &cfgRunner{cfg: baselineConfig(t, b.tmpl, b.delim)}
+	return &cfgRunner{cfg: baselineConfig(t, b.tmpl, b.path)}
 }
 
 const f1ID = "00:6c:61:62:2d:66:32:62" // 0x00 type byte + "lab-f2b"

@@ -2,7 +2,7 @@
 # eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
 # naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
 # base image). eth1 carries a real address here: the source binds and
-# answers on it; no gateway/RA on eth1, since accepting one would let
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
 # the segment's own router (none exists) reconfigure this NIC.
 # macaddress quoted and no top-level `network:` key, both for the same
 # reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
@@ -22,7 +22,7 @@ ethernets:
     match:
       macaddress: "__SEG_MAC__"
     set-name: eth1
-    addresses: [__SEG_ADDR__]
+    addresses: [__SEG_ADDR__, "__SEG_ADDR6__"]
     dhcp4: false
     dhcp6: false
     accept-ra: false

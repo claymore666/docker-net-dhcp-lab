@@ -32,5 +32,14 @@ runcmd:
     dhcp-option=3,__SEG_GATEWAY__
     conf-dir=/etc/dnsmasq.d/,*.conf
     DNSMASQEOF
+  # DHCPv6 and RA (#23 group D): dnsmasq sends its own RA. "slaac" sets
+  # A=1 for the M=1 A=1 baseline; ra-param keeps router lifetime 1800.
+  # IA_TA is served from the same range with no extra line.
+  - |
+    cat >/etc/dnsmasq.d/lab-v6.conf <<'DNSMASQEOF'
+    enable-ra
+    dhcp-range=__POOL6_START__,__POOL6_END__,slaac,64,2h
+    ra-param=eth1,10,1800
+    DNSMASQEOF
   - systemctl enable --now dnsmasq
   - touch /var/lib/cloud/lab-bootstrap-done
