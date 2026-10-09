@@ -151,7 +151,10 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 | C2 | source down past T1 | the source stops after the bind and returns between T1 and T2; the client tried to renew while it was down and keeps its address |
 | C3 | source down past expiry | the source stays down past the lease's expiry; within 120 s of its return the container carries an address the source's table shows for it |
 | C4 | restart without lease file | the source restarts with an empty lease file; 135 s after the bind it holds exactly one lease for the container, on the address the container carries |
-| C5 | failover, primary killed | N/A on every source until the failover cells exist (#12) |
+| C5 | failover, granting peer stopped | on the `kea-ha` cell: the peer that granted the lease stops 10 s after the bind; the client's renewals to it go unanswered, its rebind after T2 is answered by the other peer, and the container keeps its address throughout (T1 and T2 from the lease time the ACK itself carries) |
+| C5b | failover, primary down at create | with the primary stopped and the partner taken over, a new container is leased by the partner within C1's bound, and the partner's table holds it |
+| C5c | failover, primary returns | C5b's container is kept while the primary returns; the primary's table holds the outage lease, the container keeps its address through its next renewal, and a new container is leased |
+| C5d | failover, no address given twice | 18 containers (10 with both peers up, 4 with the primary down, 4 after its return) carry 18 distinct addresses; no peer's table and no pair of ACKs gives one address to two clients at once |
 | C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it |
 | C6b | late squatter | with `conflict_check=async`, a host takes the container's address and announces it; within 30 s the client declines it and moves to an address the source leases to it |
 | C7 | rogue server | a second DHCP server answers on the segment; a network with `dhcp_deny_servers` and one with `dhcp_servers` both lease from the real source, and the second server's lease file stays empty for them |
@@ -242,6 +245,15 @@ scripts/down-cell.sh kea <work-dir>
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.
+
+The `kea-ha` cell is a failover pair: two Kea VMs on one segment in
+hot-standby, with `max-unacked-clients 0`, so the partner takes over at
+once when the primary stops (issue #12). `up-cell.sh` builds both
+peers and `down-cell.sh` removes both. C5 to C5d run only there. On
+that cell C1 to C4 stop or reset both peers together, while C10 and
+C12 report N/A with the reason: a delay on one peer is split brain,
+and the pair is not a relay. Each scenario's evidence holds both
+peers' failover state before and after it, recorded but not judged.
 
 ## Run every scenario on a cell
 

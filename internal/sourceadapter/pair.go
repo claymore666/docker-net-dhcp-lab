@@ -21,6 +21,11 @@ type PairPeer struct {
 type PairAdapter struct {
 	Peers  [2]PairPeer
 	Normal string
+	// Survivor is the state a peer reaches when its partner is down;
+	// StandbySilent says the standby answers no DHCP while the primary
+	// runs (Kea hot-standby, measured locally, lab #12).
+	Survivor      string
+	StandbySilent bool
 	// NormalWait bounds the wait for Normal after a start; measured
 	// locally at 4.8 s for Kea from a cold start (lab #12).
 	NormalWait time.Duration
@@ -36,6 +41,13 @@ type PairControl interface {
 	StartPeer(ctx context.Context, name string) error
 	PeerLeases(ctx context.Context, name string) ([]Lease, error)
 	PeerState(ctx context.Context, name string) (HAState, error)
+	Profile() PairProfile
+}
+
+// PairProfile is what the C5 family needs to know about a pair's kind.
+type PairProfile struct {
+	Normal, Survivor string
+	StandbySilent    bool
 }
 
 // NAExplainer lets an adapter say why it leaves a capability out, so the
@@ -57,10 +69,12 @@ func NewKeaPair(primary, partner Runner, primaryID, partnerID string) *PairAdapt
 			State: func(ctx context.Context) (HAState, error) { return KeaHAState(ctx, r) }}
 	}
 	return &PairAdapter{
-		Peers:      [2]PairPeer{peer("primary", primary, primaryID), peer("partner", partner, partnerID)},
-		Normal:     KeaHotStandby,
-		NormalWait: 60 * time.Second,
-		NormalPoll: time.Second,
+		Peers:         [2]PairPeer{peer("primary", primary, primaryID), peer("partner", partner, partnerID)},
+		Normal:        KeaHotStandby,
+		Survivor:      KeaPartnerDown,
+		StandbySilent: true,
+		NormalWait:    60 * time.Second,
+		NormalPoll:    time.Second,
 	}
 }
 
@@ -390,4 +404,8 @@ func (p *PairAdapter) PeerState(ctx context.Context, name string) (HAState, erro
 		return HAState{}, err
 	}
 	return peer.State(ctx)
+}
+
+func (p *PairAdapter) Profile() PairProfile {
+	return PairProfile{Normal: p.Normal, Survivor: p.Survivor, StandbySilent: p.StandbySilent}
 }

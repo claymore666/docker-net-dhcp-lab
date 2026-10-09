@@ -484,3 +484,10 @@ func TestKeaHAStateIssuesBothCommands(t *testing.T) {
 		t.Fatal("heartbeat command lost")
 	}
 }
+
+func TestKeaPairProfile(t *testing.T) {
+	got := NewKeaPair(nil, nil, "a", "b").Profile()
+	if got != (PairProfile{Normal: "hot-standby", Survivor: "partner-down", StandbySilent: true}) {
+		t.Errorf("profile %+v", got)
+	}
+}

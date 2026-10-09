@@ -22,9 +22,12 @@ const keaStatusGetCmd = `curl -sf -X POST -H "Content-Type: application/json" ` 
 const keaHeartbeatCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
 	`-d '{"command":"ha-heartbeat","service":["dhcp4"]}' http://127.0.0.1:8000/`
 
-// KeaHotStandby is the state both peers of a healthy hot-standby pair
-// report (Kea 2.6 ARM, HA states; measured locally, lab #12).
-const KeaHotStandby = "hot-standby"
+// Kea HA states: both peers of a healthy hot-standby pair report
+// hot-standby, a survivor partner-down (Kea 2.6 ARM; measured, lab #12).
+const (
+	KeaHotStandby  = "hot-standby"
+	KeaPartnerDown = "partner-down"
+)
 
 // KeaHAState reads a Kea peer's HA state from status-get and requires
 // ha-heartbeat to report the same state; a disagreement is an error, not

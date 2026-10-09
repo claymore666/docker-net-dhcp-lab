@@ -176,28 +176,40 @@ func readCapture(ctx context.Context, e Env, scenario, label, ident string, ev m
 // capture, waited for up to bound: the lease clock starts at the bind
 // the wire shows, never at the source's own clock (#23 defeat A5).
 func bindAnchor(ctx context.Context, e Env, scenario, ident, addr string, bound, poll time.Duration, ev map[string]string) (time.Time, error) {
+	m, err := bindACK(ctx, e, scenario, ident, addr, bound, poll, ev)
+	return m.At, err
+}
+
+// bindACK is bindAnchor's ACK itself: its server-id and option 51 time
+// the C5 family (lab #12).
+func bindACK(ctx context.Context, e Env, scenario, ident, addr string, bound, poll time.Duration, ev map[string]string) (DHCPMsg, error) {
 	deadline := time.Now().Add(bound)
 	for {
 		msgs, err := readCapture(ctx, e, scenario, "capture-bind", ident, ev)
 		if err != nil {
-			return time.Time{}, err
+			return DHCPMsg{}, err
 		}
-		var at time.Time
-		for _, m := range messagesOfType(msgs, "ACK") {
-			if m.YIAddr == addr && m.At.After(at) {
-				at = m.At
-			}
-		}
-		if !at.IsZero() {
-			return at, nil
+		if m, ok := lastACKOf(msgs, addr); ok {
+			return m, nil
 		}
 		if time.Now().After(deadline) {
-			return time.Time{}, fmt.Errorf("the capture shows no ACK of %s to %s within %s", addr, ident, bound)
+			return DHCPMsg{}, fmt.Errorf("the capture shows no ACK of %s to %s within %s", addr, ident, bound)
 		}
 		if err := sleepCtx(ctx, poll); err != nil {
-			return time.Time{}, err
+			return DHCPMsg{}, err
 		}
 	}
+}
+
+// lastACKOf is the latest ACK of addr in msgs.
+func lastACKOf(msgs []DHCPMsg, addr string) (DHCPMsg, bool) {
+	var last DHCPMsg
+	for _, m := range messagesOfType(msgs, "ACK") {
+		if m.YIAddr == addr && m.At.After(last.At) {
+			last = m
+		}
+	}
+	return last, !last.At.IsZero()
 }
 
 // sleepUntil waits until t or until ctx ends.

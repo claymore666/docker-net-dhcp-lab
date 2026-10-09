@@ -26,6 +26,7 @@ var cFast = cTiming{
 	c3Record: 40 * ms, c3Start: 80 * ms, c3Window: 200 * ms,
 	c4Wait: 40 * ms, c1Settle: 5 * ms, c10Lift: 300 * ms,
 	c6bWindow: 200 * ms, c8Settle: 20 * ms, c8Links: 50 * ms, c9Wait: 300 * ms,
+	c5Wait: 50 * ms,
 }
 
 // cRunner is bRunner plus what group C asks the docker host: the timed
@@ -201,7 +202,10 @@ func TestCatalogRegistersGroupCWithTheNeedsOfTheDesign(t *testing.T) {
 		NameC2:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart},
 		NameC3:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRestart},
 		NameC4:  {sourceadapter.CapV4, sourceadapter.CapShortLease},
-		NameC5:  {sourceadapter.CapFailoverPair},
+		NameC5:  {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair},
+		NameC5b: {sourceadapter.CapV4, sourceadapter.CapFailoverPair},
+		NameC5c: {sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapFailoverPair},
+		NameC5d: {sourceadapter.CapV4, sourceadapter.CapFailoverPair},
 		NameC6:  {sourceadapter.CapV4, sourceadapter.CapReserveClientID, sourceadapter.CapSquatter},
 		NameC6b: {sourceadapter.CapV4, sourceadapter.CapSquatter},
 		NameC7:  {sourceadapter.CapV4, sourceadapter.CapRogueServer},
@@ -230,7 +234,7 @@ func TestCatalogRegistersGroupCWithTheNeedsOfTheDesign(t *testing.T) {
 func TestC5AndC12AreNotApplicableNamingTheirLabIssues(t *testing.T) {
 	all := &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart,
 		sourceadapter.CapShortLease, sourceadapter.CapImpair}}
-	for name, issue := range map[string]string{NameC5: "docker-net-dhcp-lab#12", NameC12: "docker-net-dhcp-lab#11"} {
+	for name, issue := range map[string]string{NameC5: "docker-net-dhcp-lab#12", NameC5b: "docker-net-dhcp-lab#12", NameC5c: "docker-net-dhcp-lab#12", NameC5d: "docker-net-dhcp-lab#12", NameC12: "docker-net-dhcp-lab#11"} {
 		for _, s := range Catalog {
 			if s.Name != name {
 				continue
