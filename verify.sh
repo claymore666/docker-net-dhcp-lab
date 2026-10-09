@@ -37,6 +37,9 @@ go run ./cmd/labctl validate lab.yaml
 echo "== cloud-init network-config seed file stays valid (MAC quoting, no network: wrapper) =="
 ./scripts/cloud-init-mac-quote-test.sh
 
+echo "== up-source.sh: the IPv6 gate follows the source type (lab #10) =="
+./scripts/up-source-test.sh
+
 echo "== Docker host user-data carries the Debian 11 archive rewrite, and only there (issue #27) =="
 ./scripts/cloud-init-docker-host-test.sh
 

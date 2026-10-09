@@ -324,3 +324,30 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: udhcpd
+    description: >
+      busybox udhcpd 1.37, apt install, one pool. It keys leases by MAC
+      only, so ipvlan children that share a parent MAC meet the same
+      lease. Issue #10.
+    segment:
+      bridge: lab-br-udhcpd
+      subnet: 10.200.12.0/24
+    source:
+      type: udhcpd
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.121/24
+      seg_address: 10.200.12.2/24
+      pool_start: 10.200.12.100
+      pool_end: 10.200.12.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.120/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
