@@ -300,7 +300,7 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 }
 
 // validatePartner checks a failover pair's second server: an address of
-// its own on the segment that no client lease can ever take.
+// its own below the source pool, clear of every scenario band (#12).
 func validatePartner(cellName string, s *Source, primarySeg, start, end netip.Addr, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
 	p := s.Partner
 	if !pairTypes[s.Type] {
@@ -335,6 +335,9 @@ func validatePartner(cellName string, s *Source, primarySeg, start, end netip.Ad
 	if (host >= GroupBBandFirstHost && host <= GroupBBandLastHost) || host == DNSOptionHost {
 		return fmt.Errorf("cell %s: source.partner.seg_address %s is in the group B host band (.%d-.%d, .%d)",
 			cellName, a, GroupBBandFirstHost, GroupBBandLastHost, DNSOptionHost)
+	}
+	if a.Compare(end) > 0 {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is above the source pool, where the group C and F scenarios place their own addresses", cellName, a)
 	}
 	return nil
 }
