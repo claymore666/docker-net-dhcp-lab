@@ -187,11 +187,11 @@ func (a *DnsmasqAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *DnsmasqAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", a.Leases, &a.base)
+	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *DnsmasqAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, "dnsmasq", "/etc/dnsmasq.conf", &a.base)
+	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *DnsmasqAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {

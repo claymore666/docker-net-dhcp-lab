@@ -223,11 +223,11 @@ func (a *KeaAdapter) SetDNSOption(ctx context.Context, addr string) (func(contex
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *KeaAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, "kea-dhcp4-server", "/etc/kea/kea-dhcp4.conf", a.Leases, &a.base)
+	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *KeaAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, "kea-dhcp4-server", "/etc/kea/kea-dhcp4.conf", &a.base)
+	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *KeaAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {

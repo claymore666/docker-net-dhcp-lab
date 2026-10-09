@@ -103,3 +103,20 @@ func (a *DnsmasqAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Co
 	return enableFeatureViaSubstitution(ctx, a.Runner, dnsmasqLabV6Conf, "#lab-ra-off", edits,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
 }
+
+// units are each adapter's Ready and Recover inputs (readiness.go): the
+// v4 unit and config, then the v6 configs and the units serving them.
+func (a *KeaAdapter) units() sourceUnits {
+	return sourceUnits{service: "kea-dhcp4-server", cfgPath: "/etc/kea/kea-dhcp4.conf", leases6: a.Leases6,
+		extra: []extraConf{{keaDHCP6Conf, "kea-dhcp6-server"}, {radvdConf, "radvd"}}}
+}
+
+func (a *ISCDHCPAdapter) units() sourceUnits {
+	return sourceUnits{service: "isc-dhcp-server", cfgPath: "/etc/dhcp/dhcpd.conf", leases6: a.Leases6,
+		extra: []extraConf{{iscDHCP6Conf, "isc-dhcp-server"}, {radvdConf, "radvd"}}}
+}
+
+func (a *DnsmasqAdapter) units() sourceUnits {
+	return sourceUnits{service: "dnsmasq", cfgPath: "/etc/dnsmasq.conf", leases6: a.Leases6,
+		extra: []extraConf{{dnsmasqLabV6Conf, "dnsmasq"}}}
+}
