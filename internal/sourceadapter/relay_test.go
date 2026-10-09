@@ -198,6 +198,10 @@ func TestRelayCapabilities(t *testing.T) {
 	if !slices.Equal(inner.caps, all) {
 		t.Fatalf("the inner adapter's slice was changed: %v", inner.caps)
 	}
+	twice := WithRelay(&innerStub{caps: []Capability{CapRelay, CapV4}}, &scriptRunner{}, testRelayParams).Capabilities()
+	if !slices.Equal(twice, []Capability{CapV4, CapRelay}) {
+		t.Fatalf("an inner relay capability is listed once, got %v", twice)
+	}
 }
 
 func TestRelayMACs(t *testing.T) {
