@@ -14,15 +14,11 @@ RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
 bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
 mgmt_addr=$(jq -r '.cell.docker_host.mgmt_address' <<<"$RESOLVED")
 mgmt_gw=$(jq -r '.management.gateway' <<<"$RESOLVED")
-plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.docker_host.vcpus' <<<"$RESOLVED")
 mem=$(jq -r '.cell.docker_host.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.docker_host.disk_gib' <<<"$RESOLVED")
-engine_version=$(jq -r '.cell.docker_host.engine_version // empty' <<<"$RESOLVED")
 image_name=$(jq -r '.docker_host_image.name' <<<"$RESOLVED")
 image_url=$(jq -r '.docker_host_image.url' <<<"$RESOLVED")
-image_distro=$(jq -r '.docker_host_image.distro' <<<"$RESOLVED")
-image_suite=$(jq -r '.docker_host_image.suite' <<<"$RESOLVED")
 os_variant=$(jq -r '.docker_host_image.os_variant' <<<"$RESOLVED")
 domain="lab-${CELL}-dockerhost"
 
@@ -73,10 +69,7 @@ pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 
 seed_dir="$WORK/seed"
 mkdir -p "$seed_dir"
-sed -e "s#__PLUGIN_TAG__#$plugin_tag#g" -e "s#__SSH_PUBKEY__#$pubkey#" \
-	-e "s#__DOCKER_APT_DISTRO__#$image_distro#g" -e "s#__DOCKER_APT_SUITE__#$image_suite#g" \
-	-e "s#__DOCKER_ENGINE_PACKAGE__#${engine_version:+=$engine_version}#g" \
-	"$REPO_ROOT/cloud-init/docker-host-user-data.tmpl.yaml" >"$seed_dir/user-data"
+"$REPO_ROOT/scripts/render-docker-host-user-data.sh" "$pubkey" <<<"$RESOLVED" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
 	"$REPO_ROOT/cloud-init/network-config.tmpl.yaml" >"$seed_dir/network-config"
