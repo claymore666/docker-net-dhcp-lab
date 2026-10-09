@@ -298,7 +298,7 @@ func checkSubnetFree(p, mgmtPrefix netip.Prefix, seen []netip.Prefix) error {
 // validateRelay checks a cell's relay block and returns its server
 // segment's prefix. The client address is the giaddr and the router, so
 // it must sit on the client segment, outside the pool and outside the
-// host octets group B and F claim at run time (ReservedGroupHost, #11).
+// host octets groups B, C and F claim at run time (ReservedGroupHost, #11).
 func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge map[string]bool, seenSubnets *[]netip.Prefix, seenMgmt map[string]bool) (netip.Prefix, error) {
 	r := cell.Relay
 	fail := func(format string, a ...any) (netip.Prefix, error) {
@@ -364,7 +364,7 @@ func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge ma
 		return fail("client_address %s lies inside the source pool", client)
 	}
 	if ReservedGroupHost(int(client.As4()[3])) {
-		return fail("client_address %s is a host octet group B or F reserves", client)
+		return fail("client_address %s is a host octet group B, C or F reserves", client)
 	}
 	server, err := legAddress(r.ServerAddress, srvPrefix)
 	if err != nil {
@@ -402,12 +402,14 @@ func legAddress(s string, seg netip.Prefix) (netip.Addr, error) {
 	return p.Addr(), nil
 }
 
-// ReservedGroupHost reports whether a /24 host octet is one group B or F
-// claims at run time: 203-210 user-class pool, 211-220 reservations,
-// 221-230 class pool, 253 DNS option. internal/scenario/groupb_addrs.go
-// owns the numbers; TestRelayReservedHostsMatchGroupB keeps them equal.
+// ReservedGroupHost reports whether a /24 host octet is one group B, C or
+// F claims at run time: 201-202 C8's narrowed pool, 203-210 user-class
+// pool, 211-220 reservations, 221-230 class pool, 231-235 C6's squat
+// targets, 240-250 C7's rogue server and its pool, 253 DNS option.
+// internal/scenario owns the numbers; TestRelayReservedHostsMatchTheGroups
+// keeps them equal (#11, #23).
 func ReservedGroupHost(host int) bool {
-	return (host >= 203 && host <= 230) || host == 253
+	return (host >= 201 && host <= 235) || (host >= 240 && host <= 250) || host == 253
 }
 
 // validateSource checks one cell's IP source: it must sit inside the

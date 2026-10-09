@@ -105,12 +105,20 @@ func WithRelay(inner Adapter, relay Runner, p RelayParams) Adapter {
 	return &relayAdapter{Adapter: inner, relay: relay, p: p}
 }
 
+// relayDropped are the capabilities a source loses behind a relay (#11,
+// #23): its squatter and rogue server would sit on the server segment,
+// not the client one, and C9 cannot renumber a source that is not on
+// the client segment, so C6, C6b, C7 and C9 are N/A there.
+var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber}
+
 func (a *relayAdapter) Capabilities() []Capability {
-	caps := a.Adapter.Capabilities()
-	if !slices.Contains(caps, CapRelay) {
-		caps = append(slices.Clone(caps), CapRelay)
+	var caps []Capability
+	for _, c := range a.Adapter.Capabilities() {
+		if !slices.Contains(relayDropped, c) && c != CapRelay {
+			caps = append(caps, c)
+		}
 	}
-	return caps
+	return append(caps, CapRelay)
 }
 
 func (a *relayAdapter) Ready(ctx context.Context) error {

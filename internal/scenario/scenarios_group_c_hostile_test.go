@@ -156,7 +156,9 @@ func TestC9TargetCollidesWithNoLabYAMLSubnet(t *testing.T) {
 	taken = append(taken, netip.MustParsePrefix(cfg.Management.Subnet))
 	seen := 0
 	for _, c := range cfg.Cells {
-		if c.Source == nil {
+		// A relay cell's source is not on its client segment and its
+		// adapter declares no renumber, so C9 never runs there (#11).
+		if c.Source == nil || c.Relay != nil {
 			continue
 		}
 		seen++
