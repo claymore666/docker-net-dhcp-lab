@@ -41,9 +41,16 @@ sudo -n "$(dirname "${BASH_SOURCE[0]}")/build-bridge.sh" "$BRIDGE" --add-port "$
 pid=$(sudo -n docker inspect -f '{{.State.Pid}}' "$CONTAINER")
 sudo -n ip link set "$VETH_PEER" netns "$pid"
 sudo -n nsenter -t "$pid" -n ip link set lo up
-sudo -n nsenter -t "$pid" -n ip link set "$VETH_PEER" name eth-obs up
+# The leg carries no IPv6 of its own: with RAs on the segment it would
+# otherwise autoconfigure an fd42 address (#23 group D). tcpdump's packet
+# socket still sees every frame.
+sudo -n nsenter -t "$pid" -n ip link set "$VETH_PEER" name eth-obs
+sudo -n nsenter -t "$pid" -n sysctl -qw net.ipv6.conf.eth-obs.disable_ipv6=1
+sudo -n nsenter -t "$pid" -n ip link set eth-obs up
 
-sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U 'udp port 67 or udp port 68'
+# DHCPv4, DHCPv6, and router solicitations and advertisements (#23).
+sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U \
+	'udp port 67 or udp port 68 or udp port 546 or udp port 547 or (icmp6 and (ip6[40] == 133 or ip6[40] == 134))'
 
 # Bounded wait for tcpdump to actually be running before telling the
 # caller it is safe to generate traffic (issue #1); -x, not -f, for the

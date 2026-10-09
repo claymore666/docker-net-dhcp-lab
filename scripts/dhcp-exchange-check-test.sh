@@ -149,6 +149,67 @@ rc=0
 (dhcp_option_bytes "$DATA/does-not-exist.pcap" "$MAC" 80 >/dev/null 2>&1) || rc=$?
 [ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- opts X: a missing capture read as no options" >&2; fail=1; }
 
+# dhcp6_message_log (#23 group D), against real captures (v6/*.pcap,
+# kea 2.6.3, dhcpd 4.4.3-P1, dnsmasq 2.91, radvd 2.20) and one built
+# frame set (v6/synth-mixed.pcap) for what they do not hold.
+V6="$DATA/v6"
+DUID6=00:03:00:01:02:00:00:00:23:d1
+expect6() {
+	local name=$1 pcap=$2 ident=$3 want=$4 got
+	got=$(dhcp6_message_log "$pcap" "$ident" | cut -d' ' -f2-)
+	if [ "$got" != "$want" ]; then
+		printf 'dhcp-exchange-check-test: FAIL -- v6 %s:\n got: %s\nwant: %s\n' "$name" "$got" "$want" >&2
+		fail=1
+	fi
+}
+expect6 "kea rapid commit, no IA_TA granted" "$V6/kea-rapid-ta.pcap" fe80::ff:fe00:23d1 "SOLICIT 3375cc $DUID6 - 1 1|-|-|- 2|-|-|- - fe80::ff:fe00:23d1 ff02::1:2
+REPLY 3375cc $DUID6 00:01:00:01:32:5b:e6:f1:d6:8c:f2:55:4c:fb 1 1|fd42:200:0:100::100|3600|7200 - - fe80::d48c:f2ff:fe55:4cfb fe80::ff:fe00:23d1
+RA fe80::d48c:f2ff:fe55:4cfb 1 0 0 fd42:200:0:100::/64|1|7200|3600 -"
+expect6 "isc rapid commit with IA_TA" "$V6/isc-rapid-ta.pcap" "$DUID6" "RA fe80::acd0:bdff:fe25:28a8 1 0 1800 fd42:200:0:200::/64|1|7200|3600 -
+SOLICIT 7a75a6 $DUID6 - 1 1|-|-|- 2|-|-|- - fe80::ff:fe00:23d1 ff02::1:2
+REPLY 7a75a6 $DUID6 00:01:00:01:32:5b:e7:61:ae:d0:bd:25:28:a8 1 1|fd42:200:0:200::1aa|3600|7200 2|fd42:200:0:200::22f|3600|7200 - fe80::acd0:bdff:fe25:28a8 fe80::ff:fe00:23d1
+RA fe80::acd0:bdff:fe25:28a8 1 0 0 fd42:200:0:200::/64|1|7200|3600 -"
+expect6 "radvd four messages, Request on a new xid" "$V6/radvd-m1a1.pcap" 02:00:00:00:23:d1 "RA fe80::c03e:49ff:fe99:b0b 1 0 1800 fd42:200:0:100::/64|1|7200|3600 -
+RA fe80::c03e:49ff:fe99:b0b 1 0 1800 fd42:200:0:100::/64|1|7200|3600 -
+SOLICIT d031a3 $DUID6 - 0 1|-|-|- - - fe80::ff:fe00:23d1 ff02::1:2
+ADVERTISE d031a3 $DUID6 00:01:00:01:32:5b:e7:0a:c2:3e:49:99:0b:0b 0 1|fd42:200:0:100::100|3600|7200 - - fe80::c03e:49ff:fe99:b0b fe80::ff:fe00:23d1
+REQUEST 878a02 $DUID6 00:01:00:01:32:5b:e7:0a:c2:3e:49:99:0b:0b 0 1|-|-|- - - fe80::ff:fe00:23d1 ff02::1:2
+REPLY 878a02 $DUID6 00:01:00:01:32:5b:e7:0a:c2:3e:49:99:0b:0b 0 1|fd42:200:0:100::101|3600|7200 - - fe80::c03e:49ff:fe99:b0b fe80::ff:fe00:23d1
+RA fe80::c03e:49ff:fe99:b0b 1 0 0 fd42:200:0:100::/64|1|7200|3600 -"
+got=$(dhcp6_message_log "$V6/dnsmasq-slaac-ra.pcap" "$DUID6" | awk '$2 == "RA" {print $6, $7}')
+[ "$got" = "1800 fd42:200:0:300::/64|1|7200|7200
+1800 fd42:200:0:300::/64|1|7190|7190" ] || { echo "dhcp-exchange-check-test: FAIL -- v6 dnsmasq slaac RA read \"$got\"" >&2; fail=1; }
+got=$(dhcp6_message_log "$V6/dnsmasq-ta.pcap" "$DUID6" | awk '$2 == "REPLY" {print $8}')
+[ "$got" = "2|fd42:200:0:300::12d|7200|7200" ] || { echo "dhcp-exchange-check-test: FAIL -- v6 dnsmasq IA_TA read \"$got\"" >&2; fail=1; }
+SYN="$V6/synth-mixed.pcap"
+SDUID6=00:03:00:01:02:00:00:00:06:01
+RA6="RA fe80::6:1 1 1 1800 fd42:200:0:900::/64|1|7200|3600,fd42:200:0:901::/64|0|600|300 64:ff9b::/96|600"
+A6="SOLICIT 0a0001 00:03:00:01:02:00:00:00:06:02 - 1 1|-|-|- 2|-|-|- 3|-|-|- fe80::6:2 ff02::1:2
+REPLY 0a0001 00:03:00:01:02:00:00:00:06:02 $SDUID6 1 1|fd42:200:0:900::1a|3600|7200 2|-|-|- 3|fd42:200:0:9f0::/60|1800|3600 fe80::6:1 fe80::6:2"
+B6="SOLICIT 0b0001 00:03:00:01:02:00:00:00:06:ff - 0 7|-|-|- - - fe80::6:3 ff02::1:2
+REPLY 0b0001 00:03:00:01:02:00:00:00:06:ff $SDUID6 0 7|fd42:200:0:900::1b|3600|7200 - - fe80::6:1 fe80::6:3"
+expect6 "synthetic, link-local ident" "$SYN" fe80::6:2 "$RA6
+$A6"
+expect6 "synthetic, DUID ident (upper case)" "$SYN" 00:03:00:01:02:00:00:00:06:02 "$RA6
+$A6"
+expect6 "synthetic, shared MAC matches both" "$SYN" 02:00:00:00:06:02 "$RA6
+$B6
+$A6"
+expect6 "synthetic, ident set" "$SYN" "nomatch,FE80::6:3" "$RA6
+$B6"
+expect6 "synthetic, star skips hop-by-hop and relay" "$SYN" '*' "$RA6
+$B6
+$A6
+REPLY 0c0001 - $SDUID6 0 - - - fe80::6:1 fe80::6:2"
+tr6=$(mktemp)
+head -c "$(($(stat -c %s "$V6/radvd-m1a1.pcap") - 20))" "$V6/radvd-m1a1.pcap" >"$tr6"
+got=$(dhcp6_message_log "$tr6" '*' | awk '{print $2}' | tr '\n' ' ')
+rm -f "$tr6"
+[ "$got" = "RA RA SOLICIT ADVERTISE REQUEST REPLY " ] || { echo "dhcp-exchange-check-test: FAIL -- v6 truncated capture read \"$got\"" >&2; fail=1; }
+rc=0
+(dhcp6_message_log "$DATA/does-not-exist.pcap" '*' >/dev/null 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- v6 a missing capture read as no messages" >&2; fail=1; }
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
