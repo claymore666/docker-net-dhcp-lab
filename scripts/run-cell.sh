@@ -135,6 +135,16 @@ echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
 	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
 
+echo "== source state directory (Kea lease-file cleanup copies, #23) =="
+# Kea's memfile cleanup (lfc-interval, default 3600 s) leaves
+# kea-leases4.csv.1/.2 behind; C4's ResetLeases must remove each one
+# (defeat 2), and only this listing after a run of an hour or more shows
+# which copies exist.
+if [ "$source_type" = kea ]; then
+	ssh_run "$source_mgmt_ip" "sudo ls -l --time-style=full-iso /var/lib/kea/; date -u +%Y-%m-%dT%H:%M:%SZ" \
+		>"$EVIDENCE_DIR/${CELL}-source-var-lib-kea.txt" || true
+fi
+
 echo "== tear down cell $CELL =="
 LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK"
 

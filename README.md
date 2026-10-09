@@ -74,6 +74,21 @@ B2, B3, B5, B6 and B7 run on their own network next to the cell's, removed after
 
 On `bridge-ipam` and `macvlan-ipam` B2, B5, B6 and B7 report N/A: the plugin's reference docs refuse a second network in that shape unless it names a different parent or its own subnet, so the lab cannot create the option-carrying network there. B8 runs on every shape.
 
+Group C runs today (IPv4; the source is stopped, slowed or reset, and put back afterwards):
+
+| ID | Scenario | What it does |
+|---|---|---|
+| C1 | source down at create | with the source stopped, `docker run` fails within `lease_timeout` (the default and `12s`), the DISCOVERs keep the plugin's 4 s and 8 s gaps, and no endpoint or lease is left |
+| C2 | source down past T1 | the source stops after the bind and returns between T1 and T2; the client tried to renew while it was down and keeps its address |
+| C3 | source down past expiry | the source stays down past the lease's expiry; within 120 s of its return the container carries an address the source's table shows for it |
+| C4 | restart without lease file | the source restarts with an empty lease file; 135 s after the bind it holds exactly one lease for the container, on the address the container carries |
+| C5 | failover, primary killed | N/A on every source until the failover cells exist (#12) |
+| C10 | reply delay and loss | a 2 s reply delay, then total loss until the client has sent two DISCOVERs; the container is leased both times |
+| C11 | validate_dhcp at create | with `validate_dhcp=true` the create succeeds while the source is up and is refused within 12 s while it is down (macvlan and ipvlan; the plugin refuses the option on bridge) |
+| C12 | relay | N/A on every source until the relay cell exists (#11) |
+
+C1 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
+
 ## Reading a result
 
 Each scenario on each shape and source gets one verdict:

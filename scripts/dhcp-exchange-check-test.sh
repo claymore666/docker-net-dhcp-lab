@@ -59,6 +59,50 @@ expect_fail "case D (exchange belongs to another MAC)" "$DATA/dhcp-wrong-mac.pca
 # evidence text must not conflate them.
 expect_err "case E (pcap does not exist yet)" "$DATA/does-not-exist.pcap" "$MAC" "capture unreadable"
 
+# dhcp_message_log (group C, #23): the per-identity message sequence,
+# compared as "type@time" so a wrong identity tie or a lost timestamp
+# both show.
+expect_log() {
+	local name=$1 pcap=$2 ident=$3 want=$4 got
+	got=$(dhcp_message_log "$pcap" "$ident" | awk '{printf "%s%s@%s", (NR > 1 ? " " : ""), $2, $1}')
+	if [ "$got" != "$want" ]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: got \"$got\", want \"$want\"" >&2
+		fail=1
+	fi
+}
+
+expect_field() {
+	local name=$1 pcap=$2 ident=$3 row=$4 col=$5 want=$6 got
+	got=$(dhcp_message_log "$pcap" "$ident" | awk -v r="$row" -v c="$col" 'NR == r {print $c}')
+	if [ "$got" != "$want" ]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: row $row field $col = \"$got\", want \"$want\"" >&2
+		fail=1
+	fi
+}
+
+CID=00:01:02:03:04:05:06:07:08
+expect_log "log F (client id behind a shared MAC, replies tied by xid)" "$DATA/dhcp-c-retransmit.pcap" "$CID" \
+	"DISCOVER@100.000000 DISCOVER@104.200000 DISCOVER@112.100000 OFFER@114.300000 REQUEST@114.400000 ACK@114.500000"
+expect_log "log G (MAC identity, unanswered unicast renewal)" "$DATA/dhcp-c-unanswered-request.pcap" "DA:B6:45:5B:EF:FE" \
+	"DISCOVER@1000.000000 OFFER@1000.200000 REQUEST@1000.300000 ACK@1000.500000 REQUEST@1060.000000 REQUEST@1105.000000 ACK@1105.100000"
+expect_field "log G renewal ciaddr" "$DATA/dhcp-c-unanswered-request.pcap" "$MAC" 5 8 10.200.1.100
+expect_field "log G renewal dst" "$DATA/dhcp-c-unanswered-request.pcap" "$MAC" 5 11 10.200.1.2
+expect_log "log H (two servers, DECLINE, NAK)" "$DATA/dhcp-c-decline-nak.pcap" "$MAC" \
+	"DISCOVER@10.000000 OFFER@10.100000 OFFER@10.200000 REQUEST@10.300000 ACK@10.400000 DECLINE@11.500000 REQUEST@12.000000 NAK@12.100000"
+expect_field "log H rogue server id" "$DATA/dhcp-c-decline-nak.pcap" "$MAC" 3 6 10.200.1.240
+expect_field "log H decline requested address" "$DATA/dhcp-c-decline-nak.pcap" "$MAC" 6 7 10.200.1.100
+expect_log "log I (another identity sees nothing)" "$DATA/dhcp-c-retransmit.pcap" "$MAC" ""
+expect_log "log J (partial last record dropped)" "$DATA/dhcp-c-partial.pcap" "$MAC" \
+	"DISCOVER@0.000000 OFFER@0.000000 REQUEST@0.000000"
+expect_log "log L (\"*\" prints every identity)" "$DATA/dhcp-c-retransmit.pcap" "*" \
+	"DISCOVER@100.000000 DISCOVER@101.000000 DISCOVER@104.200000 DISCOVER@112.100000 OFFER@114.300000 REQUEST@114.400000 ACK@114.500000"
+rc=0
+(dhcp_message_log "$DATA/does-not-exist.pcap" "$MAC" >/dev/null 2>&1) || rc=$?
+if [ "$rc" -eq 0 ]; then
+	echo "dhcp-exchange-check-test: FAIL -- log K: a missing capture read as an empty log" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

@@ -91,11 +91,18 @@ def frame_s2c(server: str, mac: str, dhcp_payload: bytes) -> bytes:
     return eth("ff:ff:ff:ff:ff:ff", "52:54:00:aa:bb:cc",
                ipv4(server, "255.255.255.255", udp(67, 68, dhcp_payload)))
 
-def write_pcap(path: str, frames: list[bytes]) -> None:
+def write_pcap(path: str, frames: list) -> None:
+    """frames: bytes (timestamp 0) or (seconds, bytes) for group C's
+    timing rules (#23)."""
     with open(path, "wb") as f:
         f.write(struct.pack("<IHHIIII", PCAP_MAGIC, 2, 4, 0, 0, 262144, 1))
         for fr in frames:
-            f.write(struct.pack("<IIII", 0, 0, len(fr), len(fr)))
+            ts = 0.0
+            if isinstance(fr, tuple):
+                ts, fr = fr
+            sec = int(ts)
+            usec = int(round((ts - sec) * 1e6))
+            f.write(struct.pack("<IIII", sec, usec, len(fr), len(fr)))
             f.write(fr)
 
 MAC = "da:b6:45:5b:ef:fe"
@@ -132,4 +139,73 @@ write_pcap("dhcp-ends-in-nak.pcap", [
 # complete exchange in the capture" (issue #2).
 write_pcap("dhcp-wrong-mac.pcap", full_exchange(OTHER_MAC, OTHER_XID))
 
-print("wrote 4 fixtures")
+# Group C (#23) fixtures for dhcp_message_log, with real timestamps.
+PARENT = "52:54:00:12:34:56"
+CID = bytes.fromhex("000102030405060708")
+OTHER_CID = bytes.fromhex("00aabbccddeeff0011")
+ROGUE = "10.200.1.240"
+MSG_DECLINE = 4
+
+def with_cid(payload: bytes, cid: bytes) -> bytes:
+    # option 61 goes before the end option dhcp() appended
+    return payload[:-1] + opt(61, cid) + b"\xff"
+
+def renew(mac: str, xid: int, ciaddr: str) -> bytes:
+    return dhcp(1, xid, 0, ciaddr, "0.0.0.0", mac, opt_msgtype(MSG_REQUEST))
+
+def decline(mac: str, xid: int, addr: str, server: str) -> bytes:
+    body = opt_msgtype(MSG_DECLINE) + opt(50, socket.inet_aton(addr)) + opt(54, socket.inet_aton(server))
+    return dhcp(1, xid, 0, "0.0.0.0", "0.0.0.0", mac, body)
+
+def unicast_c2s(mac: str, src: str, dst: str, payload: bytes) -> bytes:
+    return eth("52:54:00:aa:bb:cc", mac, ipv4(src, dst, udp(68, 67, payload)))
+
+# Client-id identity behind a shared parent MAC (ipvlan): three DISCOVERs
+# 4.2 s and 7.9 s apart, an OFFER and ACK that carry no option 61 (tied by
+# xid), and a second client on the same parent MAC that must not match.
+X1, X2 = 0x0c100001, 0x0c100002
+write_pcap("dhcp-c-retransmit.pcap", [
+    (100.0, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (101.0, frame_c2s(PARENT, with_cid(discover(PARENT, X2), OTHER_CID))),
+    (104.2, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (112.1, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (114.3, frame_s2c(SERVER, PARENT, offer(PARENT, X1, LEASED, SERVER))),
+    (114.4, frame_c2s(PARENT, with_cid(request(PARENT, X1, LEASED, SERVER), CID))),
+    (114.5, frame_s2c(SERVER, PARENT, ack(PARENT, X1, LEASED, SERVER))),
+])
+
+# MAC identity: bound at 1000.5, a unicast renewal at 1060 with no answer
+# (source down), a broadcast rebind at 1105 answered by an ACK.
+X3, X4, X5 = 0x0c200001, 0x0c200002, 0x0c200003
+write_pcap("dhcp-c-unanswered-request.pcap", [
+    (1000.0, frame_c2s(MAC, discover(MAC, X3))),
+    (1000.2, frame_s2c(SERVER, MAC, offer(MAC, X3, LEASED, SERVER))),
+    (1000.3, frame_c2s(MAC, request(MAC, X3, LEASED, SERVER))),
+    (1000.5, frame_s2c(SERVER, MAC, ack(MAC, X3, LEASED, SERVER))),
+    (1060.0, unicast_c2s(MAC, LEASED, SERVER, renew(MAC, X4, LEASED))),
+    (1105.0, frame_c2s(MAC, renew(MAC, X5, LEASED))),
+    (1105.1, frame_s2c(SERVER, MAC, ack(MAC, X5, LEASED, SERVER))),
+])
+
+# Two servers offer, the client declines the address it was given and a
+# later REQUEST is NAKed.
+X6, X7 = 0x0c300001, 0x0c300002
+write_pcap("dhcp-c-decline-nak.pcap", [
+    (10.0, frame_c2s(MAC, discover(MAC, X6))),
+    (10.1, frame_s2c(SERVER, MAC, offer(MAC, X6, LEASED, SERVER))),
+    (10.2, frame_s2c(ROGUE, MAC, offer(MAC, X6, "10.200.1.241", ROGUE))),
+    (10.3, frame_c2s(MAC, request(MAC, X6, LEASED, SERVER))),
+    (10.4, frame_s2c(SERVER, MAC, ack(MAC, X6, LEASED, SERVER))),
+    (11.5, frame_c2s(MAC, decline(MAC, X6, LEASED, SERVER))),
+    (12.0, frame_c2s(MAC, request(MAC, X7, LEASED, SERVER))),
+    (12.1, frame_s2c(SERVER, MAC, nak(MAC, X7, SERVER))),
+])
+
+# A copy taken while tcpdump was writing: the good exchange with its last
+# record cut short.
+write_pcap("dhcp-c-partial.pcap", full_exchange(MAC, XID))
+with open("dhcp-c-partial.pcap", "r+b") as f:
+    f.seek(0, 2)
+    f.truncate(f.tell() - 100)
+
+print("wrote 8 fixtures")

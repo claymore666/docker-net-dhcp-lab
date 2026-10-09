@@ -41,6 +41,13 @@ const (
 	CapVendorClassPool Capability = "vendor-class-pool"
 	// CapOptionChange declares SetDNSOption (B6, #23).
 	CapOptionChange Capability = "option-change"
+	// CapImpair declares Impair: netem on the source's segment leg (C10, #23).
+	CapImpair Capability = "impair"
+	// CapFailoverPair and CapRelay are declared by no adapter until a
+	// failover-pair cell (lab #12) and a relay cell (lab #11) exist; C5
+	// and C12 stay N/A through Applicable until then (#23).
+	CapFailoverPair Capability = "failover-pair"
+	CapRelay        Capability = "relay"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -111,14 +118,24 @@ type Adapter interface {
 	// alone: every other scenario's timing assumes the stock lease
 	// time, never this one's.
 	ShortenLeaseTime(ctx context.Context, seconds int) (restore func(ctx context.Context) error, err error)
-	// ResetLeases stops the source, truncates its lease file to zero
-	// bytes, and starts it again (issue #3 part 2). The plugin's own
+	// ResetLeases stops the source, clears every lease file it reloads at start,
+	// and starts it again (issue #3 part 2). The plugin's own
 	// default is release_lease=never (docs/reference.md), so nothing
 	// else ever frees a lease between shapes: five shapes of fresh
 	// MACs/client-ids on the one small pool this lab uses run it out
 	// unless the runner resets the source before every shape, which is
 	// what this is for.
 	ResetLeases(ctx context.Context) error
+	// Ready reports whether the source is in the state a scenario may
+	// start from: service active, table readable, no labc-* netns, no
+	// netem on its segment leg, segment addresses and main config equal
+	// to the copy taken at the first Ready (group C, #23). Recover puts
+	// it back there; the scenario runner calls Ready, then Recover once.
+	Ready(ctx context.Context) error
+	Recover(ctx context.Context) error
+	// Impair delays and drops the source's segment egress (its replies);
+	// restore removes the qdisc (C10, #23).
+	Impair(ctx context.Context, delay time.Duration, lossPct int) (restore func(ctx context.Context) error, err error)
 }
 
 // Runner executes one command on the source VM's own management
@@ -227,20 +244,18 @@ func shortenLeaseTimeViaSubstitution(ctx context.Context, r Runner, path string,
 	return restore, nil
 }
 
-// resetLeasesViaTruncate stops the service, truncates leaseFile to zero
-// bytes, and starts the service again, in one chained remote command
-// (issue #3 part 2) -- the same single-command idiom ReserveMAC's own
-// write-then-restart already uses on each adapter. GNU truncate creates
-// a missing file rather than erroring on one (coreutils truncate(1)),
-// so this works whether or not the source has ever written the file
-// yet. If the truncate or the start fails, the chain stops there and
-// the error names which step failed; the caller treats it as an
-// infrastructure error, the same as any other failed Restart/Stop/
-// Start.
-func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile, service, label string) error {
-	cmd := fmt.Sprintf("sudo systemctl stop %s && sudo truncate -s 0 %s && sudo systemctl start %s", service, leaseFile, service)
+// resetLeasesViaTruncate stops the service, truncates leaseFile, removes
+// every other file the source reloads at start (Kea's LFC copies), and
+// starts the service again, in one chained command (issue #3 part 2;
+// C4 defeat 2, #23). truncate creates a missing file, rm -f ignores one.
+func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile string, reloaded []string, service, label string) error {
+	rm := ""
+	if len(reloaded) > 0 {
+		rm = " && sudo rm -f -- " + strings.Join(reloaded, " ")
+	}
+	cmd := fmt.Sprintf("sudo systemctl stop %s && sudo truncate -s 0 %s%s && sudo systemctl start %s", service, leaseFile, rm, service)
 	if _, err := r.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("%s: reset leases (stop %s, truncate %s, start %s): %w", label, service, leaseFile, service, err)
+		return fmt.Errorf("%s: reset leases (stop %s, clear %s, start %s): %w", label, service, leaseFile, service, err)
 	}
 	return nil
 }

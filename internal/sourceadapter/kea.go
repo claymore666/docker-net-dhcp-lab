@@ -22,10 +22,11 @@ var keaValidLifetimeRE = regexp.MustCompile(`"valid-lifetime":\s*[0-9]+,`)
 // yet exercised against a live Kea instance.
 type KeaAdapter struct {
 	Runner Runner
+	base   baseline
 }
 
 func (a *KeaAdapter) Capabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair}
 }
 
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
@@ -38,6 +39,11 @@ const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +
 // and ResetLeases has to truncate the exact file the running config
 // actually writes to.
 const keaLeaseFile = "/var/lib/kea/kea-leases4.csv"
+
+// keaReloadedLeaseFiles are the memfile lease-file cleanup (LFC) copies
+// Kea reads back at start beside keaLeaseFile; leaving one behind refills
+// the table after ResetLeases (C4 defeat 2, #23).
+var keaReloadedLeaseFiles = []string{keaLeaseFile + ".1", keaLeaseFile + ".2", keaLeaseFile + ".output", keaLeaseFile + ".completed"}
 
 // keaResponse mirrors the control agent's own reply shape: a JSON array,
 // one element per queried service, `result` 0 for leases present, 3 for
@@ -159,12 +165,12 @@ func (a *KeaAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
 }
 
-// ResetLeases stops kea-dhcp4-server, truncates keaLeaseFile, and
+// ResetLeases stops kea-dhcp4-server, truncates keaLeaseFile, removes its LFC copies, and
 // starts it again (issue #3 part 2). kea-ctrl-agent is left alone: it
 // serves the control API this adapter's own Leases() reads and carries
 // no lease state itself.
 func (a *KeaAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, keaLeaseFile, "kea-dhcp4-server", "kea")
+	return resetLeasesViaTruncate(ctx, a.Runner, keaLeaseFile, keaReloadedLeaseFiles, "kea-dhcp4-server", "kea")
 }
 
 func (a *KeaAdapter) systemctl(ctx context.Context, action string) error {
@@ -213,4 +219,17 @@ func (a *KeaAdapter) SetDNSOption(ctx context.Context, addr string) (func(contex
 	return setDNSOptionViaSubstitution(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf",
 		keaRoutersOptionRE, repl, `"domain-name-servers"`,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "kea")
+}
+
+// Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
+func (a *KeaAdapter) Ready(ctx context.Context) error {
+	return sourceReady(ctx, a.Runner, "kea-dhcp4-server", "/etc/kea/kea-dhcp4.conf", a.Leases, &a.base)
+}
+
+func (a *KeaAdapter) Recover(ctx context.Context) error {
+	return sourceRecover(ctx, a.Runner, "kea-dhcp4-server", "/etc/kea/kea-dhcp4.conf", &a.base)
+}
+
+func (a *KeaAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
+	return impair(ctx, a.Runner, delay, lossPct)
 }
