@@ -369,3 +369,8 @@ var Catalog = []Scenario{
 	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6, sourceadapter.CapPref64}, Run: runNeverReached},
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
 }
+
+// PoolDemand is a stub until the per-source demand lands (lab #12).
+func PoolDemand(ss []Scenario, source sourceadapter.Adapter) int {
+	return MinPoolAddresses
+}

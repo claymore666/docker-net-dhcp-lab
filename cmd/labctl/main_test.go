@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,18 +62,42 @@ func TestPoolCapacityRejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestPoolHasCapacityForMatchesMinPoolAddresses pins the check against
-// scenario.MinPoolAddresses's own value (catalog.go) rather than a
-// number restated here: a pool exhausted by four prior shapes' worth of
-// held leases must abort the fifth, and a fresh 101-address pool must
-// clear every shape (five shapes x the requirement is exactly the case that
-// exhausted the pool on A15/A16 before this fix, #3).
-func TestPoolHasCapacityForMatchesMinPoolAddresses(t *testing.T) {
-	const need = scenario.MinPoolAddresses
-
-	if ok, reason := poolHasCapacityFor(101, 0, need); !ok {
-		t.Fatalf("a fresh 101-address pool must cover one shape's run: %s", reason)
+// Every lab.yaml cell's fresh pool must cover one shape's run of what its
+// own source can run (scenario.PoolDemand, #3); the C5 family counts only
+// on the failover pair, where it fits beside the rest (lab #12).
+func TestPoolHasCapacityForEveryLabCell(t *testing.T) {
+	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	need, pairs := 0, 0
+	for _, c := range cfg.Cells {
+		if c.Source == nil {
+			continue
+		}
+		src, err := newCellSourceAdapter(c.Source, runnerFor)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		if slices.Contains(src.Capabilities(), sourceadapter.CapFailoverPair) {
+			pairs++
+		}
+		capacity, err := poolCapacity(c.Source.PoolStart, c.Source.PoolEnd)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		demand := scenario.PoolDemand(scenario.Catalog, src)
+		need = max(need, demand)
+		if ok, reason := poolHasCapacityFor(capacity, 0, demand); !ok {
+			t.Errorf("%s: a fresh pool must cover one shape's run: %s", c.Name, reason)
+		}
+	}
+	if pairs == 0 {
+		t.Fatal("lab.yaml holds no failover pair, so the C5 family's demand went unchecked")
+	}
+
+	// The edges, at the largest demand any cell has.
 	if ok, _ := poolHasCapacityFor(101, 4*need, need); ok {
 		t.Fatalf("a pool already holding four shapes' worth of leases must not clear a fifth")
 	}

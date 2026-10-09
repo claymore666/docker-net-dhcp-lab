@@ -1180,3 +1180,38 @@ func TestGroupBSecondNetworkScenariosStillRunOnTheOtherShapes(t *testing.T) {
 		}
 	}
 }
+
+// A cell is checked against what its own source can run: the C5 family's
+// 22 addresses count only on a failover pair (lab #12).
+func TestPoolDemandCountsOnlyApplicableScenarios(t *testing.T) {
+	every := map[sourceadapter.Capability]bool{}
+	for _, s := range Catalog {
+		for _, c := range s.Needs {
+			every[c] = true
+		}
+	}
+	all := &fakeAdapter{}
+	single := &fakeAdapter{}
+	for c := range every {
+		all.caps = append(all.caps, c)
+		if c != sourceadapter.CapFailoverPair {
+			single.caps = append(single.caps, c)
+		}
+	}
+	if got := PoolDemand(Catalog, all); got != MinPoolAddresses {
+		t.Errorf("a source declaring every capability: demand %d, want MinPoolAddresses %d", got, MinPoolAddresses)
+	}
+	pair := poolDemand[NameC5] + poolDemand[NameC5b] + poolDemand[NameC5c] + poolDemand[NameC5d]
+	if pair != 22 {
+		t.Fatalf("the C5 family's demand is %d, this test assumes 22", pair)
+	}
+	if got := PoolDemand(Catalog, single); got != MinPoolAddresses-pair {
+		t.Errorf("a source without a failover pair: demand %d, want %d", got, MinPoolAddresses-pair)
+	}
+	if got := PoolDemand(Catalog[:1], all); got != poolDemand[Catalog[0].Name] {
+		t.Errorf("a one-scenario run: demand %d, want %d", got, poolDemand[Catalog[0].Name])
+	}
+	if got := PoolDemand(Catalog, &fakeAdapter{}); got != 0 {
+		t.Errorf("a source declaring nothing runs nothing: demand %d, want 0", got)
+	}
+}
