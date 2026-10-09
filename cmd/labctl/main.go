@@ -443,7 +443,8 @@ func cmdRun(args []string) int {
 	// FAILs in the first six-cell run, lab#38). Wait, bounded, for a
 	// clean parent and keep the wait in the evidence bundle; a parent
 	// that never clears is plugin evidence, so the shape is BLOCKED and
-	// names the leftover link. No scenario is ever retried.
+	// names the leftover link. No scenario is ever retried. A bridge shape
+	// cannot take a NIC with a child as its port, so this runs before every shape.
 	blockedReason, perr := scenario.ParentReady(ctx, hostRunner, cellName, shape, evidenceDir, scenario.ParentCleanWindow, scenario.ParentCleanPoll)
 	if perr != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", perr)

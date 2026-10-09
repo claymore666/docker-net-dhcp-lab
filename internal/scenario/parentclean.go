@@ -34,12 +34,6 @@ func (c ParentChild) String() string {
 	return fmt.Sprintf("%s (%s, owner %s)", c.Name, c.Kind, c.Owner)
 }
 
-// ParentAttached reports whether the shape's network sits on SegmentNIC
-// as a child link, so the wait applies to it.
-func ParentAttached(shape Shape) bool {
-	return shape == ShapeMacvlan || shape == ShapeIpvlan || shape == ShapeMacvlanIPAM
-}
-
 var (
 	childKindRE  = regexp.MustCompile(`\s(macvlan|ipvlan|macvtap)\s`)
 	childOwnerRE = regexp.MustCompile(`link-netns(?:id)?\s+(\S+)`)
@@ -116,14 +110,14 @@ func ParentBusyReason(parent string, window time.Duration, left []ParentChild) s
 		parent, strings.Join(names, " and "), window)
 }
 
-// ParentReady is the between-shapes step: for a parent-attached shape it
-// waits for a clean SegmentNIC, writes the wait to
-// <cell>-<shape>-parent-ready.txt in evidenceDir and returns a non-empty
-// blocked reason when the parent never cleared. Other shapes do nothing.
+// ParentReady is the between-shapes step, run before every shape: it waits
+// for a clean SegmentNIC, writes the wait to <cell>-<shape>-parent-ready.txt
+// in evidenceDir and returns a non-empty blocked reason when the parent
+// never cleared.
 func ParentReady(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, evidenceDir string, window, poll time.Duration) (blocked string, err error) {
-	if !ParentAttached(shape) {
-		return "", nil
-	}
+	// The bridge shapes too: the kernel will not make a NIC with a macvlan
+	// or ipvlan child a bridge port, and bridge-ipam ended as an
+	// infrastructure error behind such a child in the 2026-10-09 run (lab#38).
 	report, left, werr := WaitParentClean(ctx, r, SegmentNIC, window, poll)
 	name := fmt.Sprintf("%s-%s-parent-ready.txt", cell, shape)
 	if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(report), 0o644); err != nil {

@@ -188,7 +188,7 @@ Each scenario on each shape and source gets one verdict:
 - **FAIL**: a finding about the plugin. The lab never retries or tunes a
   scenario to make it pass.
 - **BLOCKED**: the lab could not reach a known starting state, with the
-  reason. Before a macvlan or ipvlan shape it waits, at most 30 s, for the
+  reason. Before every shape it waits, at most 30 s, for the
   segment NIC to lose the previous shape's child link and records the wait
   in the evidence bundle (`<cell>-<shape>-parent-ready.txt`); a child that
   is still there blocks the shape and is named. A reboot scenario whose

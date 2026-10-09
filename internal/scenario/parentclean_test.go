@@ -60,15 +60,6 @@ func TestParentChildrenReadsOnlyThisParentsMacvlanAndIpvlan(t *testing.T) {
 	}
 }
 
-func TestParentAttachedCoversExactlyTheChildShapes(t *testing.T) {
-	want := map[Shape]bool{ShapeBridge: false, ShapeMacvlan: true, ShapeIpvlan: true, ShapeBridgeIPAM: false, ShapeMacvlanIPAM: true}
-	for _, s := range Shapes {
-		if ParentAttached(s) != want[s] {
-			t.Errorf("ParentAttached(%s) = %v, want %v", s, ParentAttached(s), want[s])
-		}
-	}
-}
-
 // A child that disappears after two polls: the wait ends clean, and the
 // report says what was attached at each poll and how long it took.
 func TestWaitParentCleanEndsWhenTheChildIsGone(t *testing.T) {
@@ -124,28 +115,36 @@ func TestWaitParentCleanStopsWithTheContext(t *testing.T) {
 	}
 }
 
-// ParentReady writes the wait into the evidence dir for the child shapes
-// and does not even look at the host for the others.
-func TestParentReadyWritesEvidenceForChildShapesOnly(t *testing.T) {
-	dir := t.TempDir()
-	r := &ipRunner{outs: []string{ipLinkMacvlan, ipLinkClean}}
-	blocked, err := ParentReady(context.Background(), r, "kea", ShapeMacvlan, dir, 30*time.Second, time.Millisecond)
-	if err != nil || blocked != "" {
-		t.Fatalf("want ready, got blocked=%q err=%v", blocked, err)
+// ParentReady waits and writes its record before every shape, the bridge
+// shapes included (bridge-ipam behind a leftover child, lab#38).
+func TestParentReadyWaitsBeforeEveryShape(t *testing.T) {
+	for _, shape := range Shapes {
+		dir := t.TempDir()
+		r := &ipRunner{outs: []string{ipLinkMacvlan, ipLinkClean}}
+		blocked, err := ParentReady(context.Background(), r, "kea", shape, dir, 30*time.Second, time.Millisecond)
+		if err != nil || blocked != "" {
+			t.Fatalf("%s: want ready, got blocked=%q err=%v", shape, blocked, err)
+		}
+		if r.calls != 2 {
+			t.Errorf("%s: polled %d times, want 2", shape, r.calls)
+		}
+		name := fmt.Sprintf("kea-%s-parent-ready.txt", shape)
+		b, rerr := os.ReadFile(filepath.Join(dir, name))
+		if rerr != nil || !strings.Contains(string(b), "still attached: mvl-abc") || !strings.Contains(string(b), "waited ") {
+			t.Fatalf("%s: evidence file missing or without the wait: %v %q", shape, rerr, b)
+		}
 	}
-	b, rerr := os.ReadFile(filepath.Join(dir, "kea-macvlan-parent-ready.txt"))
-	if rerr != nil || !strings.Contains(string(b), "still attached: mvl-abc") || !strings.Contains(string(b), "waited ") {
-		t.Fatalf("evidence file missing or without the wait: %v %q", rerr, b)
-	}
+}
 
-	other := &ipRunner{outs: []string{ipLinkMacvlan}}
-	dir2 := t.TempDir()
-	blocked, err = ParentReady(context.Background(), other, "kea", ShapeBridge, dir2, time.Second, time.Millisecond)
-	if err != nil || blocked != "" || other.calls != 0 {
-		t.Fatalf("bridge shape must not wait: blocked=%q err=%v calls=%d", blocked, err, other.calls)
+func TestParentReadyBlocksABridgeShapeBehindALeftoverChild(t *testing.T) {
+	dir := t.TempDir()
+	r := &ipRunner{outs: []string{ipLinkMacvlan}}
+	blocked, err := ParentReady(context.Background(), r, "kea", ShapeBridgeIPAM, dir, 20*time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if entries, _ := os.ReadDir(dir2); len(entries) != 0 {
-		t.Fatalf("bridge shape wrote evidence: %v", entries)
+	if !strings.Contains(blocked, "mvl-abc") || !strings.Contains(blocked, "kea-bridge-ipam-parent-ready.txt") {
+		t.Fatalf("bridge-ipam behind a leftover child must be BLOCKED naming it and the record: %q", blocked)
 	}
 }
 
