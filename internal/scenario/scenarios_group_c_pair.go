@@ -82,6 +82,14 @@ func waitPeerStates(ctx context.Context, pc sourceadapter.PairControl, want stri
 	}
 }
 
+// c5Back starts a stopped peer and waits for the pair's normal state,
+// best effort: a cleanup leaves the next scenario a whole pair.
+func c5Back(ctx context.Context, pc sourceadapter.PairControl, name string, t cTiming) {
+	if pc.StartPeer(ctx, name) == nil {
+		_, _ = waitPeerStates(ctx, pc, pc.Profile().Normal, t.c5Wait, t.poll, pc.PeerNames()...)
+	}
+}
+
 // c5Rebind finds a broadcast REQUEST for addr in [from, until) and the
 // ACK of it from serverID before until.
 func c5Rebind(msgs []DHCPMsg, addr, serverID string, from, until time.Time) (DHCPMsg, DHCPMsg, bool) {
@@ -124,7 +132,7 @@ func runC5Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if err := sleepUntil(ctx, b.bindAt.Add(t.stopAfter)); err != nil {
 		return blocked(NameC5, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
-	defer func() { _ = pc.StartPeer(bCleanupCtx(ctx), dead) }()
+	defer c5Back(bCleanupCtx(ctx), pc, dead, t)
 	if err := pc.StopPeer(ctx, dead); err != nil {
 		return blocked(NameC5, e.Cell, e.Shape, fmt.Sprintf("could not stop the granting peer %s: %v", dead, err), e.GitSHA)
 	}
@@ -229,7 +237,7 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 	o.name = containerName(e, scenario)
 	cleanup := func() {
 		removeContainer(bCleanupCtx(ctx), e.Host, o.name)
-		_ = pc.StartPeer(bCleanupCtx(ctx), o.primary)
+		c5Back(bCleanupCtx(ctx), pc, o.primary, t)
 		_ = restore(bCleanupCtx(ctx))
 	}
 	if err := pc.StopPeer(ctx, o.primary); err != nil {
@@ -482,7 +490,7 @@ func runC5dTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if v := create(10); v != nil {
 		return *v
 	}
-	defer func() { _ = pc.StartPeer(bCleanupCtx(ctx), primary) }()
+	defer c5Back(bCleanupCtx(ctx), pc, primary, t)
 	if err := pc.StopPeer(ctx, primary); err != nil {
 		return blocked(NameC5d, e.Cell, e.Shape, fmt.Sprintf("could not stop the primary %s: %v", primary, err), e.GitSHA)
 	}

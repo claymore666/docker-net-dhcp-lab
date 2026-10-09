@@ -673,6 +673,7 @@ func TestRunOneAddsHASamplesToAVerdictWithEvidence(t *testing.T) {
 		{Verdict{Result: PASS, Evidence: map[string]string{}}, true},
 		{Verdict{Result: FAIL, Evidence: map[string]string{}}, true},
 		{Verdict{Result: BLOCKED}, false},
+		{Verdict{Result: BLOCKED, Evidence: map[string]string{}}, false},
 	} {
 		s := Scenario{Name: "probe", Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: func(context.Context, Env) Verdict { return tc.v }}
 		v := RunOne(context.Background(), s, c.e)
