@@ -85,6 +85,7 @@ type Source struct {
 type Peer struct {
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
+	SegAddress6 string `yaml:"seg_address6,omitempty" json:"seg_address6,omitempty"`
 }
 
 // pairTypes are the source types with a failover mode (lab #12).
