@@ -434,6 +434,34 @@ func cmdRun(args []string) int {
 		return labErrorExitCode
 	}
 
+	// The previous shape's macvlan/ipvlan network can still hold the
+	// parent NIC when this process starts, and the plugin then refuses
+	// every container with "would not accept another child" (23 kea
+	// FAILs in the first six-cell run, lab#38). Wait, bounded, for a
+	// clean parent and keep the wait in the evidence bundle; a parent
+	// that never clears is plugin evidence, so the shape is BLOCKED and
+	// names the leftover link. No scenario is ever retried.
+	blockedReason, perr := scenario.ParentReady(ctx, hostRunner, cellName, shape, evidenceDir, scenario.ParentCleanWindow, scenario.ParentCleanPoll)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, "labctl run:", perr)
+		return 1
+	}
+	if blockedReason != "" {
+		for _, s := range scenariosToRun {
+			v := scenario.Verdict{
+				Scenario: s.Name, Cell: cellName, Shape: shape,
+				Result: scenario.BLOCKED, Reason: blockedReason,
+				GitSHA: gitSHA, Timestamp: time.Now(), Host: hi,
+			}
+			if werr := scenario.Write(evidenceDir, v); werr != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+		}
+		return 0
+	}
+
 	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)
