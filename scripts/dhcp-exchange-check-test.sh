@@ -103,6 +103,52 @@ if [ "$rc" -eq 0 ]; then
 	fail=1
 fi
 
+# dhcp_option_bytes (group F, #20): option bytes by CODE. tcpdump prints
+# 80 as SLP-NA and 77, 108 and type 9 as other names, so every case
+# expects bytes, never a printed name.
+expect_opts() {
+	local name=$1 pcap=$2 ident=$3 codes=$4 want=$5 got
+	got=$(dhcp_option_bytes "$pcap" "$ident" "$codes" | awk '{ $1 = ""; printf "%s%s", (NR > 1 ? " | " : ""), substr($0, 2) }')
+	if [ "$got" != "$want" ]; then
+		echo "dhcp-exchange-check-test: FAIL -- $name: got \"$got\", want \"$want\"" >&2
+		fail=1
+	fi
+}
+
+FMAC=02:f1:00:00:00:01
+FOTHER=02:f1:00:00:00:02
+UC_HEX=0x096c61622d75632d6631 # RFC 3004: length 9, then "lab-uc-f1"
+expect_opts "opts M (77 in DISCOVER and REQUEST only, other client none)" "$DATA/dhcp-f1-userclass.pcap" "$FMAC" 77 \
+	"DISCOVER 0f100001 $UC_HEX | OFFER 0f100001 - | REQUEST 0f100001 $UC_HEX | ACK 0f100001 -"
+expect_opts "opts N (a client that sends no class)" "$DATA/dhcp-f1-userclass.pcap" "$FOTHER" 77 \
+	"DISCOVER 0f100002 - | OFFER 0f100002 -"
+expect_opts "opts O (108 in OFFER and ACK, PRL without it)" "$DATA/dhcp-f2-forced108.pcap" "$FMAC" 108,55 \
+	"DISCOVER 0f200001 - 0x010306 | OFFER 0f200001 0x00000708 - | REQUEST 0f200001 - 0x010306 | ACK 0f200001 0x00000708 -"
+expect_opts "opts P (another identity gets no 108)" "$DATA/dhcp-f2-forced108.pcap" "$FOTHER" 108 \
+	"DISCOVER 0f200002 - | OFFER 0f200002 -"
+expect_opts "opts Q (108 asked for in the PRL)" "$DATA/dhcp-f2-asked108.pcap" "$FMAC" 55 \
+	"DISCOVER 0f200003 0x0103066c | OFFER 0f200003 -"
+expect_opts "opts R (80 is present with no data: 0x, not -)" "$DATA/dhcp-f3-rapid-commit.pcap" "$FMAC" 80 \
+	"DISCOVER 0f300001 0x | ACK 0f300001 0x"
+expect_opts "opts S (fallback: 80 in DISCOVER only, four messages)" "$DATA/dhcp-f3-fallback.pcap" "$FMAC" 80 \
+	"DISCOVER 0f300002 0x | OFFER 0f300002 - | REQUEST 0f300002 - | ACK 0f300002 -"
+expect_opts "opts T (a plain exchange carries no 80)" "$DATA/dhcp-good.pcap" "$MAC" 80 \
+	"DISCOVER 6623f715 - | OFFER 6623f715 - | REQUEST 6623f715 - | ACK 6623f715 -"
+got=$(dhcp_message_log "$DATA/dhcp-f-forcerenew.pcap" "$FMAC" | awk '{print $2}')
+if [ "$got" != "FORCERENEW" ]; then
+	echo "dhcp-exchange-check-test: FAIL -- opts U: message type 9 read as \"$got\", want FORCERENEW" >&2
+	fail=1
+fi
+rc=0
+(dhcp_option_bytes "$DATA/dhcp-good.pcap" "$MAC" "" >/dev/null 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- opts V: an empty code list was accepted" >&2; fail=1; }
+rc=0
+(dhcp_option_bytes "$DATA/dhcp-good.pcap" "$MAC" "80,x" >/dev/null 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- opts W: a non-numeric code was accepted" >&2; fail=1; }
+rc=0
+(dhcp_option_bytes "$DATA/does-not-exist.pcap" "$MAC" 80 >/dev/null 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- opts X: a missing capture read as no options" >&2; fail=1; }
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
