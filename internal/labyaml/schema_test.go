@@ -235,6 +235,15 @@ func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
 	}
 }
 
+// lab-seg-firewall.sh forwards bridged traffic only on lab-br+ (#11): a
+// bridge outside that prefix would bring up a cell whose DHCP is dropped.
+func TestRejectsBridgeOutsideTheFirewallPrefix(t *testing.T) {
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: br-ref-only", 1)
+	if _, err := Load(write(t, bad)); err == nil || !strings.Contains(err.Error(), "does not start with lab-br-") {
+		t.Fatalf("a bridge outside lab-br- was accepted: %v", err)
+	}
+}
+
 // One character over the limit is the boundary the kernel actually
 // draws (IFNAMSIZ-1 = 15): the 39-character case above only proves
 // "too long" is caught, not that the limit itself is 15 and not 16.
@@ -441,6 +450,7 @@ func TestRelayValidatorRules(t *testing.T) {
 		{"missing server bridge", "        bridge: lab-br-kea-rsv\n", "", "server_segment.bridge is required"},
 		{"server bridge over 15", "lab-br-kea-rsv", "lab-br-kea-rsv-xx", "interface name limit"},
 		{"server bridge equals client bridge", "lab-br-kea-rsv", "lab-br-kea-rly", "reused by another segment"},
+		{"server bridge outside lab-br-", "lab-br-kea-rsv", "br-kea-rsv", "server_segment.bridge \"br-kea-rsv\" does not start with lab-br-"},
 		{"server bridge equals another cell's", "lab-br-kea-rsv", "lab-br-ref-only", "reused by another segment"},
 		{"server subnet outside lab range", "        subnet: 10.200.11.0/24", "        subnet: 10.55.11.0/24", "outside the lab's published range"},
 		{"server subnet overlaps management", "        subnet: 10.200.11.0/24", "        subnet: 10.200.254.0/23", "overlaps the management subnet"},
