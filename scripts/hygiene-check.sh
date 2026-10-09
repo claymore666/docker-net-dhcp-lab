@@ -38,6 +38,12 @@ VERDICT_RE='\b(HOLD|CLEAR)\b'
 # syntax that must stay clean, so this is matched case-sensitively,
 # like VERDICT_RE, never folded into the case-insensitive PROCESS_RE.
 FINDING_CITE_RE='\bF[0-9]+\b'
+# Group F's scenario IDs (F1, F2a, F3, ...) have the same shape as that
+# label (#20). Only two forms are product names and are removed from the
+# line before FINDING_CITE_RE runs: the catalog name "F1-user-class"
+# (hyphen then a lowercase word) and a README table row's first cell
+# "| F1 |". A bare "see F2" in prose stays caught.
+SCENARIO_ID_RES=('\bF[0-9]+[a-z]?-[a-z][a-z0-9-]*' '^\|[[:space:]]*F[0-9]+[a-z]?[[:space:]]*\|')
 # A `.claude/...` path is never openable by a public reader; matched as
 # a plain fixed string, not a regex, so it needs no escaping and cannot
 # itself be misread as a pattern.
@@ -92,7 +98,11 @@ while IFS= read -r -d '' f; do
 				continue
 			fi
 		fi
-		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qE "$FINDING_CITE_RE" <<<"$line" || grep -qiF "$CLAUDE_PATH" <<<"$line"; then
+		cite_line=$line
+		for sid_re in "${SCENARIO_ID_RES[@]}"; do
+			cite_line=$(sed -E "s/$sid_re//g" <<<"$cite_line")
+		done
+		if grep -qiE "$PROCESS_RE" <<<"$line" || grep -qE "$VERDICT_RE" <<<"$line" || grep -qE "$FINDING_CITE_RE" <<<"$cite_line" || grep -qiF "$CLAUDE_PATH" <<<"$line"; then
 			echo "hygiene: process-marker candidate at $f:$line_no" >&2
 			fail=1
 		fi
