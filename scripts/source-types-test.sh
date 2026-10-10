@@ -75,6 +75,30 @@ if SSH_LOG="$tmp/ssh.log" PATH="$tmp/bin:$PATH" \
 	bad "capture accepted an unknown type"
 fi
 
+# routeros (#9): RouterOS CLI reads, no shell. The capture sends them as
+# they are and drops the CR the CLI ends each line in.
+[ "$(source_version_cmd routeros)" = $'routeros\t:put [/system resource get version]' ] || bad "routeros: version $(source_version_cmd routeros)"
+[ "$(source_config_pairs routeros)" = lab-stock.rsc:/export ] || bad "routeros: pairs $(source_config_pairs routeros)"
+[ "$(source_stock_mask routeros)" = 0 ] || bad "routeros: stock mask"
+cat >"$tmp/bin/ssh" <<'STUB'
+#!/bin/bash
+echo "${!#}" >>"$SSH_LOG"
+printf '# 2026-10-10 by RouterOS\r\n/ip pool\r\nadd name=lab\r\n'
+[ "${!#}" != /export ] || printf '/system identity\r\nset name=lab-ready\r\n'
+STUB
+: >"$tmp/ssh.log"
+SSH_LOG="$tmp/ssh.log" PATH="$tmp/bin:$PATH" \
+	"$REPO_ROOT/scripts/capture-source-config-diff.sh" c-ros routeros 192.0.2.1 "$tmp" "$tmp/ev-ros" >/dev/null ||
+	bad "routeros: capture failed"
+[ "$(tr '\n' '|' <"$tmp/ssh.log")" = ':put [/file get lab-stock.rsc contents]|/export|' ] || bad "routeros: capture read $(tr '\n' '|' <"$tmp/ssh.log")"
+grep -q $'\r' "$tmp"/ev-ros/* && bad "routeros: the diff kept a CR"
+{ grep -qx ' add name=lab' "$tmp"/ev-ros/* && grep -qx '+set name=lab-ready' "$tmp"/ev-ros/*; } ||
+	bad "routeros: the diff is not stock against live: $(cat "$tmp"/ev-ros/*)"
+cat >"$tmp/bin/ssh" <<'STUB'
+#!/bin/bash
+echo "${!#}" >>"$SSH_LOG"
+echo "option=1"
+STUB
 
 # A type with pairs and a mask but a stock or live read that is missing (#9)
 # or prints nothing: the capture refuses before any ssh and writes no

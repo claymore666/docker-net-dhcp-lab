@@ -65,7 +65,7 @@ type DockerHost struct {
 // the pool this source hands to ordinary clients; the adapter's
 // ReserveMAC keeps a separate per-MAC reservation outside that range.
 type Source struct {
-	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd
+	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd | pihole | routeros
 	BaseImage   string `yaml:"base_image" json:"base_image"`
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
@@ -105,12 +105,12 @@ const (
 	DNSOptionHost       = 253
 )
 
-var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true, "pihole": true}
+var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true, "pihole": true, "routeros": true}
 
 // v4OnlySources are the source types whose server has no DHCPv6 (lab #10:
 // busybox udhcpd). Their cells carry no IPv6 block, and every other type
 // must (#23 group D). The adapter's own CapV6 absence is the other half.
-var v4OnlySources = map[string]bool{"udhcpd": true, "pihole": true}
+var v4OnlySources = map[string]bool{"udhcpd": true, "pihole": true, "routeros": true}
 
 // SourceServesV6 reports whether a source of this type serves DHCPv6, so a
 // cell of that type needs the IPv6 block; up-source.sh reads it from
@@ -461,7 +461,7 @@ func ReservedGroupHost(host int) bool {
 // must be a real range inside that same segment.
 func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefix netip.Prefix, addrField string, seenMgmt map[string]bool) error {
 	if !sourceTypes[s.Type] {
-		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd, pihole", cellName, s.Type)
+		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd, pihole, routeros", cellName, s.Type)
 	}
 	if s.BaseImage == "" {
 		return fmt.Errorf("cell %s: source.base_image is required", cellName)

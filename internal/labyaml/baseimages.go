@@ -32,6 +32,10 @@ type BaseImage struct {
 	// Seed is up-source.sh's seed hook and ready probe: cloud-init, qga
 	// (the QEMU guest agent) or baked (the image carries its own seed).
 	Seed string `json:"seed"`
+	// Firmware is empty for OVMF, up-source.sh's default, or bios for
+	// SeaBIOS: OVMF found no boot entry on the CHR 7.24.5 raw image and
+	// SeaBIOS booted it (M3, 2026-10-10, lab #9).
+	Firmware string `json:"firmware,omitempty"`
 }
 
 // archiveAptSourcesFix returns the AptSourcesFix command that points a
@@ -52,6 +56,7 @@ func archiveAptSourcesFix(suite string) string {
 var (
 	ImageKinds = []string{"qcow2", "archive", "built"}
 	SeedKinds  = []string{"cloud-init", "qga", "baked"}
+	Firmwares  = []string{"", "bios"}
 )
 
 var baseImages = map[string]BaseImage{
@@ -89,6 +94,17 @@ var baseImages = map[string]BaseImage{
 		OSVariant: "ubuntu24.04",
 		Kind:      "qcow2",
 		Seed:      "cloud-init",
+	},
+	// MikroTik CHR, the vendor's stable 7.24.5 raw disk in a zip. No sums
+	// file is published beside it (404, DESIGN-910 3.3), so the first
+	// fetch pins the archive's sha256 (lab #9). osinfo has no RouterOS.
+	"chr-7.24.5": {
+		Name:      "chr-7.24.5",
+		URL:       "https://download.mikrotik.com/routeros/7.24.5/chr-7.24.5.img.zip",
+		OSVariant: "linux2020",
+		Kind:      "archive",
+		Seed:      "qga",
+		Firmware:  "bios",
 	},
 }
 

@@ -68,6 +68,28 @@ func TestBaseImageKindsAndSeedsAreKnown(t *testing.T) {
 		if bi.ChecksumURL != "" && bi.Kind != "archive" {
 			t.Errorf("%s: an upstream checksum URL on a %s image", name, bi.Kind)
 		}
+		if !slices.Contains(Firmwares, bi.Firmware) {
+			t.Errorf("%s: firmware %q, want one of %q", name, bi.Firmware, Firmwares)
+		}
+	}
+}
+
+// CHR 7.24.5 ships a raw disk in a zip with no sums file beside it, is
+// seeded through its guest agent and boots under SeaBIOS only (M3, #9).
+func TestCHRImageIsAnAgentSeededArchiveUnderSeaBIOS(t *testing.T) {
+	bi, err := LookupBaseImage("chr-7.24.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BaseImage{Name: "chr-7.24.5", URL: "https://download.mikrotik.com/routeros/7.24.5/chr-7.24.5.img.zip",
+		OSVariant: "linux2020", Kind: "archive", Seed: "qga", Firmware: "bios"}
+	if bi != want {
+		t.Errorf("chr-7.24.5 = %+v, want %+v", bi, want)
+	}
+	for name, bi := range baseImages {
+		if name != "chr-7.24.5" && bi.Firmware != "" {
+			t.Errorf("%s: firmware %q; only CHR needs SeaBIOS", name, bi.Firmware)
+		}
 	}
 }
 

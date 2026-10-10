@@ -76,5 +76,46 @@ elif [ -e "$w4/seed-source" ] || ! grep -qx 'local-hostname: lab-kea-partner' "$
 	fail=1
 fi
 
+# Case 5: the chr cell (#9) renders its three RouterOS scripts and the key
+# with every placeholder filled, and the seed script disables the stock
+# admin and sets the identity ready_qga waits for as its last line.
+w5="$tmp/w5"
+if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh chr "$w5" 2>&1); then
+	echo "up-source-test: chr cell refused: $out" >&2
+	fail=1
+else
+	d="$w5/seed-source"
+	if grep -l '__' "$d"/*.rsc >&2; then
+		echo "up-source-test: chr seed keeps a placeholder" >&2
+		fail=1
+	fi
+	grep -qx 'ssh-ed25519 AAAA render-only' "$d/lab.pub" || {
+		echo "up-source-test: chr lab.pub is not the key" >&2
+		fail=1
+	}
+	for want in 'lab-mgmt.rsc:address=10.200.255.141/24}' 'lab-mgmt.rsc:gateway=10.200.255.1}' \
+		'lab-baseline.rsc:address=10.200.14.2/24$' 'lab-baseline.rsc:ranges=10.200.14.100-10.200.14.200}' \
+		'lab-baseline.rsc:ranges=10.200.14.221-10.200.14.230}' 'lab-baseline.rsc:gateway=10.200.14.2$' \
+		'lab-seed.rsc:^/user set \[find name=admin\] disabled=yes$'; do
+		grep -q "${want#*:}" "$d/${want%%:*}" || {
+			echo "up-source-test: chr ${want%%:*} lacks ${want#*:}" >&2
+			fail=1
+		}
+	done
+	[ "$(grep -v '^#' "$d/lab-mgmt.rsc" | head -1)" = ':if ([:len [/file find name=lab-stock.rsc]] = 0) do={/export file=lab-stock}' ] || {
+		echo "up-source-test: chr lab-mgmt.rsc does not keep the vendor export before its first change" >&2
+		fail=1
+	}
+	# printf keeps the service name off the ssh-call gate in verify.sh (lab #9).
+	[ "$(grep -v '^#' "$d/lab-mgmt.rsc" | sed -n 2,3p | tr '\n' '|')" = "$(printf '/ip service disable [find name!=%s dynamic=no]|/ipv6 settings set disable-ipv6=yes|' "ssh")" ] || {
+		echo "up-source-test: chr lab-mgmt.rsc does not close the stock services and IPv6 right after the export" >&2
+		fail=1
+	}
+	[ "$(grep -v '^#' "$d/lab-seed.rsc" | tail -1)" = '/system identity set name=lab-ready' ] || {
+		echo "up-source-test: chr lab-seed.rsc does not end on the identity" >&2
+		fail=1
+	}
+fi
+
 [ "$fail" -eq 0 ] && echo "up-source-test: ok"
 exit "$fail"

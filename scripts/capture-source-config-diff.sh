@@ -64,13 +64,14 @@ for i in "${!pairs[@]}"; do
 	live_path=${pair##*:}
 	# Each side lands in a file under set -e: a failed read ends the
 	# capture instead of diffing against nothing.
-	ssh_run "${stock_cmds[$i]}" >"$scratch/stock" ||
+	# RouterOS ends its lines in CR (#9); no other source writes one.
+	ssh_run "${stock_cmds[$i]}" | tr -d '\r' >"$scratch/stock" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read the stock backup $stock_name" >&2; exit 1; }
 	if [ "$mask_stock" -eq 1 ]; then
 		config_mask_vendor_examples "$scratch/stock" ||
 			{ echo "capture-source-config-diff: REFUSED -- the stock backup $stock_name kept a disallowed address after masking" >&2; exit 1; }
 	fi
-	ssh_run "${live_cmds[$i]}" >"$scratch/live" ||
+	ssh_run "${live_cmds[$i]}" | tr -d '\r' >"$scratch/live" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read $live_path" >&2; exit 1; }
 	if [ ! -s "$scratch/live" ]; then
 		echo "capture-source-config-diff: REFUSED -- $live_path is empty on the cell" >&2

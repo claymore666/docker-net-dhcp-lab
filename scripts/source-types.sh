@@ -9,6 +9,7 @@
 source_version_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole) printf 'kernel\tuname -r\n' ;;
+	routeros) printf 'routeros\t:put [/system resource get version]\n' ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -22,6 +23,7 @@ source_config_pairs() {
 	dnsmasq) printf '%s\n' dnsmasq.conf.stock:/etc/dnsmasq.conf ;;
 	udhcpd) printf '%s\n' udhcpd.conf.stock:/etc/udhcpd.conf ;;
 	pihole) printf '%s\n' pihole.toml.stock:/etc/pihole/pihole.toml ;;
+	routeros) printf '%s\n' lab-stock.rsc:/export ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -32,22 +34,26 @@ source_config_pairs() {
 source_stock_mask() {
 	case "$1" in
 	udhcpd) echo 1 ;;
-	kea | isc-dhcp | dnsmasq | pihole) echo 0 ;;
+	kea | isc-dhcp | dnsmasq | pihole | routeros) echo 0 ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
 
 # source_stock_cmd TYPE NAME and source_live_cmd TYPE PATH: the command
-# that prints that side over ssh.
+# that prints that side over ssh. RouterOS (#9) has no shell: the stock
+# side is the export the seed wrote before its first change, the live
+# side the command /export itself.
 source_stock_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole) printf 'sudo cat /root/lab-stock-config/%s\n' "$2" ;;
+	routeros) printf ':put [/file get %s contents]\n' "$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
 source_live_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole) printf 'sudo cat %s\n' "$2" ;;
+	routeros) printf '%s\n' "$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }

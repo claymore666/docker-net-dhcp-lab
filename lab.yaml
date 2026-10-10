@@ -378,3 +378,30 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: chr
+    description: >
+      MikroTik CHR 7.24.5 (RouterOS, free licence), seeded through its QEMU
+      guest agent; driven over ssh with the RouterOS CLI. DHCPv4 only.
+      Issue #9.
+    segment:
+      bridge: lab-br-chr
+      subnet: 10.200.14.0/24
+    source:
+      type: routeros
+      base_image: chr-7.24.5
+      mgmt_address: 10.200.255.141/24
+      seg_address: 10.200.14.2/24
+      pool_start: 10.200.14.100
+      pool_end: 10.200.14.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 1
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.140/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
