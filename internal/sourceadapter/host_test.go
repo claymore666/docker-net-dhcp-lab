@@ -148,6 +148,32 @@ func TestNonPortableHostRefusesTheActorsBeforeAnySSH(t *testing.T) {
 	}
 }
 
+// The refusal names the action and the source, so a cell log says which
+// actor a non-portable source turned away (#9).
+func TestNeedPortableNamesTheActionAndTheSource(t *testing.T) {
+	err := initdHost.needPortable("squatter")
+	if err == nil || err.Error() != "squatter: the dnsmasq source has no iproute2 netns, pgrep, tc or python3" {
+		t.Fatalf("needPortable = %v", err)
+	}
+	if err := debianHost("kea-dhcp4-server").needPortable("squatter"); err != nil {
+		t.Fatalf("a portable host refused: %v", err)
+	}
+}
+
+// A non-portable host's state read is the address and config lines
+// only, byte for byte: the stub above answers whatever stateCmd builds,
+// so only this literal sees a line go missing (#9).
+func TestNonPortableStateCmdIsPinned(t *testing.T) {
+	want := `printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf "%s ", $4}'; echo; ` +
+		`printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf "%s ", $4}'; echo; ` +
+		`printf 'cfg6:/etc/dnsmasq.d/lab-v6.conf:'; sudo base64 -w0 /etc/dnsmasq.d/lab-v6.conf 2>/dev/null || printf '!'; echo; ` +
+		`printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; ` +
+		`echo 'cfg:'; sudo cat /etc/dnsmasq.conf`
+	if got := initdHost.stateCmd(initdUnits); got != want {
+		t.Fatalf("stateCmd:\n%q\nwant:\n%q", got, want)
+	}
+}
+
 // The Debian default is systemd on eth1 with the absolute tc path, the
 // strings every cell sent before #9, for the main unit and any other.
 func TestDebianHostIsTheSystemdDefault(t *testing.T) {

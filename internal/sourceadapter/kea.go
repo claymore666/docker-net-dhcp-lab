@@ -128,9 +128,13 @@ func parseKeaLeases(raw string) ([]Lease, error) {
 // validated by the caller (validateMAC, validateClientID); ip by
 // validateAddr.
 func (a *KeaAdapter) keaReserve(ctx context.Context, field, value, ip string) error {
+	hup, err := a.host().svc().kill("HUP")
+	if err != nil {
+		return fmt.Errorf("kea: reserve %s %s -> %s: %w", field, value, ip, err)
+	}
 	cmd := fmt.Sprintf(
-		`sudo jq 'map(select(.["%s"] != "%s")) + [{"%s":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server`,
-		field, value, field, value, ip,
+		`sudo jq 'map(select(.["%s"] != "%s")) + [{"%s":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && %s`,
+		field, value, field, value, ip, hup,
 	)
 	if _, err := a.Runner.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("kea: reserve %s %s -> %s: %w", field, value, ip, err)
