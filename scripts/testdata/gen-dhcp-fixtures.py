@@ -364,4 +364,74 @@ write_pcap("v6/synth-xid.pcap", [
     (80.1, s2c6(LL_A, dhcp6(7, 0x0a0003, o6(2, SDUID)))),
 ])
 
-print("wrote 16 fixtures")
+# Relay fixtures (lab #11): hand-assembled twins of the captures in
+# relay/real-*.pcap, for what a real run does not produce on demand
+# (a T2 rebind, a relayed DISCOVER with no option 82, two sub-options).
+def dhcp_r(op, xid, flags, ci, yi, gi, chaddr, options, secs=0):
+    hdr = struct.pack(
+        "!BBBBI HH 4s4s4s4s 16s64s128s4s",
+        op, 1, 6, 1 if gi != "0.0.0.0" and op == 1 else 0, xid, secs, flags,
+        socket.inet_aton(ci), socket.inet_aton(yi),
+        socket.inet_aton("0.0.0.0"), socket.inet_aton(gi),
+        mac_b(chaddr).ljust(16, b"\x00"), b"\x00" * 64, b"\x00" * 128,
+        bytes([0x63, 0x82, 0x53, 0x63]),
+    )
+    return hdr + options + b"\xff"
+
+def rframe(smac, dmac, sip, dip, sport, dport, payload):
+    return eth(dmac, smac, ipv4(sip, dip, udp(sport, dport, payload)))
+
+R_CLI, R_SRV = "02:11:00:00:00:01", "02:11:00:00:00:02"
+S_MAC, C_MAC = "02:11:00:00:00:20", "02:11:00:00:00:10"
+R_GI, S_IP, C_IP = "10.200.10.1", "10.200.11.2", "10.200.10.100"
+R_SIP = "10.200.11.1"
+A82 = opt(82, opt(1, b"eth1") + opt(2, b"rly"))
+RX = 0x5a5a0001
+
+def rdiscover(xid, fl, o82=A82, gi=R_GI, secs=0):
+    return dhcp_r(1, xid, fl, "0.0.0.0", "0.0.0.0", gi, C_MAC, opt_msgtype(MSG_DISCOVER) + o82, secs)
+
+def roffer(xid, fl, o82=A82, gi=R_GI):
+    return dhcp_r(2, xid, fl, "0.0.0.0", C_IP, gi, C_MAC,
+                  opt_msgtype(MSG_OFFER) + opt(54, socket.inet_aton(S_IP)) + opt(51, struct.pack("!I", 120)) + o82)
+
+# Server leg: relayed DISCOVER with two sub-options, and the OFFER
+# echoing them, flag clear.
+write_pcap("dhcp-relay-server-leg.pcap", [
+    (10.0, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67, rdiscover(RX, 0))),
+    (10.1, rframe(S_MAC, R_SRV, S_IP, R_GI, 67, 67, roffer(RX, 0))),
+])
+# The same DISCOVER with no option 82 (a relay run without -a).
+write_pcap("dhcp-relay-no82.pcap", [
+    (10.0, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67, rdiscover(RX, 0, b""))),
+])
+# Client leg: OFFER delivered by broadcast (flag set) and the same
+# OFFER delivered unicast to chaddr (flag clear).
+write_pcap("dhcp-relay-deliver.pcap", [
+    (20.0, rframe(R_CLI, "ff:ff:ff:ff:ff:ff", R_GI, "255.255.255.255", 67, 68, roffer(RX, 0x8000, b"", "0.0.0.0"))),
+    (21.0, rframe(R_CLI, C_MAC, R_GI, C_IP, 67, 68, roffer(RX + 1, 0, b"", "0.0.0.0"))),
+])
+# T1 unicast renewal through the relay (client pcap), unanswered; then
+# the T2 broadcast rebind (secs 3, ciaddr set, flag clear).
+def rrenew(xid, secs=0):
+    return dhcp_r(1, xid, 0, C_IP, "0.0.0.0", "0.0.0.0", C_MAC,
+                  opt_msgtype(MSG_REQUEST), secs)
+write_pcap("dhcp-relay-rebind.pcap", [
+    (60.0, rframe(C_MAC, R_CLI, C_IP, S_IP, 68, 67, rrenew(RX + 2))),
+    (105.0, rframe(C_MAC, "ff:ff:ff:ff:ff:ff", C_IP, "255.255.255.255", 68, 67, rrenew(RX + 3, 3))),
+])
+# Unicast renewal on the client leg and its routed copy on the server
+# leg (IP src = the client, giaddr 0, no option 82), another client's
+# renewal with the same xid, and the relayed copy with giaddr set.
+O_MAC = "02:11:00:00:00:11"
+def rrenew_c(xid, mac, ip):
+    return dhcp_r(1, xid, 0, ip, "0.0.0.0", "0.0.0.0", mac, opt_msgtype(MSG_REQUEST))
+write_pcap("dhcp-relay-renewal.pcap", [
+    (60.0, rframe(C_MAC, R_CLI, C_IP, S_IP, 68, 67, rrenew_c(RX + 4, C_MAC, C_IP))),
+    (60.0, rframe(R_SRV, S_MAC, C_IP, S_IP, 68, 67, rrenew_c(RX + 4, C_MAC, C_IP))),
+    (60.1, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67,
+                  dhcp_r(1, RX + 4, 0, C_IP, "0.0.0.0", R_GI, C_MAC, opt_msgtype(MSG_REQUEST) + A82))),
+    (61.0, rframe(O_MAC, R_CLI, "10.200.10.101", S_IP, 68, 67, rrenew_c(RX + 4, O_MAC, "10.200.10.101"))),
+])
+
+print("wrote 21 fixtures")

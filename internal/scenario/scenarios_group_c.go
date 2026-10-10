@@ -39,6 +39,7 @@ type cTiming struct {
 	c8Links   time.Duration // C8: the host's link count must be back within this
 	c9Wait    time.Duration // C9: the renumbered lease must show by bind + this
 	c5Wait    time.Duration // C5b-C5d: bound on a pair's state change (measured 4.8-6.2 s, lab #12)
+	c12bWait  time.Duration // C12b: judge at bind + this, past T1 (60 s) and before T2 (105 s), lab #11
 }
 
 var cDefault = cTiming{
@@ -47,7 +48,7 @@ var cDefault = cTiming{
 	c3Record: 140 * time.Second, c3Start: 150 * time.Second, c3Window: 120 * time.Second,
 	c4Wait: 135 * time.Second, c1Settle: 40 * time.Second, c10Lift: 20 * time.Second,
 	c6bWindow: 30 * time.Second, c8Settle: 40 * time.Second, c8Links: 10 * time.Second, c9Wait: 200 * time.Second,
-	c5Wait: 60 * time.Second,
+	c5Wait: 60 * time.Second, c12bWait: 75 * time.Second,
 }
 
 // The plugin's documented client timing (docs/reference.md): DISCOVER
@@ -74,8 +75,8 @@ const (
 
 func within(d, want, tol time.Duration) bool { return d >= want-tol && d <= want+tol }
 
-// runNeverReached backs C5 and C12: no adapter declares their
-// capability, so Applicable answers N/A before Run (capabilityNAReason).
+// runNeverReached backs the scenarios whose capability no adapter declares
+// (C5 among them): Applicable answers N/A before Run (capabilityNAReason).
 func runNeverReached(_ context.Context, e Env) Verdict {
 	return blocked("unreachable", e.Cell, e.Shape, "a scenario whose capability no adapter declares reached Run", e.GitSHA)
 }

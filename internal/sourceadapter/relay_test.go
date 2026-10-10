@@ -219,3 +219,107 @@ func TestRelayMACs(t *testing.T) {
 		}
 	}
 }
+
+// Every capability the relay cell leaves out names a relay-cell reason
+// (#11); the group D text names dhcrelay -4 and the RA that never crosses.
+func TestRelayNAReasonsCoverEveryDroppedCapability(t *testing.T) {
+	a := WithRelay(&innerStub{}, &scriptRunner{}, testRelayParams).(NAExplainer)
+	want := map[Capability]string{
+		CapSquatter:        "a squatter on the server segment is invisible to clients, by design",
+		CapRogueServer:     "a squatter on the server segment is invisible to clients, by design",
+		CapRenumber:        "renumbering needs the relay leg renumbered too",
+		CapFailoverPair:    "no failover peer",
+		CapDNSRegistration: "serves no DNS",
+	}
+	for _, c := range relayDropped {
+		if _, ok := want[c]; !ok {
+			want[c] = "dhcrelay -4 relays DHCPv4 only and no router advertisement crosses the relay"
+		}
+	}
+	for c, frag := range want {
+		why, ok := a.NAReason(c)
+		if !ok || !strings.HasPrefix(why, "relay cell: ") || !strings.Contains(why, frag) {
+			t.Errorf("%s: %q %v, want a relay-cell reason containing %q", c, why, ok, frag)
+		}
+	}
+	for _, c := range []Capability{CapV4, CapRelay, CapShortLease} {
+		if why, ok := a.NAReason(c); ok {
+			t.Errorf("%s is not a relay-cell loss, got %q", c, why)
+		}
+	}
+}
+
+// A reason the inner adapter already gives survives the wrapper.
+type reasonInner struct{ innerStub }
+
+func (reasonInner) NAReason(c Capability) (string, bool) {
+	if c == CapPD {
+		return "inner pd text", true
+	}
+	return "inner " + string(c), c == CapOption108
+}
+
+func TestRelayNAReasonFallsBackToTheInnerAdapter(t *testing.T) {
+	a := WithRelay(&reasonInner{}, &scriptRunner{}, testRelayParams).(NAExplainer)
+	if why, ok := a.NAReason(CapOption108); !ok || why != "inner option-108" {
+		t.Errorf("option-108: %q %v", why, ok)
+	}
+	if why, _ := a.NAReason(CapPD); !strings.Contains(why, "dhcrelay -4") {
+		t.Errorf("a capability the relay drops keeps the relay's own text, got %q", why)
+	}
+}
+
+// FORCERENEW behind a relay (#11): the client is off-link, so the FORCERENEW goes
+// to the MAC of the source's next hop, read through the same neighbour
+// seam; the container's own MAC is never looked up.
+func TestRelayForceRenewGoesToTheNextHop(t *testing.T) {
+	const relayMAC, ctrMAC = "02:11:00:00:00:02", "02:42:0a:c8:0a:64"
+	r := &scriptRunner{replies: map[string]string{
+		"ip route get 10.200.10.100":           "10.200.10.100 via 10.200.11.1 dev eth1 src 10.200.11.2 uid 0 \n    cache \n",
+		"ip neigh show 10.200.11.1 dev eth1":   "10.200.11.1 lladdr " + relayMAC + " REACHABLE\n",
+		"ip neigh show 10.200.10.100 dev eth1": "10.200.10.100 lladdr " + ctrMAC + " REACHABLE\n",
+		"sudo python3":                         "forcerenew mode=signed\n",
+	}, fail: map[string]bool{}}
+	relayVM, _ := healthyRelay(t)
+	p := testRelayParams
+	p.Source = r
+	a := WithRelay(featureAdapter("kea", r), relayVM, p)
+	fp := goodFR()
+	fp.Addr, fp.Server = "10.200.10.100", "10.200.11.2"
+	if _, err := a.SendForceRenew(context.Background(), []byte("print('x')\n"), fp); err != nil {
+		t.Fatal(err)
+	}
+	last := r.calls[len(r.calls)-1]
+	if !strings.Contains(last, "--dst-mac "+relayMAC+" ") || strings.Contains(last, ctrMAC) {
+		t.Fatalf("sender ran with %q, want the relay's MAC %s", last, relayMAC)
+	}
+	for _, c := range r.calls {
+		if strings.HasPrefix(c, "ip neigh show 10.200.10.100") {
+			t.Fatalf("the container's own neighbour entry was read: %q", r.calls)
+		}
+	}
+	// No next hop behind a relay is a loud error, not a silent guess.
+	r2 := &scriptRunner{replies: map[string]string{"ip route get": "10.200.10.100 dev eth1 src 10.200.10.5 uid 0\n"}, fail: map[string]bool{}}
+	p.Source = r2
+	b := WithRelay(featureAdapter("kea", r2), relayVM, p)
+	if _, err := b.SendForceRenew(context.Background(), []byte("print('x')\n"), fp); err == nil || !strings.Contains(err.Error(), "no next hop") {
+		t.Fatalf("on-link route behind a relay: %v", err)
+	}
+}
+
+// Off a relay cell the neighbour lookup is the container's, byte for byte
+// as before: no `ip route get` is ever issued.
+func TestForceRenewWithoutRelayNeverAsksForARoute(t *testing.T) {
+	r := &neighRunner{neigh: "10.200.1.100 lladdr 02:42:0a:c8:01:64 REACHABLE\n"}
+	if _, err := featureAdapter("kea", r).SendForceRenew(context.Background(), []byte("print('x')\n"), goodFR()); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls[1] != "ip neigh show 10.200.1.100 dev eth1" {
+		t.Fatalf("calls %q", r.calls)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "route get") {
+			t.Fatalf("route lookup on a non-relay cell: %q", r.calls)
+		}
+	}
+}

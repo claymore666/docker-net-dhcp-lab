@@ -304,6 +304,11 @@ type f8Obs struct {
 	expires     [4]time.Time
 	addrAfter   string
 	signedWait  time.Duration
+	// relayMAC and relayMsgs are set on a relay cell only: the client
+	// leg's FORCERENEWs with their Ethernet addresses (DESIGN-11 section 6,
+	// #11). Empty relayMAC leaves the judge as it is on every other cell.
+	relayMAC  string
+	relayMsgs []RelayMsg
 }
 
 // judgeF8Ack (defeat 9): the identity's last ACK must carry option 90 as
@@ -349,6 +354,15 @@ func f8Find(msgs []DHCPMsg, typ, xid string) (DHCPMsg, bool) {
 	return DHCPMsg{}, false
 }
 
+func f8FindRelay(msgs []RelayMsg, xid string) (RelayMsg, bool) {
+	for _, m := range msgs {
+		if m.Type == "FORCERENEW" && m.XID == xid {
+			return m, true
+		}
+	}
+	return RelayMsg{}, false
+}
+
 func f8Opt(opts []OptMsg, typ, xid string) (OptMsg, bool) {
 	for _, m := range opts {
 		if m.Type == typ && m.XID == xid {
@@ -389,6 +403,15 @@ func judgeF8(o f8Obs) fOutcome {
 		at[i] = m.At
 		if m.Dst != o.lease || m.CIAddr != o.lease {
 			return fBlocked("the %s FORCERENEW (xid %s) went to %s with ciaddr %s, not to the lease %s (lab error)", names[i], s.XID, m.Dst, m.CIAddr, o.lease)
+		}
+		if o.relayMAC != "" {
+			rm, ok := f8FindRelay(o.relayMsgs, s.XID)
+			if !ok {
+				return fBlocked("the relay-decoded client capture has no %s FORCERENEW (xid %s), so its layer 2 source cannot be read", names[i], s.XID)
+			}
+			if !sameMAC(rm.EthSrc, o.relayMAC) {
+				return fBlocked("the %s FORCERENEW (xid %s) reached the client with layer 2 source %s, want the relay's client leg %s: the relay did not route it (lab error)", names[i], s.XID, rm.EthSrc, o.relayMAC)
+			}
 		}
 		om, ok := f8Opt(o.opts, "FORCERENEW", s.XID)
 		if !ok || om.Has(90) != (s.Mode != "unsigned") {

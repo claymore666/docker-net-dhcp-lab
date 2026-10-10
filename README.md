@@ -108,7 +108,7 @@ files carry these IDs.
 |---|---|---|---|
 | A | everyday container journeys on every shape | A1 to A16, with the fixed-MAC reboot A5b | v0.1.0, #3 |
 | B | router-side features: reservations, DNS registration, requested address, vendor class, option changes on renewal, lease release, ipvlan identity | B1 to B8 | v0.2.0, #23 |
-| C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12 | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
+| C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12b | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
 | D | IPv6: DHCPv6, SLAAC, managed flag, two prefixes | D1 to D4 | v0.2.0, #23 |
 | E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 | v0.3.0, #15 |
 | F | server-side support for the plugin's v2.4.0 client features | one per feature, numbered in #20 | v0.2.0, #20 (#21 FORCERENEW sender) |
@@ -171,9 +171,10 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 | C9 | subnet renumbered | the source moves to a new subnet under a short lease; by 200 s after the bind the container carries the new lease, routes via the new source address and answers ping |
 | C10 | reply delay and loss | a 2 s reply delay, then total loss until the client has sent two DISCOVERs; the container is leased both times |
 | C11 | validate_dhcp at create | with `validate_dhcp=true` the create succeeds while the source is up and is refused within 12 s while it is down (macvlan and ipvlan; the plugin refuses the option on bridge) |
-| C12 | relay | N/A on every source until the relay cell exists (#11) |
+| C12 | relay | on the relay cell (`isc-dhcp-relay` between a client segment and the source's own segment), two containers bind through the relay, one on a network with `dhcp_servers` set to the source and `dhcp_deny_servers` set to the relay. The server-side capture shows the relay's DISCOVER and REQUEST with giaddr and option 82 and the source's reply echoing option 82 byte for byte; the client-side capture shows OFFER and ACK from the relay's MAC and address naming the source in option 54, no option 82, and no frame from the source itself; the lease matches the container's address and its default route is the relay. BLOCKED when the relay does not do that. N/A on every other cell (#11) |
+| C12b | relay renewal | on the relay cell, a lease shortened to 120 s is held until 75 s after the bind; the first renewal REQUEST goes unicast to the source through the relay's client-side MAC with ciaddr set and giaddr 0, reaches the source with no option 82, and its ACK reaches the client; the address is unchanged, the expiry has moved and no broadcast REQUEST was sent. BLOCKED when the renewal never reaches the source's segment. N/A on every other cell (#11) |
 
-C1, C6, C6b, C7, C8 (its third container), C9 and C11 run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
+C1, C6, C6b, C7, C8 (its third container), C9, C11 and C12 (its second container) run on their own networks, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B; C12b creates no second network and runs on them. The wire rules read the observer's capture while the scenario runs; the segment bridge forwards every frame to every port (`ageing_time 0`), so the observer also sees unicast renewals.
 
 Group D runs today (IPv6; each row creates its own network with the plugin's `ipv6_mode`, starts one container and reads its addresses inside the container, in docker inspect, in the source's DHCPv6 table and on the wire):
 
@@ -302,7 +303,7 @@ pools, and C6 and C7 act from the primary's VM. Only the primary
 serves DHCPv6 and router advertisements: the partner stops both, since
 two unpaired DHCPv6 servers would hand out one pool twice. Group D and
 the IPv6 rows of group F act on the primary alone, and IPv6 failover is
-outside issue #12. C9, C10 and C12 report
+outside issue #12. C9, C10, C12 and C12b report
 N/A with the reason: a renumbered peer drops the failover setup, a
 delay on one peer is split brain, and the pair is not a relay. Each
 PASS or FAIL lists both peers' failover state before and after the
@@ -414,6 +415,10 @@ table. `--asset` names the release asset the page's relative links live
 in, printed once in the header; it is optional, and the header is
 unchanged without it. The plain-word names live in one place,
 `internal/matrix/names.go`.
+
+The relay cell's `versions.txt` carries a `relay isc-dhcp-relay:` line with the
+package version. C12 and C12b results hold for that relay version only; read it there
+before comparing two runs of the relay cell.
 
 ## Coverage check
 

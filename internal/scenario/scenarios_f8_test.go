@@ -215,6 +215,19 @@ type f8Capture struct {
 	opts []OptMsg
 	msgs []DHCPMsg
 	ctl  []OptMsg
+	// ethSrc is the layer 2 source RelayMessages reports on every frame;
+	// relayCalls counts the reads (a plain cell must make none).
+	ethSrc     string
+	relayCalls int
+}
+
+func (c *f8Capture) RelayMessages(_ context.Context, _, _ string) ([]RelayMsg, error) {
+	c.relayCalls++
+	var out []RelayMsg
+	for _, m := range c.msgs {
+		out = append(out, RelayMsg{DHCPMsg: m, Flags: "0x0000", EthSrc: c.ethSrc})
+	}
+	return out, nil
 }
 
 func (c *f8Capture) Messages(context.Context, string, string) ([]DHCPMsg, error) {

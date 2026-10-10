@@ -149,22 +149,23 @@ const (
 	NameB7 = "B7-lease-release"
 	NameB8 = "B8-three-at-once"
 
-	NameC1  = "C1-source-down-at-start"
-	NameC2  = "C2-source-down-past-t1"
-	NameC3  = "C3-source-down-past-expiry"
-	NameC4  = "C4-restart-without-lease-db"
-	NameC5  = "C5-failover-primary-killed"
-	NameC6  = "C6-early-squatter"
-	NameC6b = "C6b-late-squatter"
-	NameC7  = "C7-rogue-server"
-	NameC8  = "C8-pool-exhausted"
-	NameC9  = "C9-subnet-renumbered"
-	NameC5b = "C5b-failover-partner-down-at-start"
-	NameC5c = "C5c-failover-peer-returns"
-	NameC5d = "C5d-failover-no-double-assignment"
-	NameC10 = "C10-loss-and-latency"
-	NameC11 = "C11-validate-dhcp-create"
-	NameC12 = "C12-relay"
+	NameC1   = "C1-source-down-at-start"
+	NameC2   = "C2-source-down-past-t1"
+	NameC3   = "C3-source-down-past-expiry"
+	NameC4   = "C4-restart-without-lease-db"
+	NameC5   = "C5-failover-primary-killed"
+	NameC6   = "C6-early-squatter"
+	NameC6b  = "C6b-late-squatter"
+	NameC7   = "C7-rogue-server"
+	NameC8   = "C8-pool-exhausted"
+	NameC9   = "C9-subnet-renumbered"
+	NameC5b  = "C5b-failover-partner-down-at-start"
+	NameC5c  = "C5c-failover-peer-returns"
+	NameC5d  = "C5d-failover-no-double-assignment"
+	NameC10  = "C10-loss-and-latency"
+	NameC11  = "C11-validate-dhcp-create"
+	NameC12  = "C12-relay"
+	NameC12b = "C12b-relay-renewal"
 
 	NameD1  = "D1-dhcpv6-lease"
 	NameD1b = "D1b-dhcpv6-lease-ipv6-true"
@@ -198,14 +199,15 @@ const (
 // its own second network is Docker's default IPAM, never this pool) +
 // A14(1) + A15(5, peak replica count) + A16(1) = 38, plus group B's 11
 // (poolDemand, counted as if every reservation and the class pool missed),
-// plus group C's 39: C1(2, if a failed run still kept a lease) + C2(1) +
+// plus group C's 42: C1(2, if a failed run still kept a lease) + C2(1) +
 // C3(2, a new address after expiry) + C4(2, the reset may hand out a
 // second) + C5(1) + C5b(1) + C5c(2, the kept container and a new one) +
 // C5d(18) on a failover pair (#12) + C6(1, the squatted address is
 // reserved outside the pool) + C6b(2) + C7(2, the rogue's pool is its
 // own) + C8(1, the fills sit on the narrowed range outside the pool) +
 // C9(1, the renumbered lease is reset) + C10(2) + C11(1, the
-// validate_dhcp probe); C12 never runs,
+// validate_dhcp probe) + C12(2, one on the shape's network, one on its
+// own -c12s network, #11) + C12b(1),
 // plus group D's 5: one IPv4 lease for each row's container, the slaac
 // rows included, since the container also leases IPv4 (#23),
 // plus group F's 9: one each for the user class, 108 not asked, both rapid commits and
@@ -216,7 +218,7 @@ const (
 // (the C5 family's 22 count only on a failover pair, lab #12), and
 // aborts the cell as a lab error, never as a scenario FAIL.
 // TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 102
+const MinPoolAddresses = 105
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -229,7 +231,7 @@ var poolDemand = map[string]int{
 	NameC1: 2, NameC2: 1, NameC3: 2, NameC4: 2, NameC5: 1, NameC5b: 1,
 	NameC5c: 2, NameC5d: 18, NameC6: 1, NameC6b: 2, NameC7: 2, NameC8: 1,
 	NameC9: 1, NameC10: 2,
-	NameC11: 1, NameC12: 0,
+	NameC11: 1, NameC12: 2, NameC12b: 1,
 	NameD1: 1, NameD1b: 1, NameD1c: 1, NameD2: 1, NameD2b: 1,
 	NameF1: 1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 1, NameF5: 1, NameF6: 0, NameF7: 0, NameF8: 2,
@@ -369,7 +371,8 @@ var Catalog = []Scenario{
 	{Name: NameC9, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapRenumber}, Run: runC9},
 	{Name: NameC10, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapImpair}, Run: runC10},
 	{Name: NameC11, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapRestart}, Run: runC11},
-	{Name: NameC12, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runNeverReached},
+	{Name: NameC12, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runC12},
+	{Name: NameC12b, Needs: []sourceadapter.Capability{sourceadapter.CapRelay}, Run: runC12b},
 	{Name: NameD1, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1},
 	{Name: NameD1b, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1b},
 	{Name: NameD1c, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runD1c},
