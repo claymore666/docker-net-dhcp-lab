@@ -11,8 +11,8 @@ genisoimage -output @TMP@/work-isc-dhcp/lab-isc-dhcp-partner-seed.iso -volid cid
 # ISC dhcpd failover pair (lab #12): the isc-dhcp template plus the lines # lab-fo
 # that end in the lab-fo marker; the template diff test strips them # lab-fo
 # and expects the isc-dhcp template byte for byte. scripts/up-source.sh # lab-fo
-# fills secondary (primary|secondary), the two segment addresses and # lab-fo
-# #  (empty on the primary, a comment mark on the # lab-fo
+# fills the role (primary|secondary), the two segment addresses and # lab-fo
+# the primary-only mark (empty on the primary, a comment mark on the # lab-fo
 # secondary): mclt and split may not be given on the secondary (dhcpd.conf(5)). # lab-fo
 # omapi-port opens the read-only failover-state query HAState falls back to. # lab-fo
 # ISC dhcpd source cell (issue #2). Placeholders are substituted by
