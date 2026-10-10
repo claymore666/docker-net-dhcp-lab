@@ -49,12 +49,11 @@ func baselineConfig(t *testing.T, tmpl, path string) string {
 }
 
 var baselines = map[string]struct{ tmpl, path string }{
-	"kea":          {"kea-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
-	"kea-ha":       {"kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
-	"isc-dhcp":     {"isc-dhcp-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
-	"isc-failover": {"isc-dhcp-failover-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
-	"dnsmasq":      {"dnsmasq-user-data.tmpl.yaml", "/etc/dnsmasq.conf"},
-	"pihole":       {"pihole-user-data.tmpl.yaml", "/etc/dnsmasq.d/90-lab.conf"},
+	"kea":      {"kea-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
+	"kea-ha":   {"kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
+	"isc-dhcp": {"isc-dhcp-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
+	"dnsmasq":  {"dnsmasq-user-data.tmpl.yaml", "/etc/dnsmasq.conf"},
+	"pihole":   {"pihole-user-data.tmpl.yaml", "/etc/dnsmasq.d/90-lab.conf"},
 }
 
 // cfgRunner is a source whose config file the adapter reads and writes;
@@ -97,7 +96,11 @@ func featureAdapter(name string, r Runner) Adapter {
 }
 
 func baselineRunner(t *testing.T, name string) *cfgRunner {
-	b := baselines[name]
+	b, ok := baselines[name]
+	if !ok && name == "isc-failover" {
+		// not in baselines: tests that range over it need a groupB adapter
+		b.tmpl, b.path = "isc-dhcp-failover-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"
+	}
 	return &cfgRunner{cfg: baselineConfig(t, b.tmpl, b.path)}
 }
 
