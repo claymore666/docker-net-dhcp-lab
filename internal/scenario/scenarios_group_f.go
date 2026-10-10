@@ -554,6 +554,16 @@ func runF8(ctx context.Context, e Env) (v Verdict) {
 		return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
 	}
 	ev["capture-messages"] = msnap
+	if isRelayCell(e) {
+		cli, _, err := relayReaders(e)
+		if err != nil {
+			return blocked(NameF8, e.Cell, e.Shape, err.Error(), e.GitSHA)
+		}
+		if obs.relayMsgs, err = readRelay(ctx, cli, e, NameF8, "capture-relay", wire, ev); err != nil {
+			return blocked(NameF8, e.Cell, e.Shape, fmt.Sprintf("could not read the client capture: %v", err), e.GitSHA)
+		}
+		obs.relayMAC = e.RelayClientMAC
+	}
 	o = judgeF8(obs)
 	if o.Result != PASS {
 		return fFinish(NameF8, e, o, "", ev)

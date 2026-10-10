@@ -24,7 +24,7 @@ type RelayMsg struct {
 }
 
 // RelayReader is a CaptureReader that also decodes the relay fields; the
-// observer on either segment of a relay cell implements both.
+// observer on either segment of a relay cell implements both (#11).
 type RelayReader interface {
 	RelayMessages(ctx context.Context, ident, snapshotPath string) ([]RelayMsg, error)
 }
@@ -92,7 +92,8 @@ func parseRelayLog(out string) ([]RelayMsg, error) {
 	return msgs, nil
 }
 
-// writeRelayLog keeps the decoded relay messages beside the snapshot.
+// writeRelayLog keeps the decoded relay messages beside the snapshot, as
+// writeMessageLog does for the plain log (#11).
 func writeRelayLog(path string, msgs []RelayMsg) error {
 	var b strings.Builder
 	dash := func(s string) string {

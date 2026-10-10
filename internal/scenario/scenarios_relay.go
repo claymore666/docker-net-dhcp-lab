@@ -14,7 +14,8 @@ import (
 // and decoded by dhcp_relay_log.
 
 // relayKind orders a judge's answer: a BLOCKED cell problem (the lab
-// cannot judge the plugin) outranks a FAIL (the plugin broke a rule).
+// cannot judge the plugin) outranks a FAIL (the plugin broke a rule),
+// DESIGN-11 section 7 (#11).
 type relayKind int
 
 const (
@@ -64,8 +65,15 @@ func relayReaders(e Env) (client, server RelayReader, err error) {
 	return c, s, nil
 }
 
+// isRelayCell tells a relay cell from its Env: a second observer, a relay
+// MAC or a router that is not the source (#11).
+func isRelayCell(e Env) bool {
+	return e.ServerCapture != nil || e.RelayClientMAC != "" || e.RelayServerMAC != "" ||
+		(e.SourceAddr != "" && e.SegGateway != e.SourceAddr)
+}
+
 // readRelay is readCapture for a RelayReader: the pcap snapshot and the
-// decoded log both stay in the evidence directory.
+// decoded log both stay in the evidence directory (#11).
 func readRelay(ctx context.Context, r RelayReader, e Env, scenario, label, ident string, ev map[string]string) ([]RelayMsg, error) {
 	logPath := evidencePath(e, scenario, label)
 	msgs, err := r.RelayMessages(ctx, ident, strings.TrimSuffix(logPath, ".txt")+".pcap")
@@ -79,13 +87,24 @@ func readRelay(ctx context.Context, r RelayReader, e Env, scenario, label, ident
 	return msgs, nil
 }
 
-// ownedBy keeps the messages of one identity. The readers already
-// filter by it, but a renewal xid is only evidence when the message
-// belongs to this scenario's container, so the judge re-checks.
+// ownedBy keeps the messages of one identity, and the replies that
+// answer its requests by xid: on ipvlan chaddr is the parent MAC and a
+// source need not echo option 61 (RFC 2131 section 4.3.1), so a reply is
+// tied to its request the way dhcp_relay_log ties them (#11).
 func ownedBy(msgs []RelayMsg, ident string) []RelayMsg {
+	own := func(m RelayMsg) bool {
+		return strings.EqualFold(m.CHAddr, ident) || strings.EqualFold(m.ClientID, ident)
+	}
+	asked := map[string]bool{}
+	for _, m := range msgs {
+		if (m.Type == "DISCOVER" || m.Type == "REQUEST") && own(m) {
+			asked[m.XID] = true
+		}
+	}
 	var out []RelayMsg
 	for _, m := range msgs {
-		if strings.EqualFold(m.CHAddr, ident) || strings.EqualFold(m.ClientID, ident) {
+		reply := m.Type == "OFFER" || m.Type == "ACK" || m.Type == "NAK"
+		if own(m) || (reply && asked[m.XID]) {
 			out = append(out, m)
 		}
 	}
@@ -259,7 +278,7 @@ func runC12Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 		if err != nil {
 			return fail(NameC12, e.Cell, e.Shape, err.Error(), ev, e.GitSHA)
 		}
-		bind, err := bindACK(ctx, e, NameC12, ident, addr, t.anchor, t.poll, ev)
+		bind, err := bindACKLabeled(ctx, e, NameC12, "capture-bind-"+label, ident, addr, t.anchor, t.poll, ev)
 		if err != nil {
 			return blocked(NameC12, e.Cell, e.Shape, fmt.Sprintf("%s: no bind time: %v", label, err), e.GitSHA)
 		}
@@ -304,7 +323,8 @@ func runC12Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 }
 
 // c12bWindow is how far after the first renewal REQUEST the server leg
-// may show the same xid: the router forwards it at once, so seconds.
+// may show the same xid: the router forwards it at once, so seconds
+// (DESIGN-11 section 7, #11).
 const c12bWindow = 5 * time.Second
 
 // judgeC12b applies the renewal rules to one container's captures.
@@ -336,6 +356,9 @@ func judgeC12b(e Env, ident, addr string, bindAt time.Time, client, server []Rel
 	if first.GIAddr != "" {
 		return relayFailf("the renewal REQUEST carries giaddr %s, want 0", first.GIAddr)
 	}
+	if first.Opt82 != "" {
+		return relayFailf("the client's renewal REQUEST (xid %s) carries option 82 %s: only a relay adds it (RFC 3046 section 2.1)", first.XID, first.Opt82)
+	}
 	var routed *RelayMsg
 	relayed := 0
 	for _, m := range relayOfType(server, "REQUEST") {
@@ -354,11 +377,14 @@ func judgeC12b(e Env, ident, addr string, bindAt time.Time, client, server []Rel
 	if routed == nil && relayed == 0 {
 		return relayBlock("the client's renewal REQUEST (xid %s, to the relay's MAC) never shows on the server capture: the relay's router did not forward it", first.XID)
 	}
+	// The plugin is judged on the client-side frame above; what the
+	// server leg shows of a clean frame is the relay's doing (DESIGN-11
+	// section 7, #11).
 	if routed == nil {
-		return relayFailf("the server capture shows xid %s only as a relayed copy (giaddr set): no routed unicast REQUEST from %s with giaddr 0", first.XID, addr)
+		return relayBlock("the server capture shows xid %s only as the relay's forwarded copy (giaddr set), no routed unicast REQUEST from %s with giaddr 0: the relay's router did not route the clean client frame", first.XID, addr)
 	}
 	if routed.Opt82 != "" {
-		return relayFailf("the routed renewal on the server leg carries option 82 %s, want none", routed.Opt82)
+		return relayBlock("the routed renewal on the server leg carries option 82 %s though the client's frame carried none: the relay side added it", routed.Opt82)
 	}
 	acked := false
 	for _, m := range relayOfType(client, "ACK") {
@@ -385,9 +411,6 @@ func runC12b(ctx context.Context, e Env) Verdict { return runC12bTuned(ctx, e, c
 // client. The docs say nothing on how the plugin addresses an off-link
 // renewal; this is the outside check.
 func runC12bTuned(ctx context.Context, e Env, t cTiming) Verdict {
-	if v, ok := bIPAMNA(NameC12b, e); ok {
-		return v
-	}
 	cli, srv, err := relayReaders(e)
 	if err != nil {
 		return blocked(NameC12b, e.Cell, e.Shape, err.Error(), e.GitSHA)

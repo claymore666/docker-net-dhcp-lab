@@ -319,12 +319,18 @@ func TestJudgeC12b(t *testing.T) {
 		}, relayBlocked, "never shows"},
 		{"only the relayed copy reaches the server", same, func(m []RelayMsg) []RelayMsg {
 			return only(m, func(x RelayMsg) bool { return x.Type != "REQUEST" || x.GIAddr != "" })
-		}, relayFail, "only as a relayed copy"},
+		}, relayBlocked, "forwarded copy"},
 		{"the routed copy carries option 82", same, req(func(m *RelayMsg) {
 			if m.GIAddr == "" {
 				m.Opt82 = rO82
 			}
-		}), relayFail, "option 82"},
+		}), relayBlocked, "relay side added it"},
+		{"the client's own renewal carries option 82", req(func(m *RelayMsg) { m.Opt82 = rO82 }), same, relayFail, "client's renewal REQUEST"},
+		{"the client's renewal carries option 82 and so does the routed copy: the plugin is charged", req(func(m *RelayMsg) { m.Opt82 = rO82 }), req(func(m *RelayMsg) {
+			if m.GIAddr == "" {
+				m.Opt82 = rO82
+			}
+		}), relayFail, "client's renewal REQUEST"},
 		{"the ACK never reaches the client", func(m []RelayMsg) []RelayMsg {
 			return only(m, func(x RelayMsg) bool { return x.XID != "r1" || x.Type != "ACK" })
 		}, same, relayFail, "no ACK"},
@@ -514,6 +520,16 @@ func TestRunC12PassesThroughTheRelayOnBothNetworks(t *testing.T) {
 			t.Errorf("reason %q lacks %q", v.Reason, want)
 		}
 	}
+	// Each container keeps its own bind snapshot and evidence entry (#11).
+	m, c := v.Evidence["capture-bind-main"], v.Evidence["capture-bind-c12s"]
+	if m == "" || c == "" || m == c {
+		t.Fatalf("bind evidence entries: main %q, c12s %q", m, c)
+	}
+	for _, p := range []string{m, c} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("bind evidence %s: %v", p, err)
+		}
+	}
 	// The second network allows the source and denies the relay.
 	if !r.h.has("dhcp_servers=10.200.11.2") || !r.h.has("dhcp_deny_servers=10.200.10.1") {
 		t.Errorf("the -c12s network lacks its server options: %v", r.h.cmds)
@@ -593,12 +609,14 @@ func TestRunC12BlocksWithoutTheRelayFacts(t *testing.T) {
 	}
 }
 
-func TestRelayScenariosAreNotApplicableOnTheIPAMShapes(t *testing.T) {
+func TestC12IsNotApplicableOnTheIPAMShapesAndC12bRuns(t *testing.T) {
 	for _, shape := range []Shape{ShapeBridgeIPAM, ShapeMacvlanIPAM} {
 		r := relayRigOf(t, NameC12, acquisition)
 		r.e.Shape = shape
 		needResult(t, runC12Tuned(context.Background(), r.e, cFast), NA)
-		needResult(t, runC12bTuned(context.Background(), r.e, cFast), NA)
+		r = c12bRig(t)
+		r.e.Shape = shape
+		needResult(t, runC12bTuned(context.Background(), r.e, cFast), PASS)
 	}
 }
 
@@ -762,5 +780,80 @@ func TestRunA13OnARelayCellComparesTheRouteToTheRelayLeg(t *testing.T) {
 				needReason(t, v, "default route")
 			}
 		})
+	}
+}
+
+// The FORCERENEW scenario on a relay cell reads the frame's Ethernet source on the client
+// leg (DESIGN-11 section 6, #11); a plain cell never asks for it.
+func TestJudgeF8ReadsTheLayer2SourceOnARelayCell(t *testing.T) {
+	relayed := func(ethSrc string) f8Obs {
+		o := f8Base()
+		o.relayMAC = rCliMAC
+		for _, s := range o.sends {
+			o.relayMsgs = append(o.relayMsgs, RelayMsg{DHCPMsg: DHCPMsg{Type: "FORCERENEW", XID: s.XID}, EthSrc: ethSrc})
+		}
+		return o
+	}
+	if o := judgeF8(relayed(rCliMAC)); o.Result != PASS {
+		t.Fatalf("relay MAC: %s: %s", o.Result, o.Reason)
+	}
+	if o := judgeF8(relayed(rSrcMAC)); o.Result != BLOCKED || !strings.Contains(o.Reason, "did not route it") {
+		t.Errorf("source MAC: %+v", o)
+	}
+	o := relayed(rCliMAC)
+	o.relayMsgs = o.relayMsgs[:2]
+	if got := judgeF8(o); got.Result != BLOCKED || !strings.Contains(got.Reason, "no signed FORCERENEW") {
+		t.Errorf("a FORCERENEW missing from the relay view: %+v", got)
+	}
+	plain := relayed(rSrcMAC)
+	plain.relayMAC = ""
+	if got := judgeF8(plain); got.Result != PASS {
+		t.Errorf("plain cell with relay data present: %+v", got)
+	}
+}
+
+func TestRunF8ReadsTheRelayClientLegOnlyOnARelayCell(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		relay  bool
+		ethSrc string
+		want   Result
+		reads  int
+	}{
+		{"relay cell, routed by the relay", true, rCliMAC, PASS, 1},
+		{"relay cell, eth source is the source itself", true, rSrcMAC, BLOCKED, 1},
+		{"plain cell, the same eth source", false, rSrcMAC, PASS, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newF8Fix(t, tagNew)
+			f.cap.ethSrc = c.ethSrc
+			if c.relay {
+				f.e = relayEnvOf(f.e)
+				f.e.ServerCapture = f.cap
+			}
+			needResult(t, runF8(context.Background(), f.e), c.want)
+			if f.cap.relayCalls != c.reads {
+				t.Errorf("relay reads = %d, want %d", f.cap.relayCalls, c.reads)
+			}
+		})
+	}
+}
+
+// On ipvlan chaddr is the parent MAC and the identity is the client id;
+// a reply that does not echo option 61 belongs to the request with its xid.
+func TestOwnedByLinksRepliesToTheirRequestsByXID(t *testing.T) {
+	const id, parent = "01:aa:bb:cc:00:00:07", "02:11:00:00:00:99"
+	req := rm(time.Now(), "REQUEST", "x1", parent, "0.0.0.0", "255.255.255.255", parent, "ff:ff:ff:ff:ff:ff", "", "")
+	req.ClientID = id
+	ack := rm(time.Now(), "ACK", "x1", parent, rSrc, rGW, rSrcMAC, rSrvMAC, rGW, rO82)
+	other := rm(time.Now(), "ACK", "x2", parent, rSrc, rGW, rSrcMAC, rSrvMAC, rGW, rO82)
+	otherReq := rm(time.Now(), "REQUEST", "x2", parent, "0.0.0.0", "255.255.255.255", parent, "ff:ff:ff:ff:ff:ff", "", "")
+	otherReq.ClientID = "01:aa:bb:cc:00:00:08"
+	got := ownedBy([]RelayMsg{req, ack, other, otherReq}, id)
+	if len(got) != 2 || got[0].Type != "REQUEST" || got[1].XID != "x1" || got[1].Type != "ACK" {
+		t.Fatalf("kept %+v, want the REQUEST and the ACK of xid x1", got)
+	}
+	if got := ownedBy([]RelayMsg{ack}, id); len(got) != 0 {
+		t.Errorf("a reply with no request of this identity was kept: %+v", got)
 	}
 }

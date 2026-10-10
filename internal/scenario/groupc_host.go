@@ -183,9 +183,15 @@ func bindAnchor(ctx context.Context, e Env, scenario, ident, addr string, bound,
 // bindACK is bindAnchor's ACK itself: its server-id and option 51 time
 // the C5 family (lab #12).
 func bindACK(ctx context.Context, e Env, scenario, ident, addr string, bound, poll time.Duration, ev map[string]string) (DHCPMsg, error) {
+	return bindACKLabeled(ctx, e, scenario, "capture-bind", ident, addr, bound, poll, ev)
+}
+
+// bindACKLabeled is bindACK with its own evidence label, for a scenario
+// that binds more than one container (C12, #11).
+func bindACKLabeled(ctx context.Context, e Env, scenario, label, ident, addr string, bound, poll time.Duration, ev map[string]string) (DHCPMsg, error) {
 	deadline := time.Now().Add(bound)
 	for {
-		msgs, err := readCapture(ctx, e, scenario, "capture-bind", ident, ev)
+		msgs, err := readCapture(ctx, e, scenario, label, ident, ev)
 		if err != nil {
 			return DHCPMsg{}, err
 		}
