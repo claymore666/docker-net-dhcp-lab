@@ -43,6 +43,12 @@ echo "== up-source.sh: the IPv6 gate follows the source type (lab #10) =="
 echo "== Docker host user-data carries the Debian 11 archive rewrite, and only there (issue #27) =="
 ./scripts/cloud-init-docker-host-test.sh
 
+echo "== up-source.sh: the five cloud-init sources render as pinned; seed and image kinds dispatch =="
+./scripts/up-source-golden-test.sh
+
+echo "== fetch-base-image.sh: archives decompress and convert, a mismatching sum is refused =="
+./scripts/fetch-base-image-kinds-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.

@@ -1,6 +1,7 @@
 package labyaml
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -54,12 +55,38 @@ func TestAptSourcesFixOnlyForTheArchivedDebian11Image(t *testing.T) {
 	}
 }
 
+// Every registered image names a kind and seed the shell dispatches on,
+// and only a built image has no URL (#9).
+func TestBaseImageKindsAndSeedsAreKnown(t *testing.T) {
+	for name, bi := range baseImages {
+		if !slices.Contains(ImageKinds, bi.Kind) || !slices.Contains(SeedKinds, bi.Seed) {
+			t.Errorf("%s: kind %q seed %q, want one of %v and %v", name, bi.Kind, bi.Seed, ImageKinds, SeedKinds)
+		}
+		if (bi.Kind == "built") != (bi.URL == "") {
+			t.Errorf("%s: kind %q with URL %q", name, bi.Kind, bi.URL)
+		}
+		if bi.ChecksumURL != "" && bi.Kind != "archive" {
+			t.Errorf("%s: an upstream checksum URL on a %s image", name, bi.Kind)
+		}
+	}
+}
+
 func TestAptSourcesFixSurvivesRendererSed(t *testing.T) {
 	// the shell renderer substitutes with sed s#..#..#g and the value sits
 	// in a YAML block scalar: '#', '&', a backslash or a newline break it
 	for name, bi := range baseImages {
 		if strings.ContainsAny(bi.AptSourcesFix, "#&\\\n") {
 			t.Errorf("%s: AptSourcesFix has a character the sed substitution cannot carry: %q", name, bi.AptSourcesFix)
+		}
+	}
+}
+
+// The three images every cell ran on before #9 stay plain qcow2 cloud
+// images seeded by cloud-init.
+func TestTodaysImagesAreQcow2CloudInit(t *testing.T) {
+	for _, name := range []string{"debian-13-generic-amd64", "debian-11-generic-amd64", "ubuntu-24.04-server-cloudimg-amd64"} {
+		if bi := baseImages[name]; bi.Kind != "qcow2" || bi.Seed != "cloud-init" || bi.ChecksumURL != "" {
+			t.Errorf("%s = %+v", name, bi)
 		}
 	}
 }
