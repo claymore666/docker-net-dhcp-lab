@@ -63,5 +63,18 @@ elif ! grep -q 'has no seg_subnet6' <<<"$out"; then
 	fail=1
 fi
 
+# Case 4: the kea-ha partner (#12) renders into its own seed dir with its
+# own hostname and the HA template, inside the seed hook (#9).
+w4="$tmp/w4"
+if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh kea-ha "$w4" partner 2>&1); then
+	echo "up-source-test: kea-ha partner refused: $out" >&2
+	fail=1
+elif [ -e "$w4/seed-source" ] || ! grep -qx 'local-hostname: lab-kea-partner' "$w4/seed-partner/meta-data" ||
+	! grep -q '^hostname: lab-kea-partner$' "$w4/seed-partner/user-data" ||
+	! grep -q 'fd42:200:0:800::3/64' "$w4/seed-partner/network-config"; then
+	echo "up-source-test: kea-ha partner seed is not its own: $(ls "$w4")" >&2
+	fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "up-source-test: ok"
 exit "$fail"

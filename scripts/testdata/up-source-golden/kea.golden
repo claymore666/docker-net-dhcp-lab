@@ -1,0 +1,174 @@
+== source VM (kea, primary) ==
+== wait for cloud-init (bounded) ==
+up-source: kea source (kea, primary) ready at 10.200.255.21, segment address 10.200.1.2
+exit=0
+=== calls
+fetch-base-image debian-13-generic-amd64 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b /srv/lab/images/debian-13-generic-amd64.qcow2 @TMP@/work-kea/lab-kea-source.qcow2 6G
+genisoimage -output @TMP@/work-kea/lab-kea-source-seed.iso -volid cidata -joliet -rock @TMP@/work-kea/seed-source/user-data @TMP@/work-kea/seed-source/meta-data @TMP@/work-kea/seed-source/network-config
+--- user-data
+#cloud-config
+# Kea source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it -- no cloud-init
+# module-ordering assumption between write_files and package install.
+hostname: lab-kea-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaGolden lab-controller
+package_update: true
+runcmd:
+  # DEBIAN_FRONTEND=noninteractive: kea-ctrl-agent's postinst runs a
+  # debconf select prompt (auth password choice) with no frontend this
+  # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd jq dnsmasq-base iputils-arping
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
+  - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
+  - cp /etc/kea/kea-dhcp6.conf /root/lab-stock-config/kea-dhcp6.conf.stock
+  - echo '[]' >/etc/kea/reservations.json
+  # lease_cmds hook: lease4-get-all (our adapter's read path, issue #2)
+  # is not a core command -- without this the control agent answers
+  # result=2 "unsupported" (measured live, 2026-09-25).
+  - |
+    cat >/etc/kea/kea-dhcp4.conf <<'KEAEOF'
+    {
+    "Dhcp4": {
+      "interfaces-config": { "interfaces": [ "eth1" ] },
+      "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
+      "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases4.csv" },
+      "valid-lifetime": 3600,
+      "client-classes": [
+        { "name": "b5", "test": "option[60].text == 'lab-class-b5'" },
+        { "name": "not-b5", "test": "not member('b5')" }
+      ],
+      "hooks-libraries": [
+        { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
+      ],
+      "subnet4": [
+        {
+          "id": 1,
+          "subnet": "10.200.1.0/24",
+          "pools": [
+            { "pool": "10.200.1.100 - 10.200.1.200", "client-class": "not-b5" },
+            { "pool": "10.200.1.221 - 10.200.1.230", "client-class": "b5" }
+          ],
+          "option-data": [ { "name": "routers", "data": "10.200.1.2" } ],
+          "reservations": <?include "/etc/kea/reservations.json"?>
+        }
+      ]
+    }
+    }
+    KEAEOF
+  # DHCPv6 (#23 group D): IA_NA only, Kea 2.6.3 grants no IA_TA.
+  # "rapid-commit": false is the anchor the DHCPv6 rapid commit feature flips.
+  - |
+    cat >/etc/kea/kea-dhcp6.conf <<'KEAEOF'
+    {
+    "Dhcp6": {
+      "interfaces-config": { "interfaces": [ "eth1" ] },
+      "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket" },
+      "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases6.csv" },
+      "preferred-lifetime": 3600,
+      "valid-lifetime": 7200,
+      "hooks-libraries": [
+        { "library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so" }
+      ],
+      "subnet6": [
+        {
+          "id": 1,
+          "subnet": "fd42:200:0:100::/64",
+          "interface": "eth1",
+          "rapid-commit": false,
+          "pools": [ { "pool": "fd42:200:0:100::100 - fd42:200:0:100::1ff" } ]
+        }
+      ]
+    }
+    }
+    KEAEOF
+  # IPv6 RA for the segment (#23 group D): M=1 A=1, router lifetime 1800,
+  # the cell's /64. radvd needs no forwarding (measured with forwarding 0).
+  - |
+    cat >/etc/radvd.conf <<'RADVDEOF'
+    interface eth1 {
+      AdvSendAdvert on;
+      MinRtrAdvInterval 3;
+      MaxRtrAdvInterval 10;
+      AdvManagedFlag on;
+      AdvOtherConfigFlag off;
+      AdvDefaultLifetime 1800;
+      prefix fd42:200:0:100::/64 {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 7200;
+        AdvPreferredLifetime 3600;
+      };
+    };
+    RADVDEOF
+  - |
+    cat >/etc/kea/kea-ctrl-agent.conf <<'KEAEOF'
+    {
+    "Control-agent": {
+      "http-host": "127.0.0.1",
+      "http-port": 8000,
+      "control-sockets": {
+        "dhcp4": { "socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket" },
+        "dhcp6": { "socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket" }
+      }
+    }
+    }
+    KEAEOF
+  # kea-ctrl-agent.service has ConditionFileNotEmpty=/etc/kea/kea-api-password
+  # (Debian packaging, unconditional); our config carries no
+  # "authentication" stanza so the content is never read as a secret,
+  # it only has to exist non-empty for the unit to start (measured live,
+  # 2026-09-25).
+  - echo lab-kea-api-unused >/etc/kea/kea-api-password
+  # restart, not enable --now: the apt-get install above already started
+  # both units against the package's own stock example config (Debian
+  # postinst); enable --now is then a no-op that leaves the stock config
+  # (subnet 192.0.2.0/24) running instead of ours (measured live,
+  # 2026-09-25).
+  - systemctl enable kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd
+  - systemctl restart kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd
+  - touch /var/lib/cloud/lab-bootstrap-done
+--- meta-data
+instance-id: lab-kea-source
+local-hostname: lab-kea-source
+--- network-config
+# Source VM networking (issue #2): dual-homed like the docker host --
+# eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
+# naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
+# base image). eth1 carries a real address here: the source binds and
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
+# the segment's own router (none exists) reconfigure this NIC.
+# macaddress quoted and no top-level `network:` key, both for the same
+# reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
+# MAC parses as a YAML int, and the wrapper key makes cloud-init's
+# NoCloud datasource skip applying the config entirely.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "52:54:00:2a:12:56"
+    set-name: eth0
+    addresses: [10.200.255.21/24]
+    gateway4: 10.200.255.1
+    nameservers:
+      addresses: [10.200.255.1]
+  seg0:
+    match:
+      macaddress: "52:54:00:1d:30:03"
+    set-name: eth1
+    addresses: [10.200.1.2/24, "fd42:200:0:100::2/64"]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+sudo -n virsh dominfo lab-kea-source
+sudo -n virt-install --name lab-kea-source --memory 1024 --vcpus 1 --disk path=@TMP@/work-kea/lab-kea-source.qcow2\,format=qcow2\,bus=virtio --disk path=@TMP@/work-kea/lab-kea-source-seed.iso\,device=cdrom --network network=net-mgmt\,model=virtio\,mac=52:54:00:2a:12:56 --network bridge=lab-br-kea\,model=virtio\,mac=52:54:00:1d:30:03 --os-variant debian13 --cpu host-model --boot loader=/usr/share/OVMF/OVMF_CODE_4M.fd\,loader_ro=yes\,loader_type=pflash\,loader_secure=off\,nvram_template=/usr/share/OVMF/OVMF_VARS_4M.fd\,nvram=@TMP@/work-kea/lab-kea-source-VARS.fd --graphics none --noautoconsole --import
+ssh -o UserKnownHostsFile=@TMP@/work-kea/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o ControlMaster=no -o ControlPath=none -i @TMP@/home/.ssh/id_ed25519_lab lab@10.200.255.21 test\ -f\ /var/lib/cloud/lab-bootstrap-done

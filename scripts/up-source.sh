@@ -76,6 +76,17 @@ seg_mac=$(mac_from "${domain}-seg")
 image_name=$(jq -r '.source_image.name' <<<"$RESOLVED")
 image_url=$(jq -r '.source_image.url' <<<"$RESOLVED")
 os_variant=$(jq -r '.source_image.os_variant' <<<"$RESOLVED")
+image_kind=$(jq -r '.source_image.kind' <<<"$RESOLVED")
+image_sums=$(jq -r '.source_image.checksum_url // ""' <<<"$RESOLVED")
+seed_kind=$(jq -r '.source_image.seed' <<<"$RESOLVED")
+case "$seed_kind" in
+cloud-init | qga | baked) seed_hook=${seed_kind//-/_} ;;
+*)
+	echo "up-source: REFUSED -- unknown seed kind '$seed_kind' for $image_name" >&2
+	exit 1
+	;;
+esac
+
 mkdir -p "$WORK"
 known_hosts="$WORK/known_hosts"
 [ -f "$known_hosts" ] || : >"$known_hosts"
@@ -86,7 +97,7 @@ overlay="$WORK/${domain}.qcow2"
 if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
 	pubkey="ssh-ed25519 AAAA render-only"
 else
-	base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
+	base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url" "$image_kind" "$image_sums")
 	if [ ! -f "$overlay" ]; then
 		qemu-img create -f qcow2 -F qcow2 -b "$base_path" "$overlay" "${diskgib}G"
 	fi
@@ -131,52 +142,81 @@ class_prefix=${seg_network%.*}
 class_pool_start="$class_prefix.$class_first_host"
 class_pool_end="$class_prefix.$class_last_host"
 
-case "${partner_seg:+pair}-$source_type" in
--*) tmpl_name="$source_type" ;;
-pair-kea) tmpl_name=kea-ha ;;
-pair-isc-dhcp) tmpl_name=isc-dhcp-failover ;;
-*)
-	echo "up-source: no pair template for source type $source_type" >&2
-	exit 1
-	;;
-esac
-tmpl="$REPO_ROOT/cloud-init/${tmpl_name}-user-data.tmpl.yaml"
-if [ "$PEER" = partner ]; then seed_dir="$WORK/seed-partner"; else seed_dir="$WORK/seed-source"; fi
-if [ "$PEER" = partner ]; then host_name="lab-${source_type}-partner"; else host_name="lab-${source_type}-source"; fi
-mkdir -p "$seed_dir"
-sed -e "s#__SSH_PUBKEY__#$pubkey#" \
-	-e "s#__SEG_SUBNET__#$seg_subnet#g" -e "s#__SEG_NETWORK__#$seg_network#g" \
-	-e "s#__SEG_NETMASK__#$seg_netmask#g" \
-	-e "s#__SEG_GATEWAY__#$gateway_ip#g" \
-	-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
-	-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
-	-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
-	-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
-	-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
-	-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
-	"$tmpl" >"$seed_dir/user-data"
-# A v4-only cell has no __SEG_ADDR6__ item to fill: drop it from the
-# template the renderer reads, and hand it a placeholder it never uses.
-net_tmpl="$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml"
-net_addr6=$seg_addr6
-if [ "$serves_v6" != true ]; then
-	net_tmpl="$seed_dir/network-config.tmpl"
-	sed 's#, "__SEG_ADDR6__"##' "$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$net_tmpl"
-	net_addr6=none
-fi
-"$REPO_ROOT/scripts/render-source-network-config.sh" "$net_tmpl" \
-	"$mgmt_addr" "$mgmt_gw" "$mgmt_mac" "$seg_mac" "$seg_addr" "$net_addr6" "${route_args[@]}" >"$seed_dir/network-config"
-echo "instance-id: $domain" >"$seed_dir/meta-data"
-echo "local-hostname: $host_name" >>"$seed_dir/meta-data"
-if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
-	echo "up-source: render-only, seed in $seed_dir"
-	exit 0
-fi
+# Seed hooks (#9), one pair per BaseImage.Seed. seed_<kind> runs before
+# the VM exists and sets seed_args, the virt-install arguments that hand
+# the seed over; ready_<kind> runs after it boots and exits 0 once the
+# source has finished its own setup, 1 to be polled again. Both read the
+# variables above. qga (CHR: a virtio-serial org.qemu.guest_agent.0
+# channel, then guest-exec) and baked (OpenWrt: the image carries its
+# seed) are stubs that refuse until their cells fill them.
+seed_cloud_init() {
+	case "${partner_seg:+pair}-$source_type" in
+	-*) tmpl_name="$source_type" ;;
+	pair-kea) tmpl_name=kea-ha ;;
+	pair-isc-dhcp) tmpl_name=isc-dhcp-failover ;;
+	*)
+		echo "up-source: no pair template for source type $source_type" >&2
+		exit 1
+		;;
+	esac
+	tmpl="$REPO_ROOT/cloud-init/${tmpl_name}-user-data.tmpl.yaml"
+	if [ "$PEER" = partner ]; then seed_dir="$WORK/seed-partner"; else seed_dir="$WORK/seed-source"; fi
+	if [ "$PEER" = partner ]; then host_name="lab-${source_type}-partner"; else host_name="lab-${source_type}-source"; fi
+	mkdir -p "$seed_dir"
+	sed -e "s#__SSH_PUBKEY__#$pubkey#" \
+		-e "s#__SEG_SUBNET__#$seg_subnet#g" -e "s#__SEG_NETWORK__#$seg_network#g" \
+		-e "s#__SEG_NETMASK__#$seg_netmask#g" \
+		-e "s#__SEG_GATEWAY__#$gateway_ip#g" \
+		-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
+		-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
+		-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
+		-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
+		-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
+		-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
+		"$tmpl" >"$seed_dir/user-data"
+	# A v4-only cell has no __SEG_ADDR6__ item to fill: drop it from the
+	# template the renderer reads, and hand it a placeholder it never uses.
+	net_tmpl="$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml"
+	net_addr6=$seg_addr6
+	if [ "$serves_v6" != true ]; then
+		net_tmpl="$seed_dir/network-config.tmpl"
+		sed 's#, "__SEG_ADDR6__"##' "$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$net_tmpl"
+		net_addr6=none
+	fi
+	"$REPO_ROOT/scripts/render-source-network-config.sh" "$net_tmpl" \
+		"$mgmt_addr" "$mgmt_gw" "$mgmt_mac" "$seg_mac" "$seg_addr" "$net_addr6" "${route_args[@]}" >"$seed_dir/network-config"
+	echo "instance-id: $domain" >"$seed_dir/meta-data"
+	echo "local-hostname: $host_name" >>"$seed_dir/meta-data"
+	if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
+		echo "up-source: render-only, seed in $seed_dir"
+		exit 0
+	fi
 
-seed_iso="$WORK/${domain}-seed.iso"
-rm -f "$seed_iso"
-genisoimage -output "$seed_iso" -volid cidata -joliet -rock \
-	"$seed_dir/user-data" "$seed_dir/meta-data" "$seed_dir/network-config" >/dev/null
+	seed_iso="$WORK/${domain}-seed.iso"
+	rm -f "$seed_iso"
+	genisoimage -output "$seed_iso" -volid cidata -joliet -rock \
+		"$seed_dir/user-data" "$seed_dir/meta-data" "$seed_dir/network-config" >/dev/null
+	seed_args=(--disk "path=$seed_iso,device=cdrom")
+}
+
+ready_cloud_init() {
+	ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
+		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
+		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null
+}
+
+seed_qga() { seed_stub; }
+ready_qga() { seed_stub; }
+seed_baked() { seed_stub; }
+ready_baked() { seed_stub; }
+seed_stub() {
+	echo "up-source: REFUSED -- the $seed_kind seed hook is not built yet" >&2
+	exit 1
+}
+
+seed_args=()
+"seed_$seed_hook"
 
 ovmf_code=/usr/share/OVMF/OVMF_CODE_4M.fd
 ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
@@ -188,7 +228,7 @@ if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 		--name "$domain" \
 		--memory "$mem" --vcpus "$vcpus" \
 		--disk path="$overlay",format=qcow2,bus=virtio \
-		--disk path="$seed_iso",device=cdrom \
+		"${seed_args[@]}" \
 		--network network=net-mgmt,model=virtio,mac="$mgmt_mac" \
 		--network bridge="$bridge",model=virtio,mac="$seg_mac" \
 		--os-variant "$os_variant" \
@@ -201,21 +241,18 @@ else
 	sudo -n virsh start "$domain" >/dev/null 2>&1 || true
 fi
 
-echo "== wait for cloud-init (bounded) =="
+echo "== wait for $seed_kind (bounded) =="
 mgmt_ip=${mgmt_addr%%/*}
 ok=0
 for _ in $(seq 1 60); do
-	if ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
-		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
-		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
-		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null; then
+	if "ready_$seed_hook"; then
 		ok=1
 		break
 	fi
 	sleep 10
 done
 [ "$ok" -eq 1 ] || {
-	echo "up-source: cloud-init did not finish inside the bound" >&2
+	echo "up-source: $seed_kind did not finish inside the bound" >&2
 	exit 1
 }
 

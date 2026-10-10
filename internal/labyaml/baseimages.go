@@ -23,6 +23,15 @@ type BaseImage struct {
 	// The docker-host template runs it from bootcmd, which cloud-init
 	// executes before package-update-upgrade-install (issue #27).
 	AptSourcesFix string `json:"apt_sources_fix"`
+	// Kind is how fetch-base-image.sh turns URL into a qcow2 (#9):
+	// qcow2 is fetched as is, archive is a .zip/.gz/.bz2 holding a raw
+	// disk, built is a build script's output with no URL. ChecksumURL is
+	// an archive's upstream sums file, when the vendor publishes one.
+	Kind        string `json:"kind"`
+	ChecksumURL string `json:"checksum_url,omitempty"`
+	// Seed is up-source.sh's seed hook and ready probe: cloud-init, qga
+	// (the QEMU guest agent) or baked (the image carries its own seed).
+	Seed string `json:"seed"`
 }
 
 // archiveAptSourcesFix returns the AptSourcesFix command that points a
@@ -38,6 +47,13 @@ func archiveAptSourcesFix(suite string) string {
 		" > /etc/apt/sources.list"
 }
 
+// ImageKinds and SeedKinds are the values fetch-base-image.sh and
+// up-source.sh dispatch on; any other value is refused there too.
+var (
+	ImageKinds = []string{"qcow2", "archive", "built"}
+	SeedKinds  = []string{"cloud-init", "qga", "baked"}
+)
+
 var baseImages = map[string]BaseImage{
 	"debian-13-generic-amd64": {
 		Name:      "debian-13-generic-amd64",
@@ -45,6 +61,8 @@ var baseImages = map[string]BaseImage{
 		Distro:    "debian",
 		Suite:     "trixie",
 		OSVariant: "debian13",
+		Kind:      "qcow2",
+		Seed:      "cloud-init",
 	},
 	// The plugin's oldest supported engine target (issue #27): an older
 	// distro so docker-ce's own version pin below resolves against a repo
@@ -60,6 +78,8 @@ var baseImages = map[string]BaseImage{
 		// on the regular mirrors while the Release file is still served
 		// (issue #27, measured 2026-10-09).
 		AptSourcesFix: archiveAptSourcesFix("bullseye"),
+		Kind:          "qcow2",
+		Seed:          "cloud-init",
 	},
 	"ubuntu-24.04-server-cloudimg-amd64": {
 		Name:      "ubuntu-24.04-server-cloudimg-amd64",
@@ -67,6 +87,8 @@ var baseImages = map[string]BaseImage{
 		Distro:    "ubuntu",
 		Suite:     "noble",
 		OSVariant: "ubuntu24.04",
+		Kind:      "qcow2",
+		Seed:      "cloud-init",
 	},
 }
 

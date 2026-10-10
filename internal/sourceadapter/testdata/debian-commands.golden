@@ -1,0 +1,687 @@
+## kea Leases err=false
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease4-get-all\",\"service\":[\"dhcp4\"]}' http://127.0.0.1:8000/"
+## kea Leases6 err=false
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease6-get-all\",\"service\":[\"dhcp6\"]}' http://127.0.0.1:8000/"
+## kea SetRAOff err=false
+# restore err=false
+"sudo systemctl stop radvd"
+"sudo systemctl start radvd"
+## kea ReserveMAC err=false
+"sudo jq 'map(select(.[\"hw-address\"] != \"02:11:22:33:44:55\")) + [{\"hw-address\":\"02:11:22:33:44:55\",\"ip-address\":\"10.200.1.150\"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server"
+## kea ReserveClientID err=false
+"sudo jq 'map(select(.[\"client-id\"] != \"00:6c:61:62:2d:66:32:62\")) + [{\"client-id\":\"00:6c:61:62:2d:66:32:62\",\"ip-address\":\"10.200.1.151\"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server"
+## kea SetDNSOption err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" }, { \"name\": \"domain-name-servers\", \"data\": \"10.200.1.53\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea Restart err=false
+"sudo systemctl restart kea-dhcp4-server"
+## kea Stop err=false
+"sudo systemctl stop kea-dhcp4-server"
+## kea Start err=false
+"sudo systemctl start kea-dhcp4-server"
+## kea Reachable err=false
+"ping -c1 -W2 10.200.1.150"
+## kea ShortenLeaseTime err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 60,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea ResetLeases err=false
+"sudo systemctl stop kea-dhcp4-server && sudo truncate -s 0 /var/lib/kea/kea-leases4.csv && sudo rm -f -- /var/lib/kea/kea-leases4.csv.1 /var/lib/kea/kea-leases4.csv.2 /var/lib/kea/kea-leases4.csv.output /var/lib/kea/kea-leases4.csv.completed && sudo systemctl start kea-dhcp4-server"
+## kea ReadyTwiceThenRecoverDrifted err=false
+"sudo systemctl is-active --quiet kea-dhcp4-server"
+"sudo systemctl is-active --quiet kea-dhcp6-server"
+"sudo systemctl is-active --quiet radvd"
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease4-get-all\",\"service\":[\"dhcp4\"]}' http://127.0.0.1:8000/"
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease6-get-all\",\"service\":[\"dhcp6\"]}' http://127.0.0.1:8000/"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/kea/kea-dhcp6.conf:'; sudo base64 -w0 /etc/kea/kea-dhcp6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo systemctl is-active --quiet kea-dhcp4-server"
+"sudo systemctl is-active --quiet kea-dhcp6-server"
+"sudo systemctl is-active --quiet radvd"
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease4-get-all\",\"service\":[\"dhcp4\"]}' http://127.0.0.1:8000/"
+"curl -sf -X POST -H \"Content-Type: application/json\" -d '{\"command\":\"lease6-get-all\",\"service\":[\"dhcp6\"]}' http://127.0.0.1:8000/"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/kea/kea-dhcp6.conf:'; sudo base64 -w0 /etc/kea/kea-dhcp6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/kea/kea-dhcp6.conf:'; sudo base64 -w0 /etc/kea/kea-dhcp6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo tee /etc/radvd.conf >/dev/null <<'LABEOF'\nv6 /etc/radvd.conf\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo systemctl restart kea-dhcp6-server"
+"sudo systemctl restart radvd"
+## kea RecoverWithoutBaseline err=false
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo systemctl restart kea-dhcp6-server"
+"sudo systemctl restart radvd"
+## kea Impair err=false
+# restore err=false
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo /usr/sbin/tc qdisc del dev eth1 root"
+## kea SendForceRenewUnsigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode unsigned"
+## kea SendForceRenewSigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode signed --client-id 006c61622d663262 --nonce 00112233445566778899aabbccddeeff --ack-replay 7"
+## kea SquatAnnounce err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"sudo ip netns exec labc-squat arping -q -U -c 3 -I labc-sq0 10.200.1.231"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## kea SquatSilent err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## kea StartRogue err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-rogue && sudo ip link add labc-rg0 link eth1 type macvlan mode bridge && sudo ip link set labc-rg0 netns labc-rogue && { sudo ip netns exec labc-rogue sysctl -qw net.ipv6.conf.labc-rg0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-rogue ip addr add 10.200.1.240/24 dev labc-rg0 && sudo ip netns exec labc-rogue ip link set labc-rg0 up"
+"sudo rm -f /run/labc-rogue.leases /run/labc-rogue.log /run/labc-rogue.pid && sudo ip netns exec labc-rogue dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts --interface=labc-rg0 --bind-interfaces --no-ping --dhcp-range=10.200.1.241,10.200.1.250,2m --dhcp-leasefile=/run/labc-rogue.leases --pid-file=/run/labc-rogue.pid --log-dhcp --log-facility=/run/labc-rogue.log --user=root && sleep 1 && sudo ip netns pids labc-rogue | grep -q ."
+"if ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-rogue; fi; sudo ip link del labc-rg0 2>/dev/null; ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit f}'"
+## kea RogueLeases err=false
+"sudo cat /run/labc-rogue.leases"
+## kea NarrowPool err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.101\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea Renumber err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.2.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 2,\n      \"subnet\": \"10.200.2.0/24\",\n      \"pools\": [ { \"pool\": \"10.200.2.100 - 10.200.2.200\" } ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.2.2\" } ]\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea EnableFeature/user-class-pool err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n        { \"name\": \"f1\", \"test\": \"option[77].hex == 0x096c61622d75632d6631\" },\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5') and not member('f1')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" },\n            { \"pool\": \"10.200.1.203 - 10.200.1.210\", \"client-class\": \"f1\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea EnableFeature/offer-108 err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" }, { \"name\": \"v6-only-preferred\", \"data\": \"1800\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea EnableFeature/force-108 err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n        { \"name\": \"f2b\", \"test\": \"option[61].hex == 0x006c61622d663262\", \"option-data\": [ { \"name\": \"v6-only-preferred\", \"data\": \"1800\", \"always-send\": true } ] },\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea EnableFeature/rapid-commit-4 err=true
+## kea EnableFeature/forcerenew-nonce err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp4.conf"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" },\n        { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_flex_option.so\", \"parameters\": { \"options\": [ { \"code\": 90, \"add\": \"ifelse(option[61].hex == 0x006c61622d663262 and pkt4.msgtype == 3 and option[50].exists, 0x03010000000000000000010100112233445566778899aabbccddeeff, '')\" }, { \"code\": 145, \"add\": \"ifelse(option[61].hex == 0x006c61622d663262, 0x01, '')\" } ] } }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+"sudo tee /etc/kea/kea-dhcp4.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp4\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea4-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases4.csv\" },\n  \"valid-lifetime\": 3600,\n  \"client-classes\": [\n    { \"name\": \"b5\", \"test\": \"option[60].text == 'lab-class-b5'\" },\n    { \"name\": \"not-b5\", \"test\": \"not member('b5')\" }\n  ],\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet4\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"10.200.1.0/24\",\n      \"pools\": [\n        { \"pool\": \"10.200.1.100 - 10.200.1.200\", \"client-class\": \"not-b5\" },\n        { \"pool\": \"10.200.1.221 - 10.200.1.230\", \"client-class\": \"b5\" }\n      ],\n      \"option-data\": [ { \"name\": \"routers\", \"data\": \"10.200.1.1\" } ],\n      \"reservations\": <?include \"/etc/kea/reservations.json\"?>\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp4-server"
+## kea EnableFeature/rapid-commit-6 err=false
+# restore err=false
+"sudo cat /etc/kea/kea-dhcp6.conf"
+"sudo tee /etc/kea/kea-dhcp6.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp6\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea6-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases6.csv\" },\n  \"preferred-lifetime\": 3600,\n  \"valid-lifetime\": 7200,\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet6\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"fd42:200:0:100::/64\",\n      \"interface\": \"eth1\",\n      \"rapid-commit\": true,\n      \"pools\": [ { \"pool\": \"fd42:200:0:100::100 - fd42:200:0:100::1ff\" } ]\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp6-server"
+"sudo tee /etc/kea/kea-dhcp6.conf >/dev/null <<'LABEOF'\n{\n\"Dhcp6\": {\n  \"interfaces-config\": { \"interfaces\": [ \"eth1\" ] },\n  \"control-socket\": { \"socket-type\": \"unix\", \"socket-name\": \"/run/kea/kea6-ctrl-socket\" },\n  \"lease-database\": { \"type\": \"memfile\", \"persist\": true, \"name\": \"/var/lib/kea/kea-leases6.csv\" },\n  \"preferred-lifetime\": 3600,\n  \"valid-lifetime\": 7200,\n  \"hooks-libraries\": [\n    { \"library\": \"/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_lease_cmds.so\" }\n  ],\n  \"subnet6\": [\n    {\n      \"id\": 1,\n      \"subnet\": \"fd42:200:0:100::/64\",\n      \"interface\": \"eth1\",\n      \"rapid-commit\": false,\n      \"pools\": [ { \"pool\": \"fd42:200:0:100::100 - fd42:200:0:100::1ff\" } ]\n    }\n  ]\n}\n}\nLABEOF\n"
+"sudo systemctl restart kea-dhcp6-server"
+## kea EnableFeature/temporary-6 err=true
+## isc-dhcp Leases err=false
+"sudo cat /var/lib/dhcp/dhcpd.leases"
+## isc-dhcp Leases6 err=false
+"sudo cat /var/lib/dhcp/dhcpd6.leases"
+## isc-dhcp SetRAOff err=false
+# restore err=false
+"sudo systemctl stop radvd"
+"sudo systemctl start radvd"
+## isc-dhcp ReserveMAC err=false
+"sudo sed -i '/^host lab-021122334455 /d' /etc/dhcp/lab-reservations.conf && echo 'host lab-021122334455 { hardware ethernet 02:11:22:33:44:55; fixed-address 10.200.1.150; }' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && sudo systemctl restart isc-dhcp-server"
+## isc-dhcp ReserveClientID err=false
+"sudo sed -i '/^host lab-cid-006c61622d663262 /d' /etc/dhcp/lab-reservations.conf && echo 'host lab-cid-006c61622d663262 { option dhcp-client-identifier 00:6c:61:62:2d:66:32:62; fixed-address 10.200.1.151; }' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && sudo systemctl restart isc-dhcp-server"
+## isc-dhcp SetDNSOption err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n  option domain-name-servers 10.200.1.53;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp Restart err=false
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp Stop err=false
+"sudo systemctl stop isc-dhcp-server"
+## isc-dhcp Start err=false
+"sudo systemctl start isc-dhcp-server"
+## isc-dhcp Reachable err=false
+"ping -c1 -W2 10.200.1.150"
+## isc-dhcp ShortenLeaseTime err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 60;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp ResetLeases err=false
+"sudo systemctl stop isc-dhcp-server && sudo truncate -s 0 /var/lib/dhcp/dhcpd.leases && sudo systemctl start isc-dhcp-server"
+## isc-dhcp ReadyTwiceThenRecoverDrifted err=false
+"sudo systemctl is-active --quiet isc-dhcp-server"
+"sudo systemctl is-active --quiet radvd"
+"sudo cat /var/lib/dhcp/dhcpd.leases"
+"sudo cat /var/lib/dhcp/dhcpd6.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dhcp/dhcpd6.conf:'; sudo base64 -w0 /etc/dhcp/dhcpd6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dhcp/dhcpd.conf"
+"sudo systemctl is-active --quiet isc-dhcp-server"
+"sudo systemctl is-active --quiet radvd"
+"sudo cat /var/lib/dhcp/dhcpd.leases"
+"sudo cat /var/lib/dhcp/dhcpd6.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dhcp/dhcpd6.conf:'; sudo base64 -w0 /etc/dhcp/dhcpd6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dhcp/dhcpd.conf"
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dhcp/dhcpd6.conf:'; sudo base64 -w0 /etc/dhcp/dhcpd6.conf 2>/dev/null || printf '!'; echo; printf 'cfg6:/etc/radvd.conf:'; sudo base64 -w0 /etc/radvd.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dhcp/dhcpd.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo tee /etc/radvd.conf >/dev/null <<'LABEOF'\nv6 /etc/radvd.conf\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo systemctl restart radvd"
+## isc-dhcp RecoverWithoutBaseline err=false
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"sudo systemctl restart isc-dhcp-server"
+"sudo systemctl restart radvd"
+## isc-dhcp Impair err=false
+# restore err=false
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo /usr/sbin/tc qdisc del dev eth1 root"
+## isc-dhcp SendForceRenewUnsigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode unsigned"
+## isc-dhcp SendForceRenewSigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode signed --client-id 006c61622d663262 --nonce 00112233445566778899aabbccddeeff --ack-replay 7"
+## isc-dhcp SquatAnnounce err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"sudo ip netns exec labc-squat arping -q -U -c 3 -I labc-sq0 10.200.1.231"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## isc-dhcp SquatSilent err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## isc-dhcp StartRogue err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-rogue && sudo ip link add labc-rg0 link eth1 type macvlan mode bridge && sudo ip link set labc-rg0 netns labc-rogue && { sudo ip netns exec labc-rogue sysctl -qw net.ipv6.conf.labc-rg0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-rogue ip addr add 10.200.1.240/24 dev labc-rg0 && sudo ip netns exec labc-rogue ip link set labc-rg0 up"
+"sudo rm -f /run/labc-rogue.leases /run/labc-rogue.log /run/labc-rogue.pid && sudo ip netns exec labc-rogue dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts --interface=labc-rg0 --bind-interfaces --no-ping --dhcp-range=10.200.1.241,10.200.1.250,2m --dhcp-leasefile=/run/labc-rogue.leases --pid-file=/run/labc-rogue.pid --log-dhcp --log-facility=/run/labc-rogue.log --user=root && sleep 1 && sudo ip netns pids labc-rogue | grep -q ."
+"if ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-rogue; fi; sudo ip link del labc-rg0 2>/dev/null; ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit f}'"
+## isc-dhcp RogueLeases err=false
+"sudo cat /run/labc-rogue.leases"
+## isc-dhcp NarrowPool err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.101;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp Renumber err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.2.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nsubnet 10.200.2.0 netmask 255.255.255.0 {\n  range 10.200.2.100 10.200.2.200;\n  option routers 10.200.2.2;\n}\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/user-class-pool err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nclass \"f1\" {\n  match if substring(option user-class, 1, 9) = \"lab-uc-f1\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    deny members of \"f1\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  pool {\n    allow members of \"f1\";\n    range 10.200.1.203 10.200.1.210;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/offer-108 err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n  option v6-only-preferred 1800;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/force-108 err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nclass \"f2b\" {\n  match if option dhcp-client-identifier = 00:6c:61:62:2d:66:32:62;\n  option v6-only-preferred 1800;\n  option dhcp-parameter-request-list = concat(option dhcp-parameter-request-list, encode-int(108, 8));\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/rapid-commit-4 err=true
+## isc-dhcp EnableFeature/forcerenew-nonce err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd.conf"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\noption lab-fr-capable code 145 = unsigned integer 8;\noption lab-fr-auth code 90 = string;\nclass \"f8\" {\n  match if option dhcp-client-identifier = 00:6c:61:62:2d:66:32:62;\n  option lab-fr-capable 1;\n  option dhcp-parameter-request-list = concat(option dhcp-parameter-request-list, encode-int(145, 8), encode-int(90, 8));\n  if option dhcp-message-type = 3 and exists dhcp-requested-address {\n    option lab-fr-auth 03:01:00:00:00:00:00:00:00:00:01:01:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff;\n  }\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/rapid-commit-6 err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd6.conf"
+"sudo tee /etc/dhcp/dhcpd6.conf >/dev/null <<'LABEOF'\ndefault-lease-time 7200;\npreferred-lifetime 3600;\noption dhcp6.rapid-commit; # lab-rapid-commit-on\nsubnet6 fd42:200:0:100::/64 {\n  range6 fd42:200:0:100::100 fd42:200:0:100::1ff;\n  #lab-temporary range6 fd42:200:0:100::200/120 temporary;\n}\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd6.conf >/dev/null <<'LABEOF'\ndefault-lease-time 7200;\npreferred-lifetime 3600;\n#lab-rapid-commit option dhcp6.rapid-commit;\nsubnet6 fd42:200:0:100::/64 {\n  range6 fd42:200:0:100::100 fd42:200:0:100::1ff;\n  #lab-temporary range6 fd42:200:0:100::200/120 temporary;\n}\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## isc-dhcp EnableFeature/temporary-6 err=false
+# restore err=false
+"sudo cat /etc/dhcp/dhcpd6.conf"
+"sudo tee /etc/dhcp/dhcpd6.conf >/dev/null <<'LABEOF'\ndefault-lease-time 7200;\npreferred-lifetime 3600;\n#lab-rapid-commit option dhcp6.rapid-commit;\nsubnet6 fd42:200:0:100::/64 {\n  range6 fd42:200:0:100::100 fd42:200:0:100::1ff;\n  range6 fd42:200:0:100::200/120 temporary; # lab-temporary-on\n}\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+"sudo tee /etc/dhcp/dhcpd6.conf >/dev/null <<'LABEOF'\ndefault-lease-time 7200;\npreferred-lifetime 3600;\n#lab-rapid-commit option dhcp6.rapid-commit;\nsubnet6 fd42:200:0:100::/64 {\n  range6 fd42:200:0:100::100 fd42:200:0:100::1ff;\n  #lab-temporary range6 fd42:200:0:100::200/120 temporary;\n}\nLABEOF\n"
+"sudo systemctl restart isc-dhcp-server"
+## dnsmasq Leases err=false
+"sudo cat /var/lib/misc/dnsmasq.leases"
+## dnsmasq Leases6 err=false
+"sudo cat /var/lib/misc/dnsmasq.leases"
+## dnsmasq SetRAOff err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/lab-v6.conf"
+"sudo tee /etc/dnsmasq.d/lab-v6.conf >/dev/null <<'LABEOF'\n#lab-ra-off\ndhcp-range=fd42:200:0:100::100,fd42:200:0:100::1ff,64,2h\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.d/lab-v6.conf >/dev/null <<'LABEOF'\nenable-ra\ndhcp-range=fd42:200:0:100::100,fd42:200:0:100::1ff,slaac,64,2h\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq ReserveMAC err=false
+"sudo sed -i '/^dhcp-host=02:11:22:33:44:55,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=02:11:22:33:44:55,10.200.1.150' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart dnsmasq"
+## dnsmasq ReserveClientID err=false
+"sudo sed -i '/^dhcp-host=id:00:6c:61:62:2d:66:32:62,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=id:00:6c:61:62:2d:66:32:62,10.200.1.151' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart dnsmasq"
+## dnsmasq SetDNSOption err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\ndhcp-option=6,10.200.1.53\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq Restart err=false
+"sudo systemctl restart dnsmasq"
+## dnsmasq Stop err=false
+"sudo systemctl stop dnsmasq"
+## dnsmasq Start err=false
+"sudo systemctl start dnsmasq"
+## dnsmasq Reachable err=false
+"ping -c1 -W2 10.200.1.150"
+## dnsmasq ShortenLeaseTime err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,60\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,60\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq ResetLeases err=false
+"sudo systemctl stop dnsmasq && sudo truncate -s 0 /var/lib/misc/dnsmasq.leases && sudo systemctl start dnsmasq"
+## dnsmasq ReadyTwiceThenRecoverDrifted err=false
+"sudo systemctl is-active --quiet dnsmasq"
+"sudo cat /var/lib/misc/dnsmasq.leases"
+"sudo cat /var/lib/misc/dnsmasq.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dnsmasq.d/lab-v6.conf:'; sudo base64 -w0 /etc/dnsmasq.d/lab-v6.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.conf"
+"sudo systemctl is-active --quiet dnsmasq"
+"sudo cat /var/lib/misc/dnsmasq.leases"
+"sudo cat /var/lib/misc/dnsmasq.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dnsmasq.d/lab-v6.conf:'; sudo base64 -w0 /etc/dnsmasq.d/lab-v6.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.conf"
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; printf 'cfg6:/etc/dnsmasq.d/lab-v6.conf:'; sudo base64 -w0 /etc/dnsmasq.d/lab-v6.conf 2>/dev/null || printf '!'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo tee /etc/dnsmasq.d/lab-v6.conf >/dev/null <<'LABEOF'\nv6 /etc/dnsmasq.d/lab-v6.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq RecoverWithoutBaseline err=false
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"sudo systemctl restart dnsmasq"
+## dnsmasq Impair err=false
+# restore err=false
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo /usr/sbin/tc qdisc del dev eth1 root"
+## dnsmasq SendForceRenewUnsigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode unsigned"
+## dnsmasq SendForceRenewSigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode signed --client-id 006c61622d663262 --nonce 00112233445566778899aabbccddeeff --ack-replay 7"
+## dnsmasq SquatAnnounce err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"sudo ip netns exec labc-squat arping -q -U -c 3 -I labc-sq0 10.200.1.231"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## dnsmasq SquatSilent err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## dnsmasq StartRogue err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-rogue && sudo ip link add labc-rg0 link eth1 type macvlan mode bridge && sudo ip link set labc-rg0 netns labc-rogue && { sudo ip netns exec labc-rogue sysctl -qw net.ipv6.conf.labc-rg0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-rogue ip addr add 10.200.1.240/24 dev labc-rg0 && sudo ip netns exec labc-rogue ip link set labc-rg0 up"
+"sudo rm -f /run/labc-rogue.leases /run/labc-rogue.log /run/labc-rogue.pid && sudo ip netns exec labc-rogue dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts --interface=labc-rg0 --bind-interfaces --no-ping --dhcp-range=10.200.1.241,10.200.1.250,2m --dhcp-leasefile=/run/labc-rogue.leases --pid-file=/run/labc-rogue.pid --log-dhcp --log-facility=/run/labc-rogue.log --user=root && sleep 1 && sudo ip netns pids labc-rogue | grep -q ."
+"if ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-rogue; fi; sudo ip link del labc-rg0 2>/dev/null; ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit f}'"
+## dnsmasq RogueLeases err=false
+"sudo cat /run/labc-rogue.leases"
+## dnsmasq NarrowPool err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.101,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq Renumber err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo cat /etc/dnsmasq.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.2.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-range=10.200.2.100,10.200.2.200,12h\ndhcp-option=3,10.200.2.2\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/user-class-pool err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,tag:!f1,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-userclass=set:f1,lab-uc-f1\ndhcp-range=tag:f1,10.200.1.203,10.200.1.210,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/offer-108 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\ndhcp-option=108,00:00:07:08\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/force-108 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f2b\ndhcp-option-force=tag:f2b,108,00:00:07:08\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/rapid-commit-4 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\ndhcp-rapid-commit\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/forcerenew-nonce err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.conf"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f8\ndhcp-match=set:f8sel,option:requested-address\ndhcp-option-force=tag:f8,145,01\ndhcp-option-force=tag:f8,tag:f8sel,90,03:01:00:00:00:00:00:00:00:00:01:01:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+"sudo tee /etc/dnsmasq.conf >/dev/null <<'LABEOF'\ninterface=eth1\nbind-interfaces\nexcept-interface=eth0\ndhcp-authoritative\ndhcp-vendorclass=set:b5,lab-class-b5\ndhcp-range=tag:!b5,10.200.1.100,10.200.1.200,12h\ndhcp-range=tag:b5,10.200.1.221,10.200.1.230,12h\ndhcp-option=3,10.200.1.1\nconf-dir=/etc/dnsmasq.d/,*.conf\nLABEOF\n"
+"sudo systemctl restart dnsmasq"
+## dnsmasq EnableFeature/rapid-commit-6 err=false
+# restore err=false
+## dnsmasq EnableFeature/temporary-6 err=false
+# restore err=false
+## udhcpd Leases err=false
+"m0=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); sudo systemctl kill -s USR1 udhcpd && for i in $(seq 1 400); do m1=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); [ \"$m1\" != \"$m0\" ] && break; sleep 0.05; done; [ \"$m1\" != \"$m0\" ] || { echo \"udhcpd did not rewrite /var/lib/misc/udhcpd.leases after USR1\" >&2; exit 1; }; sudo env TZ=UTC busybox dumpleases -a -f /var/lib/misc/udhcpd.leases"
+## udhcpd Leases6 err=true
+## udhcpd SetRAOff err=true
+## udhcpd ReserveMAC err=false
+"sudo sed -i '/^static_lease[[:space:]]\\+02:11:22:33:44:55[[:space:]]/Id' /etc/udhcpd.conf && echo 'static_lease 02:11:22:33:44:55 10.200.1.150' | sudo tee -a /etc/udhcpd.conf >/dev/null && sudo systemctl restart udhcpd"
+## udhcpd ReserveClientID err=true
+## udhcpd SetDNSOption err=false
+# restore err=false
+"sudo cat /etc/udhcpd.conf"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption dns 10.200.1.53\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+## udhcpd Restart err=false
+"sudo systemctl restart udhcpd"
+## udhcpd Stop err=false
+"sudo systemctl stop udhcpd"
+## udhcpd Start err=false
+"sudo systemctl start udhcpd"
+## udhcpd Reachable err=false
+"ping -c1 -W2 10.200.1.150"
+## udhcpd ShortenLeaseTime err=false
+# restore err=false
+"sudo cat /etc/udhcpd.conf"
+"sudo cat /etc/udhcpd.conf"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption lease 60\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+## udhcpd ResetLeases err=false
+"sudo systemctl stop udhcpd && sudo truncate -s 0 /var/lib/misc/udhcpd.leases && sudo systemctl start udhcpd"
+## udhcpd ReadyTwiceThenRecoverDrifted err=false
+"sudo systemctl is-active --quiet udhcpd"
+"m0=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); sudo systemctl kill -s USR1 udhcpd && for i in $(seq 1 400); do m1=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); [ \"$m1\" != \"$m0\" ] && break; sleep 0.05; done; [ \"$m1\" != \"$m0\" ] || { echo \"udhcpd did not rewrite /var/lib/misc/udhcpd.leases after USR1\" >&2; exit 1; }; sudo env TZ=UTC busybox dumpleases -a -f /var/lib/misc/udhcpd.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/udhcpd.conf"
+"sudo systemctl is-active --quiet udhcpd"
+"m0=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); sudo systemctl kill -s USR1 udhcpd && for i in $(seq 1 400); do m1=$(sudo stat -c %.9Y /var/lib/misc/udhcpd.leases 2>/dev/null || echo 0); [ \"$m1\" != \"$m0\" ] && break; sleep 0.05; done; [ \"$m1\" != \"$m0\" ] || { echo \"udhcpd did not rewrite /var/lib/misc/udhcpd.leases after USR1\" >&2; exit 1; }; sudo env TZ=UTC busybox dumpleases -a -f /var/lib/misc/udhcpd.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/udhcpd.conf"
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/udhcpd.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+## udhcpd RecoverWithoutBaseline err=false
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"sudo systemctl restart udhcpd"
+## udhcpd Impair err=false
+# restore err=false
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo /usr/sbin/tc qdisc del dev eth1 root"
+## udhcpd SendForceRenewUnsigned err=true
+## udhcpd SendForceRenewSigned err=true
+## udhcpd SquatAnnounce err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"sudo ip netns exec labc-squat arping -q -U -c 3 -I labc-sq0 10.200.1.231"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## udhcpd SquatSilent err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## udhcpd StartRogue err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-rogue && sudo ip link add labc-rg0 link eth1 type macvlan mode bridge && sudo ip link set labc-rg0 netns labc-rogue && { sudo ip netns exec labc-rogue sysctl -qw net.ipv6.conf.labc-rg0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-rogue ip addr add 10.200.1.240/24 dev labc-rg0 && sudo ip netns exec labc-rogue ip link set labc-rg0 up"
+"sudo rm -f /run/labc-rogue.leases /run/labc-rogue.log /run/labc-rogue.pid && sudo ip netns exec labc-rogue dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts --interface=labc-rg0 --bind-interfaces --no-ping --dhcp-range=10.200.1.241,10.200.1.250,2m --dhcp-leasefile=/run/labc-rogue.leases --pid-file=/run/labc-rogue.pid --log-dhcp --log-facility=/run/labc-rogue.log --user=root && sleep 1 && sudo ip netns pids labc-rogue | grep -q ."
+"if ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-rogue; fi; sudo ip link del labc-rg0 2>/dev/null; ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit f}'"
+## udhcpd RogueLeases err=false
+"sudo cat /run/labc-rogue.leases"
+## udhcpd NarrowPool err=true
+"sudo cat /etc/udhcpd.conf"
+## udhcpd Renumber err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo cat /etc/udhcpd.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.2.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.2.100\nend 10.200.2.200\noption subnet 255.255.255.0\noption router 10.200.2.2\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/udhcpd.conf >/dev/null <<'LABEOF'\ninterface eth1\nstart 10.200.1.100\nend 10.200.1.200\noption subnet 255.255.255.0\noption router 10.200.1.1\noption lease 43200\nmin_lease 60\nlease_file /var/lib/misc/udhcpd.leases\nLABEOF\n"
+"sudo systemctl restart udhcpd"
+## udhcpd EnableFeature/user-class-pool err=true
+## udhcpd EnableFeature/offer-108 err=true
+## udhcpd EnableFeature/force-108 err=true
+## udhcpd EnableFeature/rapid-commit-4 err=true
+## udhcpd EnableFeature/forcerenew-nonce err=true
+## udhcpd EnableFeature/rapid-commit-6 err=true
+## udhcpd EnableFeature/temporary-6 err=true
+## pihole Leases err=false
+"sudo cat /etc/pihole/dhcp.leases"
+## pihole Leases6 err=true
+## pihole SetRAOff err=true
+## pihole ReserveMAC err=false
+"sudo sed -i '/^dhcp-host=02:11:22:33:44:55,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=02:11:22:33:44:55,10.200.1.150' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart pihole-FTL"
+## pihole ReserveClientID err=false
+"sudo sed -i '/^dhcp-host=id:00:6c:61:62:2d:66:32:62,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=id:00:6c:61:62:2d:66:32:62,10.200.1.151' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart pihole-FTL"
+## pihole SetDNSOption err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-option=6,10.200.1.53\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole Restart err=false
+"sudo systemctl restart pihole-FTL"
+## pihole Stop err=false
+"sudo systemctl stop pihole-FTL"
+## pihole Start err=false
+"sudo systemctl start pihole-FTL"
+## pihole Reachable err=false
+"ping -c1 -W2 10.200.1.150"
+## pihole ShortenLeaseTime err=true
+## pihole ResetLeases err=false
+"sudo systemctl stop pihole-FTL && sudo truncate -s 0 /etc/pihole/dhcp.leases && sudo systemctl start pihole-FTL"
+## pihole ReadyTwiceThenRecoverDrifted err=false
+"sudo systemctl is-active --quiet pihole-FTL"
+"sudo cat /etc/pihole/dhcp.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo systemctl is-active --quiet pihole-FTL"
+"sudo cat /etc/pihole/dhcp.leases"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {printf \"%s \", $1}'; echo; printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); printf \"%s \", n[1]}'; echo; printf 'procs:'; pgrep -f '[l]abc-' | wc -l; printf 'netem:'; /usr/sbin/tc qdisc show dev eth1 root 2>/dev/null | grep -c netem; printf 'addr:'; ip -4 -o addr show dev eth1 | awk '{printf \"%s \", $4}'; echo; printf 'addr6:'; ip -6 -o addr show dev eth1 scope global permanent | awk '{printf \"%s \", $4}'; echo; echo 'cfg:'; sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole RecoverWithoutBaseline err=false
+"sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
+"sudo systemctl restart pihole-FTL"
+## pihole Impair err=false
+# restore err=false
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo /usr/sbin/tc qdisc del dev eth1 root"
+## pihole SendForceRenewUnsigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode unsigned"
+## pihole SendForceRenewSigned err=false
+"ping -c1 -W2 10.200.1.150"
+"ip neigh show 10.200.1.150 dev eth1"
+"sudo mkdir -p /run/lab && sudo tee /run/lab/forcerenew-send.py >/dev/null <<'LABEOF'\nprint(1)\nLABEOF\n"
+"sudo python3 /run/lab/forcerenew-send.py --dst-mac 02:aa:bb:cc:dd:ee --iface eth1 --dst-ip 10.200.1.150 --src-ip 10.200.1.2 --chaddr 02:11:22:33:44:55 --mode signed --client-id 006c61622d663262 --nonce 00112233445566778899aabbccddeeff --ack-replay 7"
+## pihole SquatAnnounce err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"sudo ip netns exec labc-squat arping -q -U -c 3 -I labc-sq0 10.200.1.231"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## pihole SquatSilent err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-squat && sudo ip link add labc-sq0 link eth1 type macvlan mode bridge && sudo ip link set labc-sq0 netns labc-squat && { sudo ip netns exec labc-squat sysctl -qw net.ipv6.conf.labc-sq0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-squat sysctl -qw net.ipv4.icmp_echo_ignore_all=1 && sudo ip netns exec labc-squat ip addr add 10.200.1.231/24 dev labc-sq0 && sudo ip netns exec labc-squat ip link set labc-sq0 up"
+"sudo ip netns add labc-probe && sudo ip link add labc-pr0 link eth1 type macvlan mode bridge && sudo ip link set labc-pr0 netns labc-probe && { sudo ip netns exec labc-probe sysctl -qw net.ipv6.conf.labc-pr0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-probe ip link set labc-pr0 up"
+"printf 'arp:'; sudo ip netns exec labc-probe arping -D -c 2 -w 3 -I labc-pr0 10.200.1.231 2>&1 | tr '\\n' ' '; echo; printf 'mac:'; sudo ip netns exec labc-squat cat /sys/class/net/labc-sq0/address; printf 'icmp:'; sudo ip netns exec labc-squat sysctl -n net.ipv4.icmp_echo_ignore_all"
+"if ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-probe); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-probe; fi; sudo ip link del labc-pr0 2>/dev/null; ip netns list | awk '$1 == \"labc-probe\" {f=1} END {exit f}'"
+"if ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-squat); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-squat; fi; sudo ip link del labc-sq0 2>/dev/null; ip netns list | awk '$1 == \"labc-squat\" {f=1} END {exit f}'"
+## pihole StartRogue err=false
+# restore err=false
+"ip -4 -o addr show dev eth1 | awk '{print $4}'"
+"sudo ip netns add labc-rogue && sudo ip link add labc-rg0 link eth1 type macvlan mode bridge && sudo ip link set labc-rg0 netns labc-rogue && { sudo ip netns exec labc-rogue sysctl -qw net.ipv6.conf.labc-rg0.disable_ipv6=1 2>/dev/null || true; } && sudo ip netns exec labc-rogue ip addr add 10.200.1.240/24 dev labc-rg0 && sudo ip netns exec labc-rogue ip link set labc-rg0 up"
+"sudo rm -f /run/labc-rogue.leases /run/labc-rogue.log /run/labc-rogue.pid && sudo ip netns exec labc-rogue dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts --interface=labc-rg0 --bind-interfaces --no-ping --dhcp-range=10.200.1.241,10.200.1.250,2m --dhcp-leasefile=/run/labc-rogue.leases --pid-file=/run/labc-rogue.pid --log-dhcp --log-facility=/run/labc-rogue.log --user=root && sleep 1 && sudo ip netns pids labc-rogue | grep -q ."
+"if ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit !f}'; then for i in 1 2 3 4 5 6; do p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] && break; sudo kill $p; sleep 0.5; done; p=$(sudo ip netns pids labc-rogue); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del labc-rogue; fi; sudo ip link del labc-rg0 2>/dev/null; ip netns list | awk '$1 == \"labc-rogue\" {f=1} END {exit f}'"
+## pihole RogueLeases err=false
+"sudo cat /run/labc-rogue.leases"
+## pihole NarrowPool err=true
+## pihole Renumber err=true
+## pihole EnableFeature/user-class-pool err=true
+## pihole EnableFeature/offer-108 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-option=108,00:00:07:08\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole EnableFeature/force-108 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f2b\ndhcp-option-force=tag:f2b,108,00:00:07:08\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole EnableFeature/rapid-commit-4 err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-rapid-commit\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole EnableFeature/forcerenew-nonce err=false
+# restore err=false
+"sudo cat /etc/dnsmasq.d/90-lab.conf"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f8\ndhcp-match=set:f8sel,option:requested-address\ndhcp-option-force=tag:f8,145,01\ndhcp-option-force=tag:f8,tag:f8sel,90,03:01:00:00:00:00:00:00:00:00:01:01:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+"sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
+"sudo systemctl restart pihole-FTL"
+## pihole EnableFeature/rapid-commit-6 err=true
+## pihole EnableFeature/temporary-6 err=true

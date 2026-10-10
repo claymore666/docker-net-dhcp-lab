@@ -74,19 +74,22 @@ type sourceState struct {
 // the shell running the search itself (pgrep(1) -f reads full argv).
 const actorRE = `[l]abc-`
 
-// stateCmd reads every Ready input in one remote command. Each v6 config
+// stateCmd reads every Ready input in one remote command; a host
+// without the actor tools skips their four lines (#9). Each v6 config
 // comes base64 on one line ("!" when unreadable, outside the alphabet);
 // the main config comes last, after a "cfg:" line, so its bytes stay
 // exact. addr6 lists permanent addresses only, so an RA-formed address
 // on the source never moves the baseline.
-func stateCmd(u sourceUnits) string {
+func (h host) stateCmd(u sourceUnits) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {printf "%%s ", $1}'; echo; `+
-		`printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); printf "%%s ", n[1]}'; echo; `+
-		`printf 'procs:'; pgrep -f '%[3]s' | wc -l; `+
-		`printf 'netem:'; %[2]s qdisc show dev %[1]s root 2>/dev/null | grep -c netem; `+
-		`printf 'addr:'; ip -4 -o addr show dev %[1]s | awk '{printf "%%s ", $4}'; echo; `+
-		`printf 'addr6:'; ip -6 -o addr show dev %[1]s scope global permanent | awk '{printf "%%s ", $4}'; echo; `, segmentNIC, tcBin, actorRE)
+	if h.portable {
+		fmt.Fprintf(&b, `printf 'netns:'; ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {printf "%%s ", $1}'; echo; `+
+			`printf 'links:'; ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); printf "%%s ", n[1]}'; echo; `+
+			`printf 'procs:'; pgrep -f '%[3]s' | wc -l; `+
+			`printf 'netem:'; %[2]s qdisc show dev %[1]s root 2>/dev/null | grep -c netem; `, h.nic, h.tc, actorRE)
+	}
+	fmt.Fprintf(&b, `printf 'addr:'; ip -4 -o addr show dev %[1]s | awk '{printf "%%s ", $4}'; echo; `+
+		`printf 'addr6:'; ip -6 -o addr show dev %[1]s scope global permanent | awk '{printf "%%s ", $4}'; echo; `, h.nic)
 	for _, e := range u.extra {
 		fmt.Fprintf(&b, `printf 'cfg6:%[1]s:'; sudo base64 -w0 %[1]s 2>/dev/null || printf '!'; echo; `, e.path)
 	}
@@ -94,7 +97,7 @@ func stateCmd(u sourceUnits) string {
 	return b.String()
 }
 
-func parseState(out string, u sourceUnits) (sourceState, error) {
+func parseState(out string, u sourceUnits, portable bool) (sourceState, error) {
 	head, cfg, ok := strings.Cut(out, "cfg:\n")
 	if !ok {
 		return sourceState{}, fmt.Errorf("state read carries no cfg: marker")
@@ -145,25 +148,29 @@ func parseState(out string, u sourceUnits) (sourceState, error) {
 			st.extra[path] = string(body)
 		}
 	}
-	if seen != 6 || len(st.extra) != len(u.extra) {
+	want := 2
+	if portable {
+		want = 6
+	}
+	if seen != want || len(st.extra) != len(u.extra) {
 		return sourceState{}, fmt.Errorf("state read is incomplete: %q", head)
 	}
 	return st, nil
 }
 
-func readState(ctx context.Context, r Runner, u sourceUnits) (sourceState, error) {
-	out, err := r.Run(ctx, stateCmd(u))
+func (h host) readState(ctx context.Context, r Runner, u sourceUnits) (sourceState, error) {
+	out, err := r.Run(ctx, h.stateCmd(u))
 	if err != nil {
 		return sourceState{}, fmt.Errorf("read source state: %w", err)
 	}
-	return parseState(out, u)
+	return parseState(out, u, h.portable)
 }
 
 // sourceReady is every adapter's Ready body (#23).
-func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(context.Context) ([]Lease, error), b *baseline) error {
-	for _, svc := range u.services() {
-		if _, err := r.Run(ctx, "sudo systemctl is-active --quiet "+svc); err != nil {
-			return fmt.Errorf("%s is not active: %w", svc, err)
+func (h host) sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(context.Context) ([]Lease, error), b *baseline) error {
+	for _, name := range u.services() {
+		if _, err := r.Run(ctx, h.unit(name).isActive); err != nil {
+			return fmt.Errorf("%s is not active: %w", name, err)
 		}
 	}
 	if _, err := leases(ctx); err != nil {
@@ -174,7 +181,7 @@ func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(conte
 			return fmt.Errorf("v6 lease table not readable: %w", err)
 		}
 	}
-	st, err := readState(ctx, r, u)
+	st, err := h.readState(ctx, r, u)
 	if err != nil {
 		return err
 	}
@@ -188,7 +195,7 @@ func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(conte
 		return fmt.Errorf("%d leftover group C actor processes", st.procs)
 	}
 	if st.netem {
-		return fmt.Errorf("a netem qdisc is still on %s", segmentNIC)
+		return fmt.Errorf("a netem qdisc is still on %s", h.nic)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -197,10 +204,10 @@ func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(conte
 		return nil
 	}
 	if st.addrs != b.addrs {
-		return fmt.Errorf("%s carries %q, the first readiness check saw %q", segmentNIC, st.addrs, b.addrs)
+		return fmt.Errorf("%s carries %q, the first readiness check saw %q", h.nic, st.addrs, b.addrs)
 	}
 	if st.addrs6 != b.addrs6 {
-		return fmt.Errorf("%s carries v6 %q, the first readiness check saw %q", segmentNIC, st.addrs6, b.addrs6)
+		return fmt.Errorf("%s carries v6 %q, the first readiness check saw %q", h.nic, st.addrs6, b.addrs6)
 	}
 	if st.cfg != b.cfg {
 		return fmt.Errorf("%s differs from the copy taken at the first readiness check", u.cfgPath)
@@ -214,62 +221,83 @@ func sourceReady(ctx context.Context, r Runner, u sourceUnits, leases func(conte
 }
 
 // sourceRecover is every adapter's Recover body (#23): kill the actor
-// processes, delete their netns and links and the netem qdisc, put the
-// baseline v4 segment addresses and every baseline config back when
-// they differ, and restart every unit (a stopped radvd starts again).
-func sourceRecover(ctx context.Context, r Runner, u sourceUnits, b *baseline) error {
-	clean := fmt.Sprintf(`sudo pkill -f '%[3]s'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {print $1}'); do p=$(sudo ip netns pids "$n"); [ -z "$p" ] || sudo kill -9 $p; sudo ip netns del "$n"; done; `+
-		`for l in $(ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); print n[1]}'); do sudo ip link del "$l"; done; `+
-		`sudo %[1]s qdisc del dev %[2]s root 2>/dev/null; true`, tcBin, segmentNIC, actorRE)
-	if _, err := r.Run(ctx, clean); err != nil {
-		return fmt.Errorf("recover: clear actors and qdisc: %w", err)
+// processes, delete their netns and links and the netem qdisc (a
+// portable host only, #9), put the baseline v4 segment addresses and
+// every baseline config back when they differ, and restart every unit
+// (a stopped radvd starts again).
+func (h host) sourceRecover(ctx context.Context, r Runner, u sourceUnits, b *baseline) error {
+	if h.portable {
+		if err := h.sweepActors(ctx, r); err != nil {
+			return err
+		}
 	}
 	b.mu.Lock()
 	taken, addrs, cfg, extra := b.taken, b.addrs, b.cfg, b.extra
 	b.mu.Unlock()
 	if taken {
-		st, err := readState(ctx, r, u)
-		if err != nil {
-			return fmt.Errorf("recover: %w", err)
-		}
-		if st.addrs != addrs {
-			var want []netip.Prefix
-			for _, f := range strings.Fields(addrs) {
-				p, err := netip.ParsePrefix(f)
-				if err != nil {
-					return fmt.Errorf("recover: baseline %s address %q: %w", segmentNIC, f, err)
-				}
-				want = append(want, p)
-			}
-			if len(want) == 0 {
-				return fmt.Errorf("recover: baseline holds no %s address to put back", segmentNIC)
-			}
-			if err := setSegmentAddrs(ctx, r, want); err != nil {
-				return fmt.Errorf("recover: %w", err)
-			}
-		}
-		want := map[string]string{u.cfgPath: cfg}
-		got := map[string]string{u.cfgPath: st.cfg}
-		paths := []string{u.cfgPath}
-		for _, e := range u.extra {
-			want[e.path], got[e.path] = extra[e.path], st.extra[e.path]
-			paths = append(paths, e.path)
-		}
-		for _, p := range paths {
-			if got[p] == want[p] {
-				continue
-			}
-			if !strings.HasSuffix(want[p], "\n") {
-				return fmt.Errorf("recover: baseline %s does not end in a newline, cannot write it back byte for byte", p)
-			}
-			if err := writeRemoteConfig(ctx, r, p, want[p]); err != nil {
-				return fmt.Errorf("recover: write %s back: %w", p, err)
-			}
+		if err := h.restoreBaseline(ctx, r, u, addrs, cfg, extra); err != nil {
+			return err
 		}
 	}
-	for _, svc := range u.services() {
-		if _, err := r.Run(ctx, "sudo systemctl restart "+svc); err != nil {
-			return fmt.Errorf("recover: restart %s: %w", svc, err)
+	for _, name := range u.services() {
+		if _, err := r.Run(ctx, h.unit(name).restart); err != nil {
+			return fmt.Errorf("recover: restart %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// sweepActors kills the group C actors, deletes their netns and links
+// and the netem qdisc (#23).
+func (h host) sweepActors(ctx context.Context, r Runner) error {
+	clean := fmt.Sprintf(`sudo pkill -f '%[3]s'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^%[3]s/ {print $1}'); do p=$(sudo ip netns pids "$n"); [ -z "$p" ] || sudo kill -9 $p; sudo ip netns del "$n"; done; `+
+		`for l in $(ip -o link show | awk -F': ' '$2 ~ /^%[3]s/ {split($2, n, "@"); print n[1]}'); do sudo ip link del "$l"; done; `+
+		`sudo %[1]s qdisc del dev %[2]s root 2>/dev/null; true`, h.tc, h.nic, actorRE)
+	if _, err := r.Run(ctx, clean); err != nil {
+		return fmt.Errorf("recover: clear actors and qdisc: %w", err)
+	}
+	return nil
+}
+
+// restoreBaseline puts the baseline v4 segment addresses and every
+// baseline config back where they differ from what the source holds.
+func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addrs, cfg string, extra map[string]string) error {
+	st, err := h.readState(ctx, r, u)
+	if err != nil {
+		return fmt.Errorf("recover: %w", err)
+	}
+	if st.addrs != addrs {
+		var want []netip.Prefix
+		for _, f := range strings.Fields(addrs) {
+			p, err := netip.ParsePrefix(f)
+			if err != nil {
+				return fmt.Errorf("recover: baseline %s address %q: %w", h.nic, f, err)
+			}
+			want = append(want, p)
+		}
+		if len(want) == 0 {
+			return fmt.Errorf("recover: baseline holds no %s address to put back", h.nic)
+		}
+		if err := h.setSegmentAddrs(ctx, r, want); err != nil {
+			return fmt.Errorf("recover: %w", err)
+		}
+	}
+	want := map[string]string{u.cfgPath: cfg}
+	got := map[string]string{u.cfgPath: st.cfg}
+	paths := []string{u.cfgPath}
+	for _, e := range u.extra {
+		want[e.path], got[e.path] = extra[e.path], st.extra[e.path]
+		paths = append(paths, e.path)
+	}
+	for _, p := range paths {
+		if got[p] == want[p] {
+			continue
+		}
+		if !strings.HasSuffix(want[p], "\n") {
+			return fmt.Errorf("recover: baseline %s does not end in a newline, cannot write it back byte for byte", p)
+		}
+		if err := writeRemoteConfig(ctx, r, p, want[p]); err != nil {
+			return fmt.Errorf("recover: write %s back: %w", p, err)
 		}
 	}
 	return nil
@@ -281,7 +309,10 @@ const impairMaxDelay = 10 * time.Second
 // impair is every adapter's Impair body (C10, #23). The qdisc is read
 // back after the replace, so a kernel without sch_netem fails here and
 // never as a silent no-op (defeat 9).
-func impair(ctx context.Context, r Runner, delay time.Duration, lossPct int) (func(context.Context) error, error) {
+func (h host) impair(ctx context.Context, r Runner, delay time.Duration, lossPct int) (func(context.Context) error, error) {
+	if err := h.needPortable("impair"); err != nil {
+		return nil, err
+	}
 	if delay < 0 || delay > impairMaxDelay || delay%time.Millisecond != 0 {
 		return nil, fmt.Errorf("impair: delay %s outside 0..%s in whole milliseconds", delay, impairMaxDelay)
 	}
@@ -292,16 +323,16 @@ func impair(ctx context.Context, r Runner, delay time.Duration, lossPct int) (fu
 		return nil, fmt.Errorf("impair: neither a delay nor a loss given")
 	}
 	del := func(ctx context.Context) error {
-		if _, err := r.Run(ctx, fmt.Sprintf("sudo %s qdisc del dev %s root", tcBin, segmentNIC)); err != nil {
-			return fmt.Errorf("impair: remove netem from %s: %w", segmentNIC, err)
+		if _, err := r.Run(ctx, fmt.Sprintf("sudo %s qdisc del dev %s root", h.tc, h.nic)); err != nil {
+			return fmt.Errorf("impair: remove netem from %s: %w", h.nic, err)
 		}
 		return nil
 	}
 	cmd := fmt.Sprintf("sudo modprobe sch_netem 2>/dev/null; sudo %[4]s qdisc replace dev %[1]s root netem delay %[2]dms loss %[3]d%% && %[4]s qdisc show dev %[1]s root | grep -q netem",
-		segmentNIC, delay.Milliseconds(), lossPct, tcBin)
+		h.nic, delay.Milliseconds(), lossPct, h.tc)
 	if _, err := r.Run(ctx, cmd); err != nil {
 		_ = del(context.WithoutCancel(ctx))
-		return nil, fmt.Errorf("impair: netem on %s not in place: %w", segmentNIC, err)
+		return nil, fmt.Errorf("impair: netem on %s not in place: %w", h.nic, err)
 	}
 	return del, nil
 }

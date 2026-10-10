@@ -147,7 +147,7 @@ func parseISCLeases(raw string) ([]Lease, error) {
 // name, match and ip are validated by the callers.
 func (a *ISCDHCPAdapter) iscReserve(ctx context.Context, name, match, ip string) error {
 	block := fmt.Sprintf(`host %s { %s; fixed-address %s; }`, name, match, ip)
-	cmd := fmt.Sprintf(`sudo sed -i '/^host %s /d' /etc/dhcp/lab-reservations.conf && echo '%s' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && sudo systemctl restart isc-dhcp-server`, name, block)
+	cmd := fmt.Sprintf(`sudo sed -i '/^host %s /d' /etc/dhcp/lab-reservations.conf && echo '%s' | sudo tee -a /etc/dhcp/lab-reservations.conf >/dev/null && %s`, name, block, a.host().svc().restart)
 	if _, err := a.Runner.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("isc-dhcp: reserve %s -> %s: %w", name, ip, err)
 	}
@@ -183,9 +183,15 @@ func (a *ISCDHCPAdapter) ReserveClientID(ctx context.Context, clientID, addr str
 	return a.iscReserve(ctx, "lab-cid-"+strings.ReplaceAll(id, ":", ""), "option dhcp-client-identifier "+id, ip)
 }
 
-func (a *ISCDHCPAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
-func (a *ISCDHCPAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
-func (a *ISCDHCPAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
+func (a *ISCDHCPAdapter) Restart(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "restart", "isc-dhcp")
+}
+func (a *ISCDHCPAdapter) Stop(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "stop", "isc-dhcp")
+}
+func (a *ISCDHCPAdapter) Start(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "start", "isc-dhcp")
+}
 
 func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
@@ -194,15 +200,11 @@ func (a *ISCDHCPAdapter) Reachable(ctx context.Context, addr string) error {
 // ResetLeases stops isc-dhcp-server, truncates iscLeaseFile, and starts
 // it again (issue #3 part 2).
 func (a *ISCDHCPAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, nil, "isc-dhcp-server", "isc-dhcp")
+	return resetLeasesViaTruncate(ctx, a.Runner, iscLeaseFile, nil, a.host().svc(), "isc-dhcp")
 }
 
-func (a *ISCDHCPAdapter) systemctl(ctx context.Context, action string) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" isc-dhcp-server"); err != nil {
-		return fmt.Errorf("isc-dhcp: systemctl %s: %w", action, err)
-	}
-	return nil
-}
+// host is this source's userland: systemd, eth1 and /usr/sbin/tc (#9).
+func (a *ISCDHCPAdapter) host() host { return debianHost("isc-dhcp-server") }
 
 // ShortenLeaseTime rewrites the RUNNING config's default-lease-time and
 // restarts (issue #3, A14). It captures /etc/dhcp/dhcpd.conf as it
@@ -245,13 +247,13 @@ func (a *ISCDHCPAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *ISCDHCPAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *ISCDHCPAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
+	return a.host().sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *ISCDHCPAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
-	return impair(ctx, a.Runner, delay, lossPct)
+	return a.host().impair(ctx, a.Runner, delay, lossPct)
 }

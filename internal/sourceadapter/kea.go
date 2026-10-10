@@ -128,9 +128,13 @@ func parseKeaLeases(raw string) ([]Lease, error) {
 // validated by the caller (validateMAC, validateClientID); ip by
 // validateAddr.
 func (a *KeaAdapter) keaReserve(ctx context.Context, field, value, ip string) error {
+	hup, err := a.host().svc().kill("HUP")
+	if err != nil {
+		return fmt.Errorf("kea: reserve %s %s -> %s: %w", field, value, ip, err)
+	}
 	cmd := fmt.Sprintf(
-		`sudo jq 'map(select(.["%s"] != "%s")) + [{"%s":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && sudo systemctl kill -s HUP kea-dhcp4-server`,
-		field, value, field, value, ip,
+		`sudo jq 'map(select(.["%s"] != "%s")) + [{"%s":"%s","ip-address":"%s"}]' /etc/kea/reservations.json | sudo tee /etc/kea/reservations.json.tmp >/dev/null && sudo mv /etc/kea/reservations.json.tmp /etc/kea/reservations.json && %s`,
+		field, value, field, value, ip, hup,
 	)
 	if _, err := a.Runner.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("kea: reserve %s %s -> %s: %w", field, value, ip, err)
@@ -168,9 +172,15 @@ func (a *KeaAdapter) ReserveClientID(ctx context.Context, clientID, addr string)
 	return a.keaReserve(ctx, "client-id", id, ip)
 }
 
-func (a *KeaAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
-func (a *KeaAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
-func (a *KeaAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
+func (a *KeaAdapter) Restart(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "restart", "kea")
+}
+func (a *KeaAdapter) Stop(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "stop", "kea")
+}
+func (a *KeaAdapter) Start(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "start", "kea")
+}
 
 func (a *KeaAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
@@ -181,15 +191,11 @@ func (a *KeaAdapter) Reachable(ctx context.Context, addr string) error {
 // serves the control API this adapter's own Leases() reads and carries
 // no lease state itself.
 func (a *KeaAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, keaLeaseFile, keaReloadedLeaseFiles, "kea-dhcp4-server", "kea")
+	return resetLeasesViaTruncate(ctx, a.Runner, keaLeaseFile, keaReloadedLeaseFiles, a.host().svc(), "kea")
 }
 
-func (a *KeaAdapter) systemctl(ctx context.Context, action string) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" kea-dhcp4-server"); err != nil {
-		return fmt.Errorf("kea: systemctl %s: %w", action, err)
-	}
-	return nil
-}
+// host is this source's userland: systemd, eth1 and /usr/sbin/tc (#9).
+func (a *KeaAdapter) host() host { return debianHost("kea-dhcp4-server") }
 
 // ShortenLeaseTime rewrites the RUNNING config's valid-lifetime
 // (seconds, kea-dhcp4 config reference) and restarts -- a schema value
@@ -234,13 +240,13 @@ func (a *KeaAdapter) SetDNSOption(ctx context.Context, addr string) (func(contex
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *KeaAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *KeaAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
+	return a.host().sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *KeaAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
-	return impair(ctx, a.Runner, delay, lossPct)
+	return a.host().impair(ctx, a.Runner, delay, lossPct)
 }

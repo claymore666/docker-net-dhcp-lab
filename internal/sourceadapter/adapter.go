@@ -323,14 +323,14 @@ func shortenLeaseTimeViaSubstitution(ctx context.Context, r Runner, path string,
 // every other file the source reloads at start (Kea's LFC copies), and
 // starts the service again, in one chained command (issue #3 part 2;
 // C4 defeat 2, #23). truncate creates a missing file, rm -f ignores one.
-func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile string, reloaded []string, service, label string) error {
+func resetLeasesViaTruncate(ctx context.Context, r Runner, leaseFile string, reloaded []string, svc service, label string) error {
 	rm := ""
 	if len(reloaded) > 0 {
 		rm = " && sudo rm -f -- " + strings.Join(reloaded, " ")
 	}
-	cmd := fmt.Sprintf("sudo systemctl stop %s && sudo truncate -s 0 %s%s && sudo systemctl start %s", service, leaseFile, rm, service)
+	cmd := svc.stop + " && sudo truncate -s 0 " + leaseFile + rm + " && " + svc.start
 	if _, err := r.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("%s: reset leases (stop %s, clear %s, start %s): %w", label, service, leaseFile, service, err)
+		return fmt.Errorf("%s: reset leases (stop %s, clear %s, start %s): %w", label, svc.name, leaseFile, svc.name, err)
 	}
 	return nil
 }
@@ -381,20 +381,20 @@ const (
 	roguePIDFile   = "/run/labc-rogue.pid"
 )
 
-const segAddrCmd = "ip -4 -o addr show dev " + segmentNIC + " | awk '{print $4}'"
+func (h host) segAddrCmd() string { return "ip -4 -o addr show dev " + h.nic + " | awk '{print $4}'" }
 
 // segmentAddrs reads every IPv4 prefix on eth1, each parsed, so nothing
 // read back from the source reaches a later command unchecked.
-func segmentAddrs(ctx context.Context, r Runner) ([]netip.Prefix, error) {
-	out, err := r.Run(ctx, segAddrCmd)
+func (h host) segmentAddrs(ctx context.Context, r Runner) ([]netip.Prefix, error) {
+	out, err := r.Run(ctx, h.segAddrCmd())
 	if err != nil {
-		return nil, fmt.Errorf("read %s addresses: %w", segmentNIC, err)
+		return nil, fmt.Errorf("read %s addresses: %w", h.nic, err)
 	}
 	var ps []netip.Prefix
 	for _, f := range strings.Fields(out) {
 		p, err := netip.ParsePrefix(f)
 		if err != nil || !p.Addr().Is4() {
-			return nil, fmt.Errorf("%s carries %q, not an IPv4 prefix", segmentNIC, f)
+			return nil, fmt.Errorf("%s carries %q, not an IPv4 prefix", h.nic, f)
 		}
 		ps = append(ps, p)
 	}
@@ -403,13 +403,13 @@ func segmentAddrs(ctx context.Context, r Runner) ([]netip.Prefix, error) {
 
 // segmentPrefix is eth1's one address; an actor joins only a segment
 // the source holds exactly one address on.
-func segmentPrefix(ctx context.Context, r Runner) (netip.Prefix, error) {
-	ps, err := segmentAddrs(ctx, r)
+func (h host) segmentPrefix(ctx context.Context, r Runner) (netip.Prefix, error) {
+	ps, err := h.segmentAddrs(ctx, r)
 	if err != nil {
 		return netip.Prefix{}, err
 	}
 	if len(ps) != 1 {
-		return netip.Prefix{}, fmt.Errorf("%s carries %d IPv4 addresses, want 1", segmentNIC, len(ps))
+		return netip.Prefix{}, fmt.Errorf("%s carries %d IPv4 addresses, want 1", h.nic, len(ps))
 	}
 	return ps[0], nil
 }
@@ -434,29 +434,29 @@ func onSegment(seg netip.Prefix, addrs ...string) error {
 
 // setSegmentAddrs replaces eth1's IPv4 addresses with want and reads
 // them back; "brd +" sets the broadcast the subnet implies.
-func setSegmentAddrs(ctx context.Context, r Runner, want []netip.Prefix) error {
-	cmd := "sudo ip -4 addr flush dev " + segmentNIC
+func (h host) setSegmentAddrs(ctx context.Context, r Runner, want []netip.Prefix) error {
+	cmd := "sudo ip -4 addr flush dev " + h.nic
 	for _, p := range want {
-		cmd += fmt.Sprintf(" && sudo ip addr add %s brd + dev %s", p, segmentNIC)
+		cmd += fmt.Sprintf(" && sudo ip addr add %s brd + dev %s", p, h.nic)
 	}
 	if _, err := r.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("set %s addresses to %v: %w", segmentNIC, want, err)
+		return fmt.Errorf("set %s addresses to %v: %w", h.nic, want, err)
 	}
-	got, err := segmentAddrs(ctx, r)
+	got, err := h.segmentAddrs(ctx, r)
 	if err != nil {
 		return err
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		return fmt.Errorf("%s carries %v after the change, want %v", segmentNIC, got, want)
+		return fmt.Errorf("%s carries %v after the change, want %v", h.nic, got, want)
 	}
 	return nil
 }
 
 // netnsUpCmd makes netns ns with a macvlan child link of eth1, IPv6 off
 // on it (no router solicitations from the actor), cidr on it if given.
-func netnsUpCmd(ns, link, cidr string, ignorePing bool) string {
+func (h host) netnsUpCmd(ns, link, cidr string, ignorePing bool) string {
 	cmd := fmt.Sprintf("sudo ip netns add %[1]s && sudo ip link add %[2]s link %[3]s type macvlan mode bridge && sudo ip link set %[2]s netns %[1]s && "+
-		"{ sudo ip netns exec %[1]s sysctl -qw net.ipv6.conf.%[2]s.disable_ipv6=1 2>/dev/null || true; }", ns, link, segmentNIC)
+		"{ sudo ip netns exec %[1]s sysctl -qw net.ipv6.conf.%[2]s.disable_ipv6=1 2>/dev/null || true; }", ns, link, h.nic)
 	if ignorePing {
 		cmd += fmt.Sprintf(" && sudo ip netns exec %s sysctl -qw net.ipv4.icmp_echo_ignore_all=1", ns)
 	}
@@ -486,12 +486,15 @@ func actorStop(r Runner, ns, link, label string) func(context.Context) error {
 }
 
 // squat is every adapter's Squat body (C6, C6b, #23).
-func squat(ctx context.Context, r Runner, addr string, announce bool) (func(context.Context) error, error) {
+func (h host) squat(ctx context.Context, r Runner, addr string, announce bool) (func(context.Context) error, error) {
+	if err := h.needPortable("squatter"); err != nil {
+		return nil, err
+	}
 	ip, err := validateAddr(addr)
 	if err != nil {
 		return nil, err
 	}
-	seg, err := segmentPrefix(ctx, r)
+	seg, err := h.segmentPrefix(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("squatter: %w", err)
 	}
@@ -503,10 +506,10 @@ func squat(ctx context.Context, r Runner, addr string, announce bool) (func(cont
 		return nil, errors.Join(err, stop(context.WithoutCancel(ctx)))
 	}
 	cidr := fmt.Sprintf("%s/%d", ip, seg.Bits())
-	if _, err := r.Run(ctx, netnsUpCmd(squatNetns, squatLink, cidr, true)); err != nil {
+	if _, err := r.Run(ctx, h.netnsUpCmd(squatNetns, squatLink, cidr, true)); err != nil {
 		return undo(fmt.Errorf("squatter: set up %s with %s: %w", squatNetns, cidr, err))
 	}
-	if err := probeSquatter(ctx, r, ip); err != nil {
+	if err := h.probeSquatter(ctx, r, ip); err != nil {
 		return undo(err)
 	}
 	if announce {
@@ -523,9 +526,9 @@ var arpReplyMACRE = regexp.MustCompile(`\[([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})
 // RFC 5227 probe (arping -D, sender 0.0.0.0, the plugin's conflict
 // check) for ip is answered by the squatter's MAC, and ping is off in
 // its netns, so the server's own ping check cannot do the plugin's job.
-func probeSquatter(ctx context.Context, r Runner, ip string) error {
+func (h host) probeSquatter(ctx context.Context, r Runner, ip string) error {
 	defer func() { _, _ = r.Run(context.WithoutCancel(ctx), netnsDownCmd(probeNetns, probeLink)) }()
-	if _, err := r.Run(ctx, netnsUpCmd(probeNetns, probeLink, "", false)); err != nil {
+	if _, err := r.Run(ctx, h.netnsUpCmd(probeNetns, probeLink, "", false)); err != nil {
 		return fmt.Errorf("squatter probe: set up %s: %w", probeNetns, err)
 	}
 	out, err := r.Run(ctx, fmt.Sprintf(`printf 'arp:'; sudo ip netns exec %[1]s arping -D -c 2 -w 3 -I %[2]s %[3]s 2>&1 | tr '\n' ' '; echo; `+
@@ -566,7 +569,10 @@ func judgeSquatProbe(out, ip string) error {
 // the real server's on the dnsmasq source), no ping before an offer,
 // not authoritative, so it never NAKs the real server's clients, and
 // its own lease file read by RogueLeases.
-func startRogue(ctx context.Context, r Runner, serverAddr, first, last string) (func(context.Context) error, error) {
+func (h host) startRogue(ctx context.Context, r Runner, serverAddr, first, last string) (func(context.Context) error, error) {
+	if err := h.needPortable("rogue"); err != nil {
+		return nil, err
+	}
 	var ips [3]string
 	for i, a := range []string{serverAddr, first, last} {
 		ip, err := validateAddr(a)
@@ -582,7 +588,7 @@ func startRogue(ctx context.Context, r Runner, serverAddr, first, last string) (
 	if srv.Compare(f) >= 0 && srv.Compare(l) <= 0 {
 		return nil, fmt.Errorf("rogue: server address %s lies inside its own pool %s - %s", srv, f, l)
 	}
-	seg, err := segmentPrefix(ctx, r)
+	seg, err := h.segmentPrefix(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("rogue: %w", err)
 	}
@@ -594,7 +600,7 @@ func startRogue(ctx context.Context, r Runner, serverAddr, first, last string) (
 		return nil, errors.Join(err, stop(context.WithoutCancel(ctx)))
 	}
 	cidr := fmt.Sprintf("%s/%d", srv, seg.Bits())
-	if _, err := r.Run(ctx, netnsUpCmd(rogueNetns, rogueLink, cidr, false)); err != nil {
+	if _, err := r.Run(ctx, h.netnsUpCmd(rogueNetns, rogueLink, cidr, false)); err != nil {
 		return undo(fmt.Errorf("rogue: set up %s with %s: %w", rogueNetns, cidr, err))
 	}
 	run := fmt.Sprintf("sudo rm -f %[2]s %[3]s %[4]s && sudo ip netns exec %[1]s dnsmasq --conf-file=/dev/null --port=0 --no-resolv --no-hosts "+
@@ -607,7 +613,10 @@ func startRogue(ctx context.Context, r Runner, serverAddr, first, last string) (
 	return stop, nil
 }
 
-func rogueLeases(ctx context.Context, r Runner) ([]Lease, error) {
+func (h host) rogueLeases(ctx context.Context, r Runner) ([]Lease, error) {
+	if err := h.needPortable("rogue"); err != nil {
+		return nil, err
+	}
 	out, err := r.Run(ctx, "sudo cat "+rogueLeaseFile)
 	if err != nil {
 		return nil, fmt.Errorf("rogue: read %s: %w", rogueLeaseFile, err)
@@ -656,13 +665,13 @@ func validateRenumber(subnet, addr, first, last string) (renumberPlan, error) {
 // first, so a server that needs a subnet matching its interface (ISC)
 // starts on the new config; restore moves the addresses back, then the
 // config, then restarts.
-func renumberVia(ctx context.Context, r Runner, path string, plan renumberPlan, render func(orig string, p renumberPlan) (string, error), restart func(context.Context) error, label string) (func(context.Context) error, error) {
-	addrs, err := segmentAddrs(ctx, r)
+func (h host) renumberVia(ctx context.Context, r Runner, path string, plan renumberPlan, render func(orig string, p renumberPlan) (string, error), restart func(context.Context) error, label string) (func(context.Context) error, error) {
+	addrs, err := h.segmentAddrs(ctx, r)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if len(addrs) == 0 {
-		return nil, fmt.Errorf("%s: %s carries no IPv4 address to restore later", label, segmentNIC)
+		return nil, fmt.Errorf("%s: %s carries no IPv4 address to restore later", label, h.nic)
 	}
 	orig, err := r.Run(ctx, "sudo cat "+path)
 	if err != nil {
@@ -676,7 +685,7 @@ func renumberVia(ctx context.Context, r Runner, path string, plan renumberPlan, 
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	restore := func(ctx context.Context) error {
-		aerr := setSegmentAddrs(ctx, r, addrs)
+		aerr := h.setSegmentAddrs(ctx, r, addrs)
 		werr := writeRemoteConfig(ctx, r, path, orig)
 		if werr != nil {
 			werr = fmt.Errorf("restore original config to %s: %w", path, werr)
@@ -690,7 +699,7 @@ func renumberVia(ctx context.Context, r Runner, path string, plan renumberPlan, 
 	undo := func(err error) (func(context.Context) error, error) {
 		return nil, errors.Join(err, restore(context.WithoutCancel(ctx)))
 	}
-	if err := setSegmentAddrs(ctx, r, []netip.Prefix{netip.PrefixFrom(plan.addr, plan.subnet.Bits())}); err != nil {
+	if err := h.setSegmentAddrs(ctx, r, []netip.Prefix{netip.PrefixFrom(plan.addr, plan.subnet.Bits())}); err != nil {
 		return undo(fmt.Errorf("%s: %w", label, err))
 	}
 	if err := writeRemoteConfig(ctx, r, path, next); err != nil {
