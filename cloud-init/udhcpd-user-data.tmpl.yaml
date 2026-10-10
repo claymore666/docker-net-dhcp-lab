@@ -1,0 +1,38 @@
+#cloud-config
+# busybox udhcpd source cell (issue #10). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-udhcpd-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  # The Debian udhcpd postinst starts the service on the stock config
+  # (interface eth0, the management leg); policy-rc.d keeps it from
+  # running there even for a second. dnsmasq-base and iputils-arping are
+  # what the rogue-server and squatter actors need (group C).
+  - printf '#!/bin/sh\nexit 101\n' >/usr/sbin/policy-rc.d && chmod +x /usr/sbin/policy-rc.d
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y udhcpd dnsmasq-base iputils-arping
+  - rm -f /usr/sbin/policy-rc.d
+  - mkdir -p /root/lab-stock-config /var/lib/misc
+  - cp /etc/udhcpd.conf /root/lab-stock-config/udhcpd.conf.stock
+  - |
+    cat >/etc/udhcpd.conf <<'UDHCPDEOF'
+    interface eth1
+    start __POOL_START__
+    end __POOL_END__
+    option subnet __SEG_NETMASK__
+    option router __SEG_GATEWAY__
+    option lease 43200
+    min_lease 60
+    lease_file /var/lib/misc/udhcpd.leases
+    UDHCPDEOF
+  - systemctl enable udhcpd
+  - systemctl restart udhcpd
+  - touch /var/lib/cloud/lab-bootstrap-done

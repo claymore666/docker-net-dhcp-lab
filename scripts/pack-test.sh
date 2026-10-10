@@ -294,6 +294,43 @@ INTERFACESv6=""
 FIXTURE_EOF
 }
 
+# udhcpd 1:1.37.0-6, /etc/udhcpd.conf lines 1-9, 48-49, 60-77. Its code lines
+# carry vendor example addresses (start, end, opt dns, ...), the defect of
+# DESIGN-910 5.8; the capture masks them for this type only.
+stock_udhcpd() {
+	cat <<'FIXTURE_EOF'
+# Sample udhcpd configuration file (/etc/udhcpd.conf)
+# Values shown are defaults
+
+# The start and end of the IP lease block
+start		192.168.0.20
+end		192.168.0.254
+
+# The interface that udhcpd will use
+interface	eth0
+# next server to use in bootstrap
+#siaddr		192.168.0.22	# default: 0.0.0.0 (none)
+# Static leases map
+#static_lease 00:60:08:11:CE:4E 192.168.0.54
+#static_lease 00:60:08:11:CE:3E 192.168.0.44 optional_hostname
+
+# The remainder of options are DHCP options and can be specified with the
+# keyword 'opt' or 'option'. If an option can take multiple items, such
+# as the dns option, they can be listed on the same line, or multiple
+# lines.
+# Examples:
+opt	dns	192.168.10.2 192.168.10.10
+option	subnet	255.255.255.0
+opt	router	192.168.10.2
+opt	wins	192.168.10.10
+option	dns	129.219.13.81	# appended to above DNS servers for a total of 3
+option	domain	local
+option	lease	864000		# default: 10 days
+option	msstaticroutes	10.0.0.0/8 10.127.0.1		# single static route
+option	staticroutes	10.0.0.0/8 10.127.0.1, 10.11.12.0/24 10.11.12.1
+FIXTURE_EOF
+}
+
 # live_from_template FILE N prints the Nth heredoc of a cloud-init template
 # (the config the cell writes), placeholders replaced by lab addresses.
 live_from_template() {
@@ -340,6 +377,10 @@ source_tree() {
 	dnsmasq)
 		stock_dnsmasq >"$d/root/lab-stock-config/dnsmasq.conf.stock"
 		live_from_template "$t/dnsmasq-user-data.tmpl.yaml" 1 >"$d/etc/dnsmasq.conf"
+		;;
+	udhcpd)
+		stock_udhcpd >"$d/root/lab-stock-config/udhcpd.conf.stock"
+		live_from_template "$t/udhcpd-user-data.tmpl.yaml" 1 >"$d/etc/udhcpd.conf"
 		;;
 	esac
 }
@@ -544,6 +585,47 @@ printf '%s\n' 'server=192.168.7.9' >>"$tree/root/lab-stock-config/dnsmasq.conf.s
 ev=$(new_dir)
 run_capture dnsmasq "$tree" "$ev" || { echo "pack-test: FAIL -- stock-code-address-refused: capture failed" >&2; fail=1; }
 expect_pack "stock-code-address-refused" fail "$ev" || fail=1
+
+# udhcpd-stock-example-addresses-masked (#10, DESIGN-910 5.8): the stock
+# udhcpd.conf has vendor example addresses in CODE lines. The capture masks
+# them on the stock side for this type only, the packed diff carries the
+# placeholder, and the live side is untouched and still checked strictly.
+tree="$tmp/tree-udhcpd"
+source_tree udhcpd "$tree"
+ev=$(new_dir)
+run_capture udhcpd "$tree" "$ev" || { echo "pack-test: FAIL -- udhcpd-stock-example-addresses-masked: capture failed: $(head -c 300 "$tmp/capture.err")" >&2; fail=1; }
+expect_pack "udhcpd-stock-example-addresses-masked" ok "$ev" || fail=1
+tar -xzOf "$tmp/cfg-out-$cfg_n.tar.gz" >"$tmp/udhcpd-packed.txt"
+grep -qF '<vendor-example-address>' "$tmp/udhcpd-packed.txt" || { echo "pack-test: FAIL -- udhcpd-stock-example-addresses-masked: no placeholder in the packed diff" >&2; fail=1; }
+if grep -qE '192\.168\.|(^|[^0-9.])10\.(0|11|127)\.' "$tmp/udhcpd-packed.txt"; then
+	echo "pack-test: FAIL -- udhcpd-stock-example-addresses-masked: a vendor address is in the packed diff" >&2
+	fail=1
+fi
+# The masked stock side is what an independent sed makes of the stock file.
+effective "$tree/root/lab-stock-config/udhcpd.conf.stock" |
+	sed -E 's/192\.168(\.[0-9]{1,3}){2}|10(\.[0-9]{1,3}){3}/<vendor-example-address>/g' >"$tmp/udhcpd-want-stock"
+cdf=$(ls "$ev"/cell-udhcpd-config-diff-*.txt)
+awk '/^## /{on=1;next} on' "$cdf" >"$tmp/udhcpd-sec.txt"
+side_of "$tmp/udhcpd-sec.txt" stock >"$tmp/udhcpd-got-stock"
+side_of "$tmp/udhcpd-sec.txt" live >"$tmp/udhcpd-got-live"
+cmp -s "$tmp/udhcpd-want-stock" "$tmp/udhcpd-got-stock" || { echo "pack-test: FAIL -- udhcpd-stock-example-addresses-masked: the stock side is not the masked effective stock config" >&2; fail=1; }
+effective "$tree/etc/udhcpd.conf" | cmp -s - "$tmp/udhcpd-got-live" || { echo "pack-test: FAIL -- udhcpd-stock-example-addresses-masked: the live side was altered" >&2; fail=1; }
+# Live side stays strict for this type: a code line or a comment, refused.
+for live_line in 'dns 192.168.7.9' '# upstream 192.168.7.9'; do
+	tree="$tmp/tree-udhcpd-live"
+	rm -rf "$tree"
+	source_tree udhcpd "$tree"
+	printf '%s\n' "$live_line" >>"$tree/etc/udhcpd.conf"
+	ev=$(new_dir)
+	if run_capture udhcpd "$tree" "$ev"; then
+		echo "pack-test: FAIL -- udhcpd-live-address-refused: capture exited 0 for '$live_line'" >&2
+		fail=1
+	fi
+	if ls "$ev"/*-config-diff-* >/dev/null 2>&1; then
+		echo "pack-test: FAIL -- udhcpd-live-address-refused: a diff was written for '$live_line'" >&2
+		fail=1
+	fi
+done
 
 # blank-only-change-empty-diff: stock and live differ in blank and comment
 # lines only, the diff is empty and still packs.

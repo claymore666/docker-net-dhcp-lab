@@ -149,7 +149,9 @@ func cmdResolve(args []string) {
 		SourceImage     *labyaml.BaseImage `json:"source_image"`
 		RelayImage      *labyaml.BaseImage `json:"relay_image"`
 		RelayFiles      *relayFiles        `json:"relay_files"`
-	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg}
+		SourceServesV6  bool               `json:"source_serves_v6"`
+	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg,
+		cell.Source != nil && labyaml.SourceServesV6(cell.Source.Type)}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
@@ -249,6 +251,8 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.ISCDHCPAdapter{Runner: runner}, nil
 	case "dnsmasq":
 		return &sourceadapter.DnsmasqAdapter{Runner: runner}, nil
+	case "udhcpd":
+		return &sourceadapter.UdhcpdAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}

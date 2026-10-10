@@ -75,7 +75,8 @@ type Scenario struct {
 }
 
 // Applicable reports whether source declares every capability Name
-// needs. A scenario whose capability is missing never reaches its Run
+// needs; a source that implements sourceadapter.NAExplainer names why it
+// lacks one. A scenario whose capability is missing never reaches its Run
 // body at all (issue #3 defeat list): the N/A path is enforced here,
 // once, not repeated in every scenario.
 func Applicable(s Scenario, source sourceadapter.Adapter) (bool, string) {
@@ -271,6 +272,11 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	}
 	if ok, reason := Applicable(s, e.Source); !ok {
 		return na(s.Name, e.Cell, e.Shape, reason, e.GitSHA)
+	}
+	if sr, ok := e.Source.(sourceadapter.ShapeNAReasoner); ok {
+		if why := sr.NAShapeReason(string(e.Shape), s.Name); why != "" {
+			return na(s.Name, e.Cell, e.Shape, why, e.GitSHA)
+		}
 	}
 	recovered, err := ensureSourceReady(ctx, e.Source)
 	if err != nil {

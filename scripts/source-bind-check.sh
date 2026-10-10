@@ -44,5 +44,12 @@ if [ "$dm_iface" -ne 1 ] || [ "$dm_bind" -ne 1 ] || [ "$dm_other" -ne 1 ]; then
 	fail=1
 fi
 
+ud_iface=$(grep -cE '^[[:space:]]*interface[[:space:]]+eth1$' cloud-init/udhcpd-user-data.tmpl.yaml || true)
+ud_other=$(grep -cE '^[[:space:]]*interface[[:space:]]' cloud-init/udhcpd-user-data.tmpl.yaml || true)
+if [ "$ud_iface" -ne 1 ] || [ "$ud_other" -ne 1 ]; then
+	echo "source-bind-check: FAIL -- udhcpd-user-data.tmpl.yaml does not bind exactly eth1" >&2
+	fail=1
+fi
+
 [ "$fail" -eq 0 ] || exit 1
-echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6) and radvd all bind eth1 only"
+echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd and udhcpd all bind eth1 only"

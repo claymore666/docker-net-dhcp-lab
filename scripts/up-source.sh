@@ -44,8 +44,10 @@ pool_end=$(jq -r '.cell.source.pool_end' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.source.vcpus' <<<"$RESOLVED")
 mem=$(jq -r '.cell.source.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.source.disk_gib' <<<"$RESOLVED")
-# The IPv6 side (#23 group D): every source cell serves v6, and the
-# adapters' Ready reads the v6 configs, so a cell without it stops here.
+# The IPv6 side (#23 group D): a source type that serves v6 needs it, and
+# the adapters' Ready reads the v6 configs, so such a cell stops here
+# without it. A v4-only type (labyaml.SourceServesV6, lab #10) carries none.
+serves_v6=$(jq -r '.source_serves_v6' <<<"$RESOLVED")
 seg_subnet6=$(jq -r '.cell.segment.subnet6 // empty' <<<"$RESOLVED")
 seg_addr6=$(jq -r '.cell.source.seg_address6 // empty' <<<"$RESOLVED")
 if [ "$PEER" = partner ]; then
@@ -54,12 +56,14 @@ fi
 pool6_start=$(jq -r '.cell.source.pool6_start // empty' <<<"$RESOLVED")
 pool6_end=$(jq -r '.cell.source.pool6_end // empty' <<<"$RESOLVED")
 temp6_pool=$(jq -r '.cell.source.temp6_pool // empty' <<<"$RESOLVED")
-for v in seg_subnet6 seg_addr6 pool6_start pool6_end temp6_pool; do
-	if [ -z "${!v}" ]; then
-		echo "up-source: cell $CELL has no $v in lab.yaml" >&2
-		exit 1
-	fi
-done
+if [ "$serves_v6" = true ]; then
+	for v in seg_subnet6 seg_addr6 pool6_start pool6_end temp6_pool; do
+		if [ -z "${!v}" ]; then
+			echo "up-source: cell $CELL has no $v in lab.yaml" >&2
+			exit 1
+		fi
+	done
+fi
 
 # Same deterministic-MAC scheme as up-cell.sh, own domain name so the two
 # VMs on one cell never collide.
@@ -72,21 +76,25 @@ seg_mac=$(mac_from "${domain}-seg")
 image_name=$(jq -r '.source_image.name' <<<"$RESOLVED")
 image_url=$(jq -r '.source_image.url' <<<"$RESOLVED")
 os_variant=$(jq -r '.source_image.os_variant' <<<"$RESOLVED")
-base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
-
 mkdir -p "$WORK"
 known_hosts="$WORK/known_hosts"
 [ -f "$known_hosts" ] || : >"$known_hosts"
 
+# UP_SOURCE_RENDER_ONLY=1 stops after the seed files are written, with no
+# image fetch, overlay, key or VM: scripts/up-source-test.sh (lab #10).
 overlay="$WORK/${domain}.qcow2"
-if [ ! -f "$overlay" ]; then
-	qemu-img create -f qcow2 -F qcow2 -b "$base_path" "$overlay" "${diskgib}G"
+if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
+	pubkey="ssh-ed25519 AAAA render-only"
+else
+	base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
+	if [ ! -f "$overlay" ]; then
+		qemu-img create -f qcow2 -F qcow2 -b "$base_path" "$overlay" "${diskgib}G"
+	fi
+	if [ ! -f ~/.ssh/id_ed25519_lab.pub ]; then
+		ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_lab -C lab-controller >/dev/null
+	fi
+	pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 fi
-
-if [ ! -f ~/.ssh/id_ed25519_lab.pub ]; then
-	ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519_lab -C lab-controller >/dev/null
-fi
-pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 
 # This repo's segments are always a /24 (lab.yaml's own convention,
 # issue #1); the isc-dhcp template needs network+netmask, not CIDR.
@@ -147,10 +155,23 @@ sed -e "s#__SSH_PUBKEY__#$pubkey#" \
 	-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
 	-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
 	"$tmpl" >"$seed_dir/user-data"
-"$REPO_ROOT/scripts/render-source-network-config.sh" "$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" \
-	"$mgmt_addr" "$mgmt_gw" "$mgmt_mac" "$seg_mac" "$seg_addr" "$seg_addr6" "${route_args[@]}" >"$seed_dir/network-config"
+# A v4-only cell has no __SEG_ADDR6__ item to fill: drop it from the
+# template the renderer reads, and hand it a placeholder it never uses.
+net_tmpl="$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml"
+net_addr6=$seg_addr6
+if [ "$serves_v6" != true ]; then
+	net_tmpl="$seed_dir/network-config.tmpl"
+	sed 's#, "__SEG_ADDR6__"##' "$REPO_ROOT/cloud-init/source-network-config.tmpl.yaml" >"$net_tmpl"
+	net_addr6=none
+fi
+"$REPO_ROOT/scripts/render-source-network-config.sh" "$net_tmpl" \
+	"$mgmt_addr" "$mgmt_gw" "$mgmt_mac" "$seg_mac" "$seg_addr" "$net_addr6" "${route_args[@]}" >"$seed_dir/network-config"
 echo "instance-id: $domain" >"$seed_dir/meta-data"
 echo "local-hostname: $host_name" >>"$seed_dir/meta-data"
+if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
+	echo "up-source: render-only, seed in $seed_dir"
+	exit 0
+fi
 
 seed_iso="$WORK/${domain}-seed.iso"
 rm -f "$seed_iso"

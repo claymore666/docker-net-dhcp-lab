@@ -502,6 +502,9 @@ func TestRealLabYAMLSourcesHaveV6(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cell := range c.Cells {
+		if cell.Source != nil && !SourceServesV6(cell.Source.Type) {
+			continue
+		}
 		if cell.Segment.Subnet6 == "" {
 			t.Errorf("cell %s has no segment.subnet6", cell.Name)
 		}
@@ -522,6 +525,62 @@ func TestRejectsOverlappingCellSubnets(t *testing.T) {
 		_, err := Load(write(t, r.Replace(withSource)))
 		if err == nil || !strings.Contains(err.Error(), "overlaps segment subnet 10.200.0.0/24") {
 			t.Fatalf("%s beside 10.200.0.0/24: want an overlap error, got %v", tc.subnet, err)
+		}
+	}
+}
+
+func TestAcceptsUdhcpdSourceType(t *testing.T) {
+	ok := strings.Replace(withSource, "type: kea", "type: udhcpd", 1)
+	if _, err := Load(write(t, ok)); err != nil {
+		t.Fatalf("source.type udhcpd rejected: %v", err)
+	}
+}
+
+// D18 (DESIGN-910): C9 moves a cell's third octet by C9OctetShift; a cell
+// sitting on that target would share a bridge with the renumbered source.
+func TestRejectsCellOnAnotherCellsC9Target(t *testing.T) {
+	cell := func(name, subnet, mgmt string) string {
+		return `
+  - name: ` + name + `
+    segment:
+      bridge: lab-br-` + name + `
+      subnet: ` + subnet + `
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: ` + mgmt + `
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2`
+	}
+	body := goodMin + cell("low", "10.200.12.0/24", "10.200.255.11/24") + cell("high", "10.200.112.0/24", "10.200.255.12/24")
+	_, err := Load(write(t, body))
+	if err == nil {
+		t.Fatal("a cell on another cell's C9 target was accepted")
+	}
+	for _, want := range []string{"low", "high", "10.200.112.0/24"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+	apart := goodMin + cell("low", "10.200.12.0/24", "10.200.255.11/24") + cell("other", "10.200.113.0/24", "10.200.255.12/24")
+	if _, err := Load(write(t, apart)); err != nil {
+		t.Fatalf("cells whose C9 targets do not meet were refused: %v", err)
+	}
+}
+
+// Lab #10: the IPv6 block follows the source type. A v4-only server
+// (udhcpd) cannot sit on a cell with segment.subnet6, and SourceServesV6
+// is what labctl resolve hands up-source.sh.
+func TestV4OnlySourceTypeRefusesSegmentSubnet6(t *testing.T) {
+	bad := strings.Replace(withSource6, "type: kea", "type: udhcpd", 1)
+	_, err := Load(write(t, bad))
+	if err == nil || !strings.Contains(err.Error(), "DHCPv4 only") {
+		t.Fatalf("udhcpd on a subnet6 cell: %v", err)
+	}
+}
+
+func TestSourceServesV6ByType(t *testing.T) {
+	for typ, want := range map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": false} {
+		if got := SourceServesV6(typ); got != want {
+			t.Errorf("SourceServesV6(%s) = %v, want %v", typ, got, want)
 		}
 	}
 }

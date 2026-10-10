@@ -26,10 +26,18 @@ ssh_run() {
 		-i ~/.ssh/id_ed25519_lab lab@"$MGMT_IP" "$@"
 }
 
+# mask_stock=1 (udhcpd, DESIGN-910 5.8, lab #10): the stock side's vendor
+# example addresses become a placeholder before the diff; the other types
+# still refuse an address in a stock code line.
+mask_stock=0
 case "$SOURCE_TYPE" in
 kea) pairs=("kea-dhcp4.conf.stock:/etc/kea/kea-dhcp4.conf" "kea-ctrl-agent.conf.stock:/etc/kea/kea-ctrl-agent.conf") ;;
 isc-dhcp) pairs=("dhcpd.conf.stock:/etc/dhcp/dhcpd.conf" "isc-dhcp-server.stock:/etc/default/isc-dhcp-server") ;;
 dnsmasq) pairs=("dnsmasq.conf.stock:/etc/dnsmasq.conf") ;;
+udhcpd)
+	pairs=("udhcpd.conf.stock:/etc/udhcpd.conf")
+	mask_stock=1
+	;;
 *)
 	echo "capture-source-config-diff: unknown source type $SOURCE_TYPE" >&2
 	exit 1
@@ -48,6 +56,10 @@ for pair in "${pairs[@]}"; do
 	# capture instead of diffing against nothing.
 	ssh_run "sudo cat /root/lab-stock-config/$stock_name" >"$scratch/stock" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read the stock backup $stock_name" >&2; exit 1; }
+	if [ "$mask_stock" -eq 1 ]; then
+		config_mask_vendor_examples "$scratch/stock" ||
+			{ echo "capture-source-config-diff: REFUSED -- the stock backup $stock_name kept a disallowed address after masking" >&2; exit 1; }
+	fi
 	ssh_run "sudo cat $live_path" >"$scratch/live" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read $live_path" >&2; exit 1; }
 	if [ ! -s "$scratch/live" ]; then

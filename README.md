@@ -20,7 +20,7 @@ flowchart TD
   host --> ctrl
 
   subgraph cell ["One cell: VMs on a segment with no route out"]
-    src["Source VM<br/>the DHCP server:<br/>Kea, ISC dhcpd or dnsmasq"]
+    src["Source VM<br/>the DHCP server:<br/>Kea, ISC dhcpd, dnsmasq or udhcpd"]
     seg{{"Segment<br/>10.200.N.0/24"}}
     dock["Docker host VM<br/>Docker Engine and the<br/>docker-net-dhcp plugin"]
     obs["Observer<br/>records every packet<br/>on the segment"]
@@ -52,7 +52,7 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 
 <table>
 <tr>
-<th>Docker hosts</th><th></th><th>Plugin runs on</th><th colspan="3">DHCP servers</th>
+<th>Docker hosts</th><th></th><th>Plugin runs on</th><th colspan="4">DHCP servers</th>
 </tr>
 <tr>
 <td align="center"><img src="docs/logos/debian.svg" alt="Debian logo" height="40"></td>
@@ -61,6 +61,7 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 <td align="center">Kea</td>
 <td align="center">ISC dhcpd</td>
 <td align="center">dnsmasq</td>
+<td align="center">udhcpd</td>
 </tr>
 <tr>
 <td align="center"><a href="https://www.debian.org/">Debian</a> 13</td>
@@ -69,11 +70,14 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 <td align="center"><a href="https://github.com/isc-projects/kea">isc-projects/kea</a></td>
 <td align="center"><a href="https://github.com/isc-projects/dhcp">isc-projects/dhcp</a></td>
 <td align="center"><a href="https://thekelleys.org.uk/dnsmasq/doc.html">dnsmasq</a></td>
+<td align="center"><a href="https://busybox.net/">BusyBox</a> udhcpd</td>
 </tr>
 </table>
 
 At v0.1.0 the servers were the Debian 13 packages: Kea 2.6.3, ISC dhcpd
-4.4.3-P1, dnsmasq 2.91. The Debian, Ubuntu and Docker marks belong to their owners; their files and
+4.4.3-P1, dnsmasq 2.91. The udhcpd cell (issue #10) uses the Debian 13
+package `udhcpd` 1:1.37.0-6, BusyBox 1.37; its host run is pending, host not
+cleared. The Debian, Ubuntu and Docker marks belong to their owners; their files and
 licences are listed in [`docs/logos/`](docs/logos/README.md). No project
 named here endorses this lab.
 
@@ -81,7 +85,7 @@ The terms in the picture:
 
 - A **cell** is a small set of virtual machines on one isolated network:
   a Docker host with the plugin installed, and a DHCP server.
-- A **source** is the DHCP server in a cell: Kea, ISC dhcpd or dnsmasq,
+- A **source** is the DHCP server in a cell: Kea, ISC dhcpd, dnsmasq or udhcpd,
   apt-installed with its stock config plus an address pool.
 - A **shape** is one way of creating the Docker network: `bridge`,
   `macvlan`, `ipvlan`, and the plugin as IPAM driver on a bridge
@@ -233,13 +237,13 @@ every push and PR).
 
 ## Bring up a source cell
 
-Kea, ISC dhcpd and dnsmasq each get their own cell, apt-installed with a
+Kea, ISC dhcpd, dnsmasq and udhcpd each get their own cell, apt-installed with a
 stock config plus a pool (issue #2). A Go adapter reads each source's
-own lease table (control API, `dhcpd.leases`, or the dnsmasq lease
-file), never the plugin's own report.
+own lease table (control API, `dhcpd.leases`, the dnsmasq lease
+file, or `dumpleases` for udhcpd), never the plugin's own report.
 
 ```
-scripts/demo-source-cell.sh kea        # or isc-dhcp, or dnsmasq
+scripts/demo-source-cell.sh kea        # or isc-dhcp, dnsmasq, or udhcpd
 scripts/down-cell.sh kea <work-dir>
 ```
 

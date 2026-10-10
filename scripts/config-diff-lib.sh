@@ -32,6 +32,27 @@ config_live_disallowed_lines() {
 	done <"$1"
 }
 
+# config_mask_vendor_examples FILE rewrites FILE in place, replacing every
+# disallowed address with <vendor-example-address>. For the stock side of a
+# type whose package ships example addresses in code lines (busybox
+# udhcpd.conf, DESIGN-910 section 5.8, lab #10); the live side is never
+# masked and HYGIENE_ALLOWED_RE is not widened. Longest address first, so an
+# address that begins another one is not cut short. Status 1 if one survives.
+config_mask_vendor_examples() {
+	local out line a left=0
+	out=$(mktemp)
+	while IFS= read -r line || [ -n "$line" ]; do
+		while IFS= read -r a; do
+			[ -n "$a" ] && line=${line//"$a"/<vendor-example-address>}
+		done < <(hygiene_address_disallowed "$line" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+		[ -z "$(hygiene_address_disallowed "$line")" ] || left=1
+		printf '%s\n' "$line" >>"$out"
+	done <"$1"
+	cat "$out" >"$1"
+	rm -f "$out"
+	return "$left"
+}
+
 # config_diff_render STOCK LIVE prints a section body for two raw files.
 config_diff_render() {
 	local d s l
