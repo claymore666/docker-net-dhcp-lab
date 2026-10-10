@@ -12,9 +12,9 @@ import (
 
 // Group D (#23) and the IPv6 rows of group F: each row creates its own
 // network with the IPv6 option, starts one container and judges it on
-// the M=1 A=1 baseline the source cell advertises. The cell's main
-// network never carries IPv6, so IPAM shapes are N/A (bIPAMNA); the
-// main-network swap that would run them is #23 group D part 2.
+// the M=1 A=1 baseline the source cell advertises. An IPAM shape refuses
+// a second network, so D1, D1b and D2 recreate the cell's main network
+// with the option instead (dNetwork); the other rows are N/A there.
 
 // dState gates every row on the release that gave the client ipv6_mode.
 func dState(e Env, name string) (Verdict, bool) {
@@ -93,6 +93,12 @@ func readAddrs(ctx context.Context, e Env, scenario, label, name string, route s
 // and the RA for SLAAC (design row note "Settled"). A nil error with a
 // non-nil startErr is a container that did not start.
 func dCollect(ctx context.Context, e Env, scenario, net string, t0 time.Time, lease func([]DHCP6Msg, []RAMsg) bool, ev map[string]string) (r dRead, startErr, err error) {
+	return dCollectWith(ctx, e, scenario, net, t0, lease, ev, true)
+}
+
+// dCollectWith is dCollect; leases false skips the source's DHCPv6 table,
+// which kea serves from the daemon StopV6Server stopped (D3c).
+func dCollectWith(ctx context.Context, e Env, scenario, net string, t0 time.Time, lease func([]DHCP6Msg, []RAMsg) bool, ev map[string]string, leases bool) (r dRead, startErr, err error) {
 	name := containerName(e, scenario)
 	r.mac, _, r.endpointID, startErr = runContainer(ctx, e.Host, e.Shape, net, name)
 	if startErr != nil {
@@ -121,8 +127,10 @@ func dCollect(ctx context.Context, e Env, scenario, net string, t0 time.Time, le
 	if r.inspect, err = inspectField(ctx, e.Host, name, "GlobalIPv6Address"); err != nil {
 		return r, nil, err
 	}
-	if r.leases, err = e.Source.Leases6(ctx); err != nil {
-		return r, nil, fmt.Errorf("could not read the source's DHCPv6 table: %w", err)
+	if leases {
+		if r.leases, err = e.Source.Leases6(ctx); err != nil {
+			return r, nil, fmt.Errorf("could not read the source's DHCPv6 table: %w", err)
+		}
 	}
 	all := func([]DHCP6Msg, []RAMsg) bool { return true }
 	if r.msgs, r.ras, err = dCapture(ctx, e, scenario, "capture-v6", ident, t0, all, ev); err != nil {
@@ -147,16 +155,16 @@ func (r dRead) d1Obs(ctx context.Context, e Env) d1Obs {
 // rows: one container on a DHCPv6 network.
 // cleanup is never nil; the caller defers it, so the ping and the health
 // read still see the container.
-func dhcp6Row(ctx context.Context, e Env, scenario, suffix string, opts []string) (r dRead, ev map[string]string, cleanup func(), v Verdict, ok bool) {
+func dhcp6Row(ctx context.Context, e Env, scenario, suffix string, opts []string) (r dRead, ev map[string]string, cleanup func(*Verdict), v Verdict, ok bool) {
 	ev = map[string]string{}
 	t0 := time.Now().Add(-2 * time.Second)
-	net, down, err := cNetwork(ctx, e, suffix, opts)
-	cleanup = func() {
+	net, down, err := dNetwork(ctx, e, scenario, suffix, opts)
+	cleanup = func(v *Verdict) {
 		removeContainer(bCleanupCtx(ctx), e.Host, containerName(e, scenario))
-		down()
+		down(v)
 	}
 	if err != nil {
-		return r, ev, cleanup, fail(scenario, e.Cell, e.Shape, fmt.Sprintf("could not create the network (%v): %v", opts, err), nil, e.GitSHA), false
+		return r, ev, cleanup, dCreateFailed(e, scenario, opts, err), false
 	}
 	r, startErr, err := dCollect(ctx, e, scenario, net, t0, hasNAReply, ev)
 	if err != nil {
@@ -168,17 +176,14 @@ func dhcp6Row(ctx context.Context, e Env, scenario, suffix string, opts []string
 	return r, ev, cleanup, Verdict{}, true
 }
 
-func runD1Like(ctx context.Context, e Env, scenario, suffix, opt string) Verdict {
-	if v, ok := bIPAMNA(scenario, e); ok {
-		return v
-	}
+func runD1Like(ctx context.Context, e Env, scenario, suffix, opt string) (v Verdict) {
 	if v, stop := dState(e, scenario); stop {
 		return v
 	}
-	r, ev, cleanup, v, ok := dhcp6Row(ctx, e, scenario, suffix, []string{opt})
-	defer cleanup()
+	r, ev, cleanup, bad, ok := dhcp6Row(ctx, e, scenario, suffix, []string{opt})
+	defer cleanup(&v)
 	if !ok {
-		return v
+		return bad
 	}
 	o, _ := judgeD1(r.d1Obs(ctx, e))
 	return fFinish(scenario, e, o, opt, ev)
@@ -271,23 +276,20 @@ func runD2b(ctx context.Context, e Env) Verdict {
 }
 
 // runD2 -- SLAAC with ipv6_mode=slaac; on ipvlan the create is refused.
-func runD2(ctx context.Context, e Env) Verdict {
-	if v, ok := bIPAMNA(NameD2, e); ok {
-		return v
-	}
+func runD2(ctx context.Context, e Env) (v Verdict) {
 	if v, stop := dState(e, NameD2); stop {
 		return v
 	}
 	const opt = "ipv6_mode=slaac"
 	ev := map[string]string{}
 	t0 := time.Now().Add(-2 * time.Second)
-	net, down, err := cNetwork(ctx, e, "d2", []string{opt})
-	defer down()
+	net, down, err := dNetwork(ctx, e, NameD2, "d2", []string{opt})
+	defer down(&v)
 	if e.Shape == ShapeIpvlan {
 		return fFinish(NameD2, e, judgeRefused(opt, err), "", ev)
 	}
 	if err != nil {
-		return fail(NameD2, e.Cell, e.Shape, fmt.Sprintf("could not create the network (%s): %v", opt, err), nil, e.GitSHA)
+		return dCreateFailed(e, NameD2, []string{opt}, err)
 	}
 	defer removeContainer(bCleanupCtx(ctx), e.Host, containerName(e, NameD2))
 	r, startErr, err := dCollect(ctx, e, NameD2, net, t0, hasAutoRA, ev)
@@ -329,7 +331,7 @@ func runF4(ctx context.Context, e Env) (v Verdict) {
 		opts = append(opts, "rapid_commit=true")
 	}
 	r, ev, cleanup, bad, ok := dhcp6Row(ctx, e, NameF4, "f4", opts)
-	defer cleanup()
+	defer cleanup(&v)
 	if !ok {
 		return bad
 	}
@@ -367,7 +369,7 @@ func runF5(ctx context.Context, e Env) (v Verdict) {
 		opts = append(opts, "ipv6_temporary=true")
 	}
 	r, ev, cleanup, bad, ok := dhcp6Row(ctx, e, NameF5, "f5", opts)
-	defer cleanup()
+	defer cleanup(&v)
 	if !ok {
 		return bad
 	}
@@ -381,4 +383,50 @@ func runF5(ctx context.Context, e Env) (v Verdict) {
 		ev["plugin-health"] = hp
 	}
 	return fFinish(NameF5, e, judgeF5(o, present, serverTA, found, h.IPv6TemporaryAddress), "", ev)
+}
+
+// errMainSwap marks a swap the lab could not set up, BLOCKED rather than a
+// plugin FAIL (#23 group D part 2).
+var errMainSwap = errors.New("the IPAM main-network swap")
+
+// dCreateFailed is the verdict for a network dNetwork could not create.
+func dCreateFailed(e Env, scenario string, opts []string, err error) Verdict {
+	if errors.Is(err, errMainSwap) {
+		return blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	return fail(scenario, e.Cell, e.Shape, fmt.Sprintf("could not create the network (%v): %v", opts, err), nil, e.GitSHA)
+}
+
+// dNetwork is the row's own network, cNetwork's; on an IPAM shape, which
+// refuses a second network (bIPAMNA), the cell's main network is
+// recreated with opts instead and down rebuilds it with NetworkUp
+// (DESIGN-23d Notes, "IPAM shapes"; #23). A rebuild that fails turns
+// the verdict BLOCKED, as fRestoreInto does, so the cell is recovered.
+func dNetwork(ctx context.Context, e Env, scenario, suffix string, opts []string) (net string, down func(*Verdict), err error) {
+	if e.Shape != ShapeBridgeIPAM && e.Shape != ShapeMacvlanIPAM {
+		net, d, err := cNetwork(ctx, e, suffix, opts)
+		return net, func(*Verdict) { d() }, err
+	}
+	// The rebuild is NetworkUp's, so it only restores the main network when
+	// that is the network this run was given (#23 group D part 2).
+	if want := NetworkName(e.Cell, e.Shape); e.Network != want {
+		return "", func(*Verdict) {}, fmt.Errorf("%w: main network %s is not %s, the one NetworkUp rebuilds", errMainSwap, e.Network, want)
+	}
+	down = func(v *Verdict) {
+		fRestoreInto(bCleanupCtx(ctx), e, scenario, func(c context.Context) error {
+			_, err := NetworkUp(c, e.Host, e.Cell, e.Shape)
+			return err
+		}, v)
+	}
+	create, err := networkCreateCmd(e.Shape, e.Network, hostBridgeName(e.Network), opts)
+	if err != nil {
+		return "", down, err
+	}
+	if _, err := e.Host.Run(ctx, "sudo docker network rm "+e.Network); err != nil {
+		return "", down, fmt.Errorf("%w: remove the main network %s: %v", errMainSwap, e.Network, err)
+	}
+	if _, err := e.Host.Run(ctx, create); err != nil {
+		return "", down, err
+	}
+	return e.Network, down, nil
 }
