@@ -1,0 +1,88 @@
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.3-P1
+
+# authoring-byte-order entry is generated, DO NOT DELETE
+authoring-byte-order little-endian;
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state unknown-state at 6 2026/10/10 15:49:46;
+  mclt 0;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state unknown-state at 6 2026/10/10 15:49:46;
+  mclt 0;
+}
+server-duid "\000\001\000\0012]\033\032\"n\312\3078\372";
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+  mclt 60;
+}
+lease 10.200.9.100 {
+  binding state free;
+}
+lease 10.200.9.101 {
+  binding state free;
+}
+lease 10.200.9.102 {
+  binding state free;
+}
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover-done at 6 2026/10/10 15:49:47;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:49:47;
+  partner state recover-done at 6 2026/10/10 15:49:47;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:49:47;
+  partner state normal at 6 2026/10/10 15:49:47;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state normal at 6 2026/10/10 15:49:47;
+  partner state normal at 6 2026/10/10 15:49:47;
+  mclt 60;
+}
+lease 10.200.9.100 {
+  starts 6 2026/10/10 15:49:47;
+  tsfp 6 2026/10/10 15:49:47;
+  atsfp 6 2026/10/10 15:49:47;
+  binding state backup;
+}
+lease 10.200.9.101 {
+  starts 6 2026/10/10 15:49:47;
+  tsfp 6 2026/10/10 15:49:47;
+  atsfp 6 2026/10/10 15:49:47;
+  binding state backup;
+}
+lease 10.200.9.102 {
+  starts 6 2026/10/10 15:49:47;
+  tsfp 6 2026/10/10 15:49:47;
+  atsfp 6 2026/10/10 15:49:47;
+  binding state backup;
+}

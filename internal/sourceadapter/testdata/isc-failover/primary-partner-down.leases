@@ -1,0 +1,85 @@
+# HAND-MADE (INFERRED, lab #12): the operator-set partner-down state was not measured;
+# the block grammar is the measured one. Appended to the measured normal file.
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.3-P1
+
+# authoring-byte-order entry is generated, DO NOT DELETE
+authoring-byte-order little-endian;
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state unknown-state at 6 2026/10/10 15:49:46;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state unknown-state at 6 2026/10/10 15:49:46;
+}
+server-duid "\000\001\000\0012]\033\032\276d\277\324\000C";
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:49:46;
+  partner state recover at 6 2026/10/10 15:49:46;
+}
+lease 10.200.9.100 {
+  binding state free;
+}
+lease 10.200.9.101 {
+  binding state free;
+}
+lease 10.200.9.102 {
+  binding state free;
+}
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:49:47;
+  partner state recover at 6 2026/10/10 15:49:46;
+}
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:49:47;
+  partner state recover-done at 6 2026/10/10 15:49:47;
+}
+
+failover peer "lab" state {
+  my state normal at 6 2026/10/10 15:49:47;
+  partner state recover-done at 6 2026/10/10 15:49:47;
+}
+lease 10.200.9.100 {
+  starts 6 2026/10/10 15:49:47;
+  tstp 6 2026/10/10 15:49:47;
+  binding state backup;
+  rewind binding state free;
+}
+lease 10.200.9.101 {
+  starts 6 2026/10/10 15:49:47;
+  tstp 6 2026/10/10 15:49:47;
+  binding state backup;
+  rewind binding state free;
+}
+lease 10.200.9.102 {
+  starts 6 2026/10/10 15:49:47;
+  tstp 6 2026/10/10 15:49:47;
+  binding state backup;
+  rewind binding state free;
+}
+failover peer "lab" state {
+  my state normal at 6 2026/10/10 15:49:47;
+  partner state normal at 6 2026/10/10 15:49:47;
+}
+
+failover peer "lab" state {
+  my state partner-down at 6 2026/10/10 16:00:00;
+  partner state unknown-state at 6 2026/10/10 16:00:00;
+  mclt 60;
+}

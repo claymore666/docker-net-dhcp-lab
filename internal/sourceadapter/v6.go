@@ -108,6 +108,9 @@ func (a *KeaAdapter) units() sourceUnits {
 }
 
 func (a *ISCDHCPAdapter) units() sourceUnits {
+	if a.V4Only {
+		return sourceUnits{service: "isc-dhcp-server", cfgPath: "/etc/dhcp/dhcpd.conf"}
+	}
 	return sourceUnits{service: "isc-dhcp-server", cfgPath: "/etc/dhcp/dhcpd.conf", leases6: a.Leases6,
 		extra: []extraConf{{iscDHCP6Conf, "isc-dhcp-server"}, {radvdConf, "radvd"}}}
 }

@@ -5,7 +5,6 @@ import (
 	"net/netip"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
@@ -243,8 +242,17 @@ func TestNewCellSourceAdapterPair(t *testing.T) {
 		}
 	}
 	src.Type = "isc-dhcp"
-	if _, err := newCellSourceAdapter(src, runnerFor); err == nil || !strings.Contains(err.Error(), "PR 2") {
-		t.Errorf("isc-dhcp pair: %v, want the PR 2 error", err)
+	a, err = newCellSourceAdapter(src, runnerFor)
+	p, ok = a.(*sourceadapter.PairAdapter)
+	if err != nil || !ok {
+		t.Fatalf("isc-dhcp pair: %#v, %v", a, err)
+	}
+	for i, w := range want {
+		peer := p.Peers[i]
+		d, _ := peer.Adapter.(*sourceadapter.ISCDHCPAdapter)
+		if peer.Name != w[0] || d == nil || d.Runner != mgmtRunner(w[1]) || peer.ServerID != w[2] || d.V4Only != (i == 1) || !d.Failover {
+			t.Errorf("isc peer %d = %s adapter %+v id %s, want %v", i, peer.Name, d, peer.ServerID, w)
+		}
 	}
 	src.Type = "dnsmasq"
 	if _, err := newCellSourceAdapter(src, runnerFor); err == nil {

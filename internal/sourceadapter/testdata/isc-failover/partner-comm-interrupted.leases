@@ -1,0 +1,127 @@
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.3-P1
+
+# authoring-byte-order entry is generated, DO NOT DELETE
+authoring-byte-order little-endian;
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state unknown-state at 6 2026/10/10 15:53:03;
+  mclt 0;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state unknown-state at 6 2026/10/10 15:53:03;
+  mclt 0;
+}
+server-duid "\000\001\000\0012]\033\337\236\230\307\370\357\257";
+
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state recover at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state recover at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state recover at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+lease 10.200.9.100 {
+  binding state free;
+}
+lease 10.200.9.101 {
+  binding state free;
+}
+lease 10.200.9.102 {
+  binding state free;
+}
+failover peer "lab" state {
+  my state recover at 6 2026/10/10 15:53:03;
+  partner state recover-done at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:53:03;
+  partner state recover-done at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state recover-done at 6 2026/10/10 15:53:03;
+  partner state normal at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+
+failover peer "lab" state {
+  my state normal at 6 2026/10/10 15:53:03;
+  partner state normal at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+lease 10.200.9.100 {
+  starts 6 2026/10/10 15:53:03;
+  tsfp 6 2026/10/10 15:53:03;
+  atsfp 6 2026/10/10 15:53:03;
+  binding state backup;
+}
+lease 10.200.9.101 {
+  starts 6 2026/10/10 15:53:03;
+  tsfp 6 2026/10/10 15:53:03;
+  atsfp 6 2026/10/10 15:53:03;
+  binding state backup;
+}
+lease 10.200.9.102 {
+  starts 6 2026/10/10 15:53:03;
+  tsfp 6 2026/10/10 15:53:03;
+  atsfp 6 2026/10/10 15:53:03;
+  binding state backup;
+}
+lease 10.200.9.150 {
+  starts 6 2026/10/10 15:53:04;
+  ends 6 2026/10/10 15:54:04;
+  tsfp 6 2026/10/10 16:03:34;
+  atsfp 6 2026/10/10 16:03:34;
+  binding state active;
+  next binding state expired;
+  hardware ethernet 02:00:00:00:12:01;
+  uid "\001\002\000\000\000\022\001";
+}
+
+failover peer "lab" state {
+  my state communications-interrupted at 6 2026/10/10 15:53:05;
+  partner state normal at 6 2026/10/10 15:53:03;
+  mclt 60;
+}
+lease 10.200.9.150 {
+  starts 6 2026/10/10 15:53:04;
+  ends 6 2026/10/10 15:54:04;
+  tsfp 6 2026/10/10 16:03:34;
+  binding state expired;
+  next binding state free;
+  rewind binding state active;
+  hardware ethernet 02:00:00:00:12:01;
+  uid "\001\002\000\000\000\022\001";
+}
+lease 10.200.9.149 {
+  starts 6 2026/10/10 15:55:08;
+  ends 6 2026/10/10 15:56:08;
+  tstp 6 2026/10/10 16:05:38;
+  tsfp 6 2026/10/10 15:53:03;
+  cltt 6 2026/10/10 15:55:08;
+  binding state active;
+  next binding state expired;
+  rewind binding state backup;
+  hardware ethernet 02:00:00:00:12:02;
+  uid "\001\002\000\000\000\022\002";
+  set vendor-class-identifier = "udhcp 1.37.0";
+}

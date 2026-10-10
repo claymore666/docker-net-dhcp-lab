@@ -277,7 +277,8 @@ func newCellSourceAdapter(src *labyaml.Source, runnerFor func(mgmtAddress string
 		return sourceadapter.NewKeaPair(runnerFor(src.MgmtAddress), runnerFor(src.Partner.MgmtAddress),
 			ip(src.SegAddress), ip(src.Partner.SegAddress)), nil
 	case "isc-dhcp":
-		return nil, fmt.Errorf("an isc-dhcp failover pair lands in lab #12 PR 2")
+		return sourceadapter.NewISCPair(runnerFor(src.MgmtAddress), runnerFor(src.Partner.MgmtAddress),
+			ip(src.SegAddress), ip(src.Partner.SegAddress)), nil
 	default:
 		return nil, fmt.Errorf("source type %q cannot run as a failover pair", src.Type)
 	}
