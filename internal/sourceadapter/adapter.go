@@ -80,10 +80,14 @@ const (
 	// CapTemporary6 declares that the server grants an IA_TA (RFC 8415
 	// section 21.5) once EnableFeature(FeatureTemporary6) ran.
 	CapTemporary6 Capability = "temporary-6"
-	// CapPD and CapPref64 are declared by no adapter until #23 group D
-	// part 2 adds delegation and PREF64 to the sources.
+	// CapPD declares EnableFeature(FeaturePD): IA_PD answered from a
+	// pool (RFC 8415 section 6.3). CapPref64 declares SetRA Pref64 (RFC
+	// 8781). Kea and ISC declare both through radvd (#23 group D).
 	CapPD     Capability = "pd"
 	CapPref64 Capability = "pref64"
+	// CapV6ServerStop declares StopV6Server: DHCPv6 silent while the RA
+	// keeps asking for it (D3c, #23).
+	CapV6ServerStop Capability = "v6-server-stop"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -133,8 +137,11 @@ type Adapter interface {
 	Leases6(ctx context.Context) ([]Lease6, error)
 	// SetRA changes what the segment's router advertisements say and
 	// returns the restore that puts the baseline (M=1, A=1) back (#23
-	// group D). Only RAParams.Off is implemented.
+	// group D).
 	SetRA(ctx context.Context, p RAParams) (restore func(ctx context.Context) error, err error)
+	// StopV6Server stops the DHCPv6 daemon alone, the RA untouched, and
+	// returns the restore that starts it again (D3c, #23).
+	StopV6Server(ctx context.Context) (restore func(ctx context.Context) error, err error)
 	ReserveMAC(ctx context.Context, mac, addr string) error
 	// ReserveClientID reserves addr for a DHCP option 61 value given as
 	// colon-hex (B2, #23). Idempotent: a second call for the same id

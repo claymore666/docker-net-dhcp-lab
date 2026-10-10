@@ -384,15 +384,17 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 // actors are shared netns helpers, the rewrites per-adapter renderers.
 // Group D (#23) adds CapV6 and CapRapidCommit6 to all three and
 // CapTemporary6 to ISC and dnsmasq only: Kea 2.6.3 grants no IA_TA,
-// so the temporary address row judges its fallback.
+// so the temporary address row judges its fallback. Group D part 2
+// (#23) adds CapPD, CapPref64 and CapV6ServerStop to Kea and ISC, whose
+// radvd carries PREF64 and whose DHCPv6 daemon stops on its own.
 func TestDeclaredCapabilities(t *testing.T) {
 	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
 	cases := map[string]struct {
 		got  []Capability
 		want []Capability
 	}{
-		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6)},
-		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6)},
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop)},
 		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6)},
 	}
 	for name, c := range cases {
@@ -405,7 +407,7 @@ func TestDeclaredCapabilities(t *testing.T) {
 			}
 		}
 		for _, have := range c.got {
-			if have == CapFailoverPair || have == CapRelay || have == CapPD || have == CapPref64 {
+			if have == CapFailoverPair || have == CapRelay {
 				t.Fatalf("%s declares %s, which needs a cell that does not exist yet", name, have)
 			}
 		}

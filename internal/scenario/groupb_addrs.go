@@ -7,7 +7,7 @@ import (
 
 // Group B picks every address it reserves, serves from a class pool or
 // advertises as DNS from fixed host octets of the cell's /24, all above
-// the main pool (.100-.200 in every lab.yaml cell) so the source can
+// the main pool (.100-.200 in lab.yaml, .80-.200 on the two failover pairs) so the source can
 // never hand one to another client first (#23). classPoolFirstHost and
 // classPoolLastHost must equal class_first_host and class_last_host in
 // scripts/up-source.sh, which bakes the class pool into the source VM;

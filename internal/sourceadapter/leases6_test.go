@@ -57,16 +57,20 @@ func TestParseKeaLeases6SkipsInactiveAndRejectsBadReplies(t *testing.T) {
 		{"ip-address":"fd42:200:0:100::102","duid":"AA:BB","iaid":2,"type":"IA_TA","state":0,"cltt":10,"valid-lft":60,"preferred-lft":30},
 		{"ip-address":"fd42:200:0:100::103","duid":"aa:bb","iaid":3,"type":"IA_NA","state":1,"cltt":10,"valid-lft":60},
 		{"ip-address":"fd42:200:0:100::104","duid":"aa:bb","iaid":4,"type":"IA_NA","state":0,"cltt":10,"valid-lft":0},
-		{"ip-address":"fd42:200:0:1ff::","duid":"aa:bb","iaid":5,"type":"IA_PD","state":0,"cltt":10,"valid-lft":60}]}}]`)
+		{"ip-address":"fd42:200:0:1ff::","duid":"aa:bb","iaid":5,"type":"IA_PD","state":0,"cltt":10,"valid-lft":60,"prefix-len":64}]}}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want6(t, got, []Lease6{{Type: Lease6TA, Address: netip.MustParseAddr("fd42:200:0:100::102"), DUID: "aa:bb", IAID: 2,
-		Preferred: 30 * time.Second, Valid: time.Minute, Expires: time.Unix(70, 0).UTC()}})
+		Preferred: 30 * time.Second, Valid: time.Minute, Expires: time.Unix(70, 0).UTC()},
+		{Type: Lease6PD, Address: netip.MustParseAddr("fd42:200:0:1ff::"), Prefix: netip.MustParsePrefix("fd42:200:0:1ff::/64"), DUID: "aa:bb", IAID: 5,
+			Valid: time.Minute, Expires: time.Unix(70, 0).UTC()}})
 	if got, err := parseKeaLeases6(`[{"result":3,"text":"0 IPv6 lease(s) found."}]`); err != nil || len(got) != 0 {
 		t.Fatalf("result 3 = %v, %v; want an empty table", got, err)
 	}
-	for _, bad := range []string{"", `[]`, `[{"result":1}]`, `{"result":0,"arguments":{"leases":[{"ip-address":"10.0.0.1","type":"IA_NA"}]}}`, `[{"result":0,"argu`} {
+	for _, bad := range []string{"", `[]`, `[{"result":1}]`, `{"result":0,"arguments":{"leases":[{"ip-address":"10.0.0.1","type":"IA_NA"}]}}`, `[{"result":0,"argu`,
+		`{"result":0,"arguments":{"leases":[{"ip-address":"fd42:200:0:1ff::","type":"IA_PD","valid-lft":60}]}}`,
+		`{"result":0,"arguments":{"leases":[{"ip-address":"fd42:200:0:1ff::1","type":"IA_PD","valid-lft":60,"prefix-len":64}]}}`} {
 		if _, err := parseKeaLeases6(bad); err == nil {
 			t.Errorf("parseKeaLeases6(%q) accepted a bad reply", bad)
 		}
@@ -85,6 +89,26 @@ func TestParseISCLeases6Fixture(t *testing.T) {
 		{Type: Lease6NA, Address: netip.MustParseAddr("fd42:200:0:200::1aa"), DUID: fixtureDUID, IAID: 1, Preferred: time.Hour, Valid: 2 * time.Hour, Expires: ends},
 		{Type: Lease6TA, Address: netip.MustParseAddr("fd42:200:0:200::22f"), DUID: fixtureDUID, IAID: 2, Preferred: time.Hour, Valid: 2 * time.Hour, Expires: ends},
 	})
+}
+
+// dhcpd6-pd.leases is the table dhcpd 4.4.3-P1 wrote for one IA_NA and
+// one IA_PD (MEASURED in the #23 rig): the ia-pd block's iaprefix is
+// returned with its prefix.
+func TestParseISCLeases6ReadsIAPD(t *testing.T) {
+	got, err := parseISCLeases6(fixture6(t, "dhcpd6-pd.leases"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	duid := "00:03:00:01:02:00:00:00:23:d2"
+	ends := time.Date(2026, 10, 10, 18, 1, 38, 0, time.UTC)
+	want6(t, got, []Lease6{
+		{Type: Lease6NA, Address: netip.MustParseAddr("fd42:200:0:100::1c5"), DUID: duid, IAID: 1, Preferred: time.Hour, Valid: 2 * time.Hour, Expires: ends},
+		{Type: Lease6PD, Address: netip.MustParseAddr("fd42:200:0:1ff::"), Prefix: netip.MustParsePrefix("fd42:200:0:1ff::/64"), DUID: duid, IAID: 3, Preferred: time.Hour, Valid: 2 * time.Hour, Expires: ends},
+	})
+	bad := strings.Replace(fixture6(t, "dhcpd6-pd.leases"), "fd42:200:0:1ff::/64", "fd42:200:0:1ff::1/64", 1)
+	if _, err := parseISCLeases6(bad); err == nil {
+		t.Error("an iaprefix with host bits set was accepted")
+	}
 }
 
 func TestParseISCLeases6LastBlockWinsAndTruncationFails(t *testing.T) {

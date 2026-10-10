@@ -184,7 +184,7 @@ func TestRouterOSSendsNoShellCommand(t *testing.T) {
 			return nil
 		},
 	}
-	refused := []string{"Leases6", "SetRA", "Impair", "Squat", "StartRogue", "RogueLeases", "SendForceRenew"}
+	refused := []string{"Leases6", "SetRA", "StopV6Server", "Impair", "Squat", "StartRogue", "RogueLeases", "SendForceRenew"}
 	it := reflect.TypeOf((*Adapter)(nil)).Elem()
 	for i := 0; i < it.NumMethod(); i++ {
 		if n := it.Method(i).Name; calls[n] == nil && !slices.Contains(refused, n) {
@@ -503,6 +503,8 @@ func TestRouterOSRefusesActorsAndV6BeforeAnyCommand(t *testing.T) {
 	_, err = a.Leases6(ctx)
 	errs = append(errs, err)
 	_, err = a.SetRA(ctx, RAParams{})
+	errs = append(errs, err)
+	_, err = a.StopV6Server(ctx)
 	errs = append(errs, err)
 	for i, err := range errs {
 		if err == nil {

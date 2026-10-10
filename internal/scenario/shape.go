@@ -309,9 +309,10 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 
 // networkOptRE is the whole grammar of an extra network option: a
 // lower-case key that may carry digits after its first letter
-// (`ipv6_mode`, #23 group D) and a value of letters, digits and . _ : -,
-// so nothing else can reach the remote shell (group B, #23).
-var networkOptRE = regexp.MustCompile(`^[a-z][a-z0-9_]*=[A-Za-z0-9._:-]+$`)
+// (`ipv6_mode`, #23 group D) and a value of letters, digits and . _ : - /,
+// the slash for a CIDR such as ipv6_main_prefix's (D4m), so nothing
+// else can reach the remote shell (group B, #23).
+var networkOptRE = regexp.MustCompile(`^[a-z][a-z0-9_]*=[A-Za-z0-9._:/-]+$`)
 
 // networkCreateCmd is the one place a plugin network's create command is
 // built, for the cell's main network (opts nil) and for a group B

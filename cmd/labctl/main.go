@@ -220,6 +220,7 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		RepoRoot:  repoRoot,
 		WorkDir:   workDir,
 		SegSubnet: cell.Segment.Subnet,
+		Subnet6:   cell.Segment.Subnet6,
 		PoolStart: cell.Source.PoolStart,
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},

@@ -287,6 +287,23 @@ rc=0
 (dhcp_relay_log "$DATA/does-not-exist.pcap" "$RMAC" >/dev/null 2>&1) || rc=$?
 [ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- relay: a missing capture read as an empty log" >&2; fail=1; }
 
+# Group D part 2 captures (#23): wire M/A per RA, PIO order as sent
+# (dnsmasq lists the second prefix first), PREF64, a zero-lifetime PIO
+# and IA_PD Replies from Kea pd-pools and ISC prefix6.
+ra6() { dhcp6_message_log "$1" '*' | awk '$2 == "RA" && $6 != 0 {print $4, $5, $7, $8; exit}'; }
+check6() {
+	[ "$2" = "$3" ] || { printf 'dhcp-exchange-check-test: FAIL -- v6 %s:\n got: %s\nwant: %s\n' "$1" "$2" "$3" >&2; fail=1; }
+}
+check6 "radvd M=1 A=0" "$(ra6 "$V6/radvd-m1a0.pcap")" "1 0 fd42:200:0:100::/64|0|7200|3600 -"
+check6 "radvd two PIOs and PREF64" "$(ra6 "$V6/radvd-two-pio-pref64.pcap")" "1 0 fd42:200:0:100::/64|1|7200|3600,fd42:200:0:101::/64|1|7200|3600 fd42:200:0:164::/96|1800"
+check6 "radvd second PIO expired" "$(ra6 "$V6/radvd-second-expired.pcap")" "1 0 fd42:200:0:100::/64|1|7200|3600,fd42:200:0:101::/64|1|0|0 -"
+check6 "dnsmasq two PIOs, second first" "$(ra6 "$V6/dnsmasq-two-pio.pcap")" "1 1 fd42:200:0:101::/64|1|7200|7200,fd42:200:0:100::/64|1|7200|7200 -"
+got=$(dhcp6_message_log "$V6/dnsmasq-pio-order-flips.pcap" '*' | awk '$2 == "RA" {split($7, p, "|"); print $4, $5, p[1]}' | tr '\n' ' ')
+check6 "dnsmasq M=0 PIO order flips between RAs" "$got" "0 0 fd42:200:0:101::/64 0 0 fd42:200:0:100::/64 "
+PD6=00:03:00:01:02:00:00:00:23:d2
+check6 "kea IA_PD Reply" "$(dhcp6_message_log "$V6/kea-pd.pcap" "$PD6" | awk '$2 == "REPLY" {print $7, $9}')" "1|fd42:200:0:100::101|3600|7200 3|fd42:200:0:181::/64|3600|7200,3|fd42:200:0:181::/64|3600|7200"
+check6 "isc IA_PD Reply" "$(dhcp6_message_log "$V6/isc-pd.pcap" "$PD6" | awk '$2 == "REPLY" {print $7, $9}')" "1|fd42:200:0:100::1c5|3600|7200 3|fd42:200:0:1ff::/64|3600|7200,3|fd42:200:0:1ff::/64|3600|7200"
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

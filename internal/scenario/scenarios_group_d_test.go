@@ -154,19 +154,69 @@ func TestRunD1BlocksOnACaptureWithoutTheV6Reader(t *testing.T) {
 }
 
 func TestGroupDIsNABeforeV220AndOnIPAMShapes(t *testing.T) {
-	runs := map[string]func(context.Context, Env) Verdict{NameD1: runD1, NameD1b: runD1b, NameD1c: runD1c, NameD2: runD2, NameD2b: runD2b, NameF4: runF4, NameF5: runF5}
+	runs := map[string]func(context.Context, Env) Verdict{NameD1: runD1, NameD1b: runD1b, NameD1c: runD1c, NameD2: runD2, NameD2b: runD2b, NameF4: runF4, NameF5: runF5,
+		NameD3a: runD3a, NameD3b: runD3b, NameD3c: runD3c, NameD3d: runD3d, NameD4: runD4, NameD4m: runD4m, NameD4b: runD4b, NameF6: runF6, NameF7: runF7}
+	swapped := map[string]bool{NameD1: true, NameD1b: true, NameD2: true}
 	for name, run := range runs {
-		f := newD6Fix(t, ShapeMacvlan, "ghcr.io/claymore666/docker-net-dhcp:v2.1.3")
+		f := newD6Fix(t, ShapeMacvlan, "ghcr.io/claymore666/docker-net-dhcp:v2.1.3", sourceadapter.CapV6ServerStop, sourceadapter.CapPD, sourceadapter.CapPref64)
 		needResult(t, run(context.Background(), f.e), NA)
-		f = newD6Fix(t, ShapeMacvlanIPAM, "")
-		needResult(t, run(context.Background(), f.e), NA)
-		f = newD6Fix(t, ShapeMacvlan, "ghcr.io/claymore666/docker-net-dhcp:dev")
+		if !swapped[name] {
+			f = newD6Fix(t, ShapeMacvlanIPAM, "", sourceadapter.CapV6ServerStop, sourceadapter.CapPD, sourceadapter.CapPref64)
+			needResult(t, run(context.Background(), f.e), NA)
+		}
+		f = newD6Fix(t, ShapeMacvlan, "ghcr.io/claymore666/docker-net-dhcp:dev", sourceadapter.CapV6ServerStop, sourceadapter.CapPD, sourceadapter.CapPref64)
 		if v := run(context.Background(), f.e); v.Result != BLOCKED {
 			t.Errorf("%s on an unparsable tag: %s", name, v.Result)
 		}
-		if f.cmdCount("docker run") != 0 || f.src.raOffs != 0 || f.src.featureEnabled() != 0 {
+		if f.cmdCount("docker run") != 0 || f.src.raOffs != 0 || f.src.featureEnabled() != 0 || f.src.v6Stops != 0 {
 			t.Errorf("%s touched the host or the source before its gate", name)
 		}
+	}
+}
+
+// restoreFails fails the main network's rebuild, the create without
+// ipv6_mode that NetworkUp runs.
+type restoreFails struct{ *d6Host }
+
+func (h restoreFails) Run(ctx context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "docker network create") && !strings.Contains(cmd, "ipv6_mode") {
+		h.cmds = append(h.cmds, cmd)
+		return "", errors.New("create refused")
+	}
+	return h.d6Host.Run(ctx, cmd)
+}
+
+// On an IPAM shape D1, D1b and D2 recreate the cell's main network with
+// ipv6_mode and rebuild it afterwards; a failed rebuild is BLOCKED.
+func TestD1AndD2SwapTheMainNetworkOnIPAMShapes(t *testing.T) {
+	f := newD6Fix(t, ShapeMacvlanIPAM, "")
+	needResult(t, runD1(context.Background(), f.e), BLOCKED)
+	if f.cmdCount("docker network rm") != 0 {
+		t.Error("a main network NetworkUp cannot rebuild was removed")
+	}
+	f = newD6Fix(t, ShapeMacvlanIPAM, "")
+	f.e.Network = NetworkName(f.e.Cell, f.e.Shape)
+	needResult(t, runD1(context.Background(), f.e), PASS)
+	var seq []string
+	for _, c := range f.h.cmds {
+		if strings.Contains(c, "docker network") && strings.HasSuffix(c, " "+f.e.Network) {
+			seq = append(seq, c)
+		}
+	}
+	if len(seq) < 3 || !strings.Contains(seq[0], "network rm") || !strings.Contains(seq[1], "-o ipv6_mode=dhcp") ||
+		!strings.Contains(seq[len(seq)-1], "network create") || strings.Contains(seq[len(seq)-1], "ipv6_mode") {
+		t.Errorf("main network commands %q: want rm, create with ipv6_mode, then the plain rebuild", seq)
+	}
+	if f.cmdCount(f.e.Network+"-d1") != 0 {
+		t.Error("a second network was created on an IPAM shape")
+	}
+	f = newD6Fix(t, ShapeMacvlanIPAM, "")
+	f.e.Network = NetworkName(f.e.Cell, f.e.Shape)
+	f.e.Host = restoreFails{f.h}
+	v := runD1(context.Background(), f.e)
+	needResult(t, v, BLOCKED)
+	if !strings.Contains(v.Reason, "must be recovered") || !strings.Contains(v.Reason, "PASS") {
+		t.Errorf("reason %q", v.Reason)
 	}
 }
 

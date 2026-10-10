@@ -84,6 +84,10 @@ func (a *OpenwrtAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Co
 	return nil, errors.New("openwrt: " + openwrtV6Reason)
 }
 
+func (a *OpenwrtAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return nil, errors.New("openwrt: " + openwrtV6Reason)
+}
+
 func (a *OpenwrtAdapter) Leases(ctx context.Context) ([]Lease, error) {
 	out, err := a.Runner.Run(ctx, "sudo cat "+openwrtLeaseFile)
 	if err != nil {

@@ -495,10 +495,13 @@ func (a *fakeAdapter) featureEnabled() int { return len(a.features) }
 
 // ---- catalog ----
 
-func TestGroupFPartTwoRowsAreNotApplicableOnEveryAdapter(t *testing.T) {
+// The prefix delegation and PREF64 rows run wherever the IPv6 segment is: dnsmasq declares neither
+// CapPD nor CapPref64 and is the documented negative case of each (#23).
+func TestGroupFPartTwoRowsRunOnEveryV6Source(t *testing.T) {
 	for _, name := range []string{NameF6, NameF7} {
 		for an, a := range map[string]sourceadapter.Adapter{
 			"kea": &sourceadapter.KeaAdapter{}, "isc-dhcp": &sourceadapter.ISCDHCPAdapter{}, "dnsmasq": &sourceadapter.DnsmasqAdapter{},
+			"no v6": &fakeAdapter{caps: []sourceadapter.Capability{sourceadapter.CapV4}},
 		} {
 			found := false
 			for _, s := range Catalog {
@@ -507,7 +510,7 @@ func TestGroupFPartTwoRowsAreNotApplicableOnEveryAdapter(t *testing.T) {
 				}
 				found = true
 				ok, reason := Applicable(s, a)
-				if ok || !strings.Contains(reason, "#23 group D part 2") {
+				if ok != (an != "no v6") {
 					t.Errorf("%s on %s: applicable=%v reason %q", name, an, ok, reason)
 				}
 			}
@@ -526,8 +529,8 @@ func TestCatalogRegistersGroupFWithTheNeedsOfTheDesign(t *testing.T) {
 		NameF3:  {sourceadapter.CapV4},
 		NameF4:  {sourceadapter.CapV6},
 		NameF5:  {sourceadapter.CapV6},
-		NameF6:  {sourceadapter.CapV6, sourceadapter.CapPD},
-		NameF7:  {sourceadapter.CapV6, sourceadapter.CapPref64},
+		NameF6:  {sourceadapter.CapV6},
+		NameF7:  {sourceadapter.CapV6},
 	}
 	seen := 0
 	for _, s := range Catalog {

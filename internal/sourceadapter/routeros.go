@@ -563,6 +563,10 @@ func (a *RouterOSAdapter) SetRA(ctx context.Context, p RAParams) (func(context.C
 	return nil, errors.New("routeros: " + rosV6Reason)
 }
 
+func (a *RouterOSAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return nil, errors.New("routeros: " + rosV6Reason)
+}
+
 // Impair, Squat, StartRogue, RogueLeases and SendForceRenew need the
 // source-side actor tools; needPortable refuses before any command (#9).
 func (a *RouterOSAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {

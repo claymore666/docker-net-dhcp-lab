@@ -13,22 +13,26 @@ import (
 )
 
 // Lease6Type is the IA a DHCPv6 lease belongs to (RFC 8415 section 21.4
-// IA_NA, 21.5 IA_TA).
+// IA_NA, 21.5 IA_TA, 21.21 IA_PD).
 type Lease6Type string
 
 const (
 	Lease6NA Lease6Type = "na"
 	Lease6TA Lease6Type = "ta"
+	Lease6PD Lease6Type = "pd"
 )
 
-// Lease6 is one active IA_NA or IA_TA address from a source's own DHCPv6
-// table (#23 group D). DUID is the client's, lowercase colon-hex.
+// Lease6 is one active IA_NA or IA_TA address, or IA_PD prefix, from a
+// source's own DHCPv6 table (#23 group D). DUID is the client's,
+// lowercase colon-hex. Prefix is set for IA_PD only; Address is then its
+// first address.
 // Preferred and Valid are zero when the table does not state them
 // (dnsmasq keeps only the expiry); Expires is zero when the table gives
 // none or "never".
 type Lease6 struct {
 	Type      Lease6Type
 	Address   netip.Addr
+	Prefix    netip.Prefix
 	DUID      string
 	IAID      uint32
 	Preferred time.Duration
@@ -57,6 +61,7 @@ type keaLease6Response struct {
 			CLTT      int64  `json:"cltt"`
 			ValidLft  int64  `json:"valid-lft"`
 			PrefLft   int64  `json:"preferred-lft"`
+			PrefixLen int    `json:"prefix-len"`
 		} `json:"leases"`
 	} `json:"arguments"`
 }
@@ -93,6 +98,8 @@ func parseKeaLeases6(raw string) ([]Lease6, error) {
 			typ = Lease6NA
 		case "IA_TA":
 			typ = Lease6TA
+		case "IA_PD":
+			typ = Lease6PD
 		default:
 			continue
 		}
@@ -102,6 +109,11 @@ func parseKeaLeases6(raw string) ([]Lease6, error) {
 		}
 		ls := Lease6{Type: typ, Address: a, DUID: strings.ToLower(l.DUID), IAID: l.IAID,
 			Preferred: time.Duration(l.PrefLft) * time.Second, Valid: time.Duration(l.ValidLft) * time.Second}
+		if typ == Lease6PD {
+			if ls.Prefix, err = a.Prefix(l.PrefixLen); err != nil || l.PrefixLen == 0 || ls.Prefix.Addr() != a {
+				return nil, fmt.Errorf("kea: IA_PD %s/%d is not a prefix", l.IPAddress, l.PrefixLen)
+			}
+		}
 		if l.ValidLft > 0 && l.CLTT > 0 {
 			ls.Expires = time.Unix(l.CLTT+l.ValidLft, 0).UTC()
 		}
@@ -119,6 +131,7 @@ var (
 	iscIAStartRE  = regexp.MustCompile(`(?m)^ia-(na|ta|pd)\s+"`)
 	iscIABlockRE  = regexp.MustCompile(`(?s)(?m)^ia-(na|ta|pd)\s+"((?:[^"\\]|\\.)*)"\s*\{(.*?)\n\}`)
 	iscIAAddrRE   = regexp.MustCompile(`(?s)iaaddr\s+([0-9a-fA-F:]+)\s*\{(.*?)\}`)
+	iscIAPrefixRE = regexp.MustCompile(`(?s)iaprefix\s+([0-9a-fA-F:]+/[0-9]+)\s*\{(.*?)\}`)
 	iscPrefLifeRE = regexp.MustCompile(`preferred-life\s+(\d+);`)
 	iscMaxLifeRE  = regexp.MustCompile(`max-life\s+(\d+);`)
 	iscBigEndRE   = regexp.MustCompile(`(?m)^authoring-byte-order\s+big-endian;`)
@@ -126,9 +139,9 @@ var (
 
 // parseISCLeases6 reads dhcpd6.leases(5): each ia-na/ia-ta block's quoted
 // key is the 4-byte IAID in the authoring byte order, then the client
-// DUID; each iaaddr inside carries its binding state and lifetimes. The
-// last block per IA and address wins (dhcpd appends). ia-pd blocks are
-// counted for truncation but not returned. A block count that does not
+// DUID; each iaaddr (iaprefix in ia-pd, measured 4.4.3-P1 #23) inside
+// carries its binding state and lifetimes. The last block per IA and
+// address wins (dhcpd appends). A block count that does not
 // match the blocks parsed is a truncated file, an error.
 func parseISCLeases6(raw string) ([]Lease6, error) {
 	starts := iscIAStartRE.FindAllStringIndex(raw, -1)
@@ -146,9 +159,6 @@ func parseISCLeases6(raw string) ([]Lease6, error) {
 	}
 	byKey := map[key]Lease6{}
 	for _, b := range blocks {
-		if b[1] == "pd" {
-			continue
-		}
 		id, err := decodeISCQuotedString(b[2])
 		if err != nil {
 			return nil, fmt.Errorf("isc-dhcp: ia key: %w", err)
@@ -156,18 +166,28 @@ func parseISCLeases6(raw string) ([]Lease6, error) {
 		if len(id) < 5 {
 			return nil, fmt.Errorf("isc-dhcp: ia key is %d bytes, want the 4-byte IAID and a DUID", len(id))
 		}
-		typ := Lease6Type(b[1])
-		for _, m := range iscIAAddrRE.FindAllStringSubmatch(b[3], -1) {
+		typ, entryRE := Lease6Type(b[1]), iscIAAddrRE
+		if typ == Lease6PD {
+			entryRE = iscIAPrefixRE
+		}
+		for _, m := range entryRE.FindAllStringSubmatch(b[3], -1) {
+			var pfx netip.Prefix
 			a, err := netip.ParseAddr(m[1])
+			if typ == Lease6PD {
+				if pfx, err = netip.ParsePrefix(m[1]); err == nil && pfx != pfx.Masked() {
+					err = fmt.Errorf("host bits set")
+				}
+				a = pfx.Addr()
+			}
 			if err != nil || !a.Is6() {
-				return nil, fmt.Errorf("isc-dhcp: iaaddr %q is not IPv6", m[1])
+				return nil, fmt.Errorf("isc-dhcp: %s entry %q is not IPv6", b[1], m[1])
 			}
 			k := key{typ, a}
 			if s := iscStateRE.FindStringSubmatch(m[2]); len(s) == 2 && s[1] != "active" {
 				delete(byKey, k)
 				continue
 			}
-			l := Lease6{Type: typ, Address: a, DUID: hexColon(id[4:]), IAID: order.Uint32(id[:4])}
+			l := Lease6{Type: typ, Address: a, Prefix: pfx, DUID: hexColon(id[4:]), IAID: order.Uint32(id[:4])}
 			if s := iscPrefLifeRE.FindStringSubmatch(m[2]); len(s) == 2 {
 				n, _ := strconv.ParseInt(s[1], 10, 64)
 				l.Preferred = time.Duration(n) * time.Second

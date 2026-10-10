@@ -92,6 +92,12 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 			h.links = ""
 		}
 		return "", nil
+	case strings.HasPrefix(cmd, "sudo ip -6 addr add "):
+		h.addrs6 += strings.Fields(cmd)[5] + " "
+		return "", nil
+	case strings.HasPrefix(cmd, "sudo ip -6 addr del "):
+		h.addrs6 = strings.Replace(h.addrs6, strings.Fields(cmd)[5]+" ", "", 1)
+		return "", nil
 	case strings.Contains(cmd, "systemctl restart"):
 		h.active = true
 		delete(h.stopped, cmd[strings.LastIndex(cmd, " ")+1:])
@@ -145,6 +151,26 @@ func TestReadyTakesTheBaselineThenHoldsTheSourceToIt(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: Ready = %v, want an error naming %q", c.name, err, c.want)
 		}
+	}
+}
+
+// The kernel may list the same permanent v6 addresses in another order;
+// Ready compares them as a set (#23 group D part 2).
+func TestReadyComparesTheV6AddressesAsASet(t *testing.T) {
+	h := healthyHost()
+	h.addrs6 = "fd42:200:0:100::2/64 fd42:200:0:100::3/64 "
+	a := &DnsmasqAdapter{Runner: h}
+	ctx := context.Background()
+	if err := a.Ready(ctx); err != nil {
+		t.Fatalf("first Ready on a healthy source: %v", err)
+	}
+	h.addrs6 = "fd42:200:0:100::3/64 fd42:200:0:100::2/64 "
+	if err := a.Ready(ctx); err != nil {
+		t.Errorf("Ready after a reorder of the baseline v6 addresses: %v", err)
+	}
+	h.addrs6 = "fd42:200:0:100::3/64 "
+	if err := a.Ready(ctx); err == nil || !strings.Contains(err.Error(), "eth1 carries v6") {
+		t.Errorf("Ready with a baseline v6 address gone = %v", err)
 	}
 }
 

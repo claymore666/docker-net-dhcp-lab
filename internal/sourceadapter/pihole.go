@@ -65,6 +65,10 @@ func (a *PiholeAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Con
 	return nil, errors.New("pihole: " + piholeV6Reason)
 }
 
+func (a *PiholeAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return nil, errors.New("pihole: " + piholeV6Reason)
+}
+
 func (a *PiholeAdapter) Leases(ctx context.Context) ([]Lease, error) {
 	out, err := a.Runner.Run(ctx, "sudo cat "+piholeLeaseFile)
 	if err != nil {

@@ -16,6 +16,7 @@ var (
 	// dhcpd6.conf carries at baseline (cloud-init/isc-dhcp-user-data).
 	iscRapidCommit6RE = regexp.MustCompile(`(?m)^([ \t]*)#lab-rapid-commit (option dhcp6\.rapid-commit;)$`)
 	iscTemporary6RE   = regexp.MustCompile(`(?m)^([ \t]*)#lab-temporary (range6 [0-9a-f:]+/[0-9]+ temporary;)$`)
+	iscRange6RE       = regexp.MustCompile(`(?m)^([ \t]*)(range6 [0-9a-f:]+ [0-9a-f:]+;)$`)
 )
 
 // EnableFeature rewrites the running dhcpd.conf (#20). ISC dhcpd 4.4.3
@@ -36,6 +37,13 @@ func (a *ISCDHCPAdapter) EnableFeature(ctx context.Context, f Feature, p Feature
 	case FeatureTemporary6:
 		edits := []configEdit{{iscTemporary6RE, "${1}${2} # lab-temporary-on", "the temporary range anchor"}}
 		return enableFeatureViaSubstitution(ctx, a.Runner, iscDHCP6Conf, "lab-temporary-on", edits,
+			func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
+	case FeaturePD:
+		// dhcpd.conf(5) prefix6: low and high are the first and the last
+		// /64 of the pool (#23).
+		first, last := pdBounds(v.pdPool)
+		edits := []configEdit{{iscRange6RE, fmt.Sprintf("${1}${2}\n${1}prefix6 %s %s /64;", first, last), "the range6 line"}}
+		return enableFeatureViaSubstitution(ctx, a.Runner, iscDHCP6Conf, "prefix6 ", edits,
 			func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 	}
 	var edits []configEdit

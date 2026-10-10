@@ -110,7 +110,7 @@ func WithRelay(inner Adapter, relay Runner, p RelayParams) Adapter {
 // not the client one, and C9 cannot renumber a source that is not on
 // the client segment, so C6, C6b, C7 and C9 are N/A there. dhcrelay
 // relays v4 only and an RA never crosses the relay, so group D is too.
-var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64}
+var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop}
 
 func (a *relayAdapter) Capabilities() []Capability {
 	var caps []Capability

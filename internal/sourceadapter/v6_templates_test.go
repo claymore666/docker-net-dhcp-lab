@@ -20,16 +20,21 @@ import (
 var v6Knobs = map[Capability]struct {
 	feature Feature
 	cfg     map[string]struct{ path, want string }
+	params  FeatureParams
 }{
+	CapPD: {FeaturePD, map[string]struct{ path, want string }{
+		"kea":      {keaDHCP6Conf, `"pools": [ { "pool": "fd42:200:0:100::100 - fd42:200:0:100::1ff" } ], "pd-pools": [ { "prefix": "fd42:200:0:180::", "prefix-len": 57, "delegated-len": 64 } ]`},
+		"isc-dhcp": {iscDHCP6Conf, "  range6 fd42:200:0:100::100 fd42:200:0:100::1ff;\n  prefix6 fd42:200:0:180:: fd42:200:0:1ff:: /64;\n"},
+	}, FeatureParams{PDPool: pdPool}},
 	CapRapidCommit6: {FeatureRapidCommit6, map[string]struct{ path, want string }{
 		"kea":      {keaDHCP6Conf, `"rapid-commit": true`},
 		"isc-dhcp": {iscDHCP6Conf, "\noption dhcp6.rapid-commit; # lab-rapid-commit-on\n"},
 		"dnsmasq":  {"", ""},
-	}},
+	}, FeatureParams{}},
 	CapTemporary6: {FeatureTemporary6, map[string]struct{ path, want string }{
 		"isc-dhcp": {iscDHCP6Conf, "  range6 fd42:200:0:100::200/120 temporary; # lab-temporary-on\n"},
 		"dnsmasq":  {"", ""},
-	}},
+	}, FeatureParams{}},
 }
 
 var dnsmasqV6Range = regexp.MustCompile(`(?m)^dhcp-range=fd42:200:0:100::100,fd42:200:0:100::1ff,slaac,64,2h$`)
@@ -47,7 +52,7 @@ func TestEveryV6CapabilityHasAKnobInTheRenderedConfig(t *testing.T) {
 			}
 			orig := baselineConfig(t, b.tmpl, knob.path)
 			r := &cfgRunner{cfg: orig}
-			restore, err := featureAdapter(name, r).EnableFeature(ctx, k.feature, FeatureParams{})
+			restore, err := featureAdapter(name, r).EnableFeature(ctx, k.feature, k.params)
 			if err != nil {
 				t.Errorf("%s %s on the rendered %s: %v", name, k.feature, knob.path, err)
 				continue
@@ -69,7 +74,7 @@ func TestV6KnobRowsMatchDeclaredCapabilities(t *testing.T) {
 	for _, name := range []string{"kea", "isc-dhcp", "dnsmasq"} {
 		for _, d := range featureAdapter(name, nil).Capabilities() {
 			k, isV6Knob := v6Knobs[d]
-			if d != CapRapidCommit6 && d != CapTemporary6 {
+			if d != CapRapidCommit6 && d != CapTemporary6 && d != CapPD {
 				continue
 			}
 			if _, ok := k.cfg[name]; !isV6Knob || !ok {
@@ -171,6 +176,47 @@ func TestSourceTemplatesParseAsYAML(t *testing.T) {
 		}
 		if err := yaml.Unmarshal(raw, &doc); err != nil || len(doc.Runcmd) == 0 {
 			t.Errorf("%s: %s does not parse to a runcmd list: %v", name, b.tmpl, err)
+		}
+	}
+}
+
+// The two v6 caps that are not features (defeat 19, #23): SetRA Pref64
+// writes a file Ready holds, StopV6Server stops a unit Recover restarts.
+func TestPref64AndV6ServerStopTouchOnlyWhatReadyHolds(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"kea", "isc-dhcp", "dnsmasq"} {
+		a := featureAdapter(name, nil)
+		u := a.(interface{ units() sourceUnits }).units()
+		held := map[string]bool{u.cfgPath: true}
+		for _, e := range u.extra {
+			held[e.path] = true
+		}
+		for _, c := range a.Capabilities() {
+			switch c {
+			case CapPref64:
+				h := healthyHost()
+				h.extra[radvdConf] = baselineConfig(t, baselines[name].tmpl, radvdConf)
+				if _, err := featureAdapter(name, h).SetRA(ctx, RAParams{Managed: true, Autonomous: true, Pref64: pref64}); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				for _, cmd := range h.calls {
+					if strings.HasPrefix(cmd, "sudo tee ") && !held[strings.Fields(cmd)[2]] {
+						t.Errorf("%s Pref64 writes %s, which Ready does not hold", name, strings.Fields(cmd)[2])
+					}
+				}
+			case CapV6ServerStop:
+				r := &fakeRunner{}
+				if _, err := featureAdapter(name, r).StopV6Server(ctx); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				found := false
+				for _, svc := range u.services() {
+					found = found || strings.Contains(r.calls[0], svc) || (svc == "isc-dhcp-server" && strings.Contains(r.calls[0], iscDHCP6PID))
+				}
+				if !found {
+					t.Errorf("%s StopV6Server %q stops nothing Recover restarts", name, r.calls[0])
+				}
+			}
 		}
 	}
 }

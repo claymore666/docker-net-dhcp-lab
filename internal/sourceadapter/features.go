@@ -34,6 +34,9 @@ const (
 	// FeatureTemporary6 grants IA_TA from the source's temp6_pool
 	// (F5-temporary-address, RFC 8415 section 21.5).
 	FeatureTemporary6 Feature = "temporary-6"
+	// FeaturePD delegates /64s from FeatureParams.PDPool (RFC 8415
+	// section 6.3): Kea pd-pools, ISC prefix6.
+	FeaturePD Feature = "pd"
 )
 
 // ForceRenewNonceLen is the nonce length RFC 6704 3.1.2 fixes for
@@ -51,6 +54,8 @@ type FeatureParams struct {
 	ClientID string
 	// Nonce is the FORCERENEW key, ForceRenewNonceLen bytes.
 	Nonce []byte
+	// PDPool is FeaturePD's pool: a ULA prefix of length 48 to 63 (RFC 8415 section 6.3).
+	PDPool netip.Prefix
 }
 
 var userClassRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
@@ -62,6 +67,7 @@ type validatedFeature struct {
 	class, start, end, clientID string
 	seconds                     uint32
 	nonce                       []byte
+	pdPool                      netip.Prefix
 }
 
 func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
@@ -96,6 +102,12 @@ func validateFeature(f Feature, p FeatureParams) (validatedFeature, error) {
 			v.clientID = id
 		}
 	case FeatureRapidCommit4, FeatureRapidCommit6, FeatureTemporary6:
+	case FeaturePD:
+		pool, err := validateULA(p.PDPool, 48, 63)
+		if err != nil {
+			return v, fmt.Errorf("prefix delegation pool: %w", err)
+		}
+		v.pdPool = pool
 	case FeatureForceRenewNonce:
 		if len(p.Nonce) != ForceRenewNonceLen {
 			return v, fmt.Errorf("forcerenew nonce is %d bytes, want %d", len(p.Nonce), ForceRenewNonceLen)

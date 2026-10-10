@@ -510,8 +510,8 @@ func (p *PairAdapter) Profile() PairProfile {
 // v6Capabilities and v6Features belong to the primary alone: on a pair
 // it is the one v6 server (lab #12).
 var (
-	v6Capabilities = map[Capability]bool{CapV6: true, CapRapidCommit6: true, CapTemporary6: true, CapPD: true, CapPref64: true}
-	v6Features     = map[Feature]bool{FeatureRapidCommit6: true, FeatureTemporary6: true}
+	v6Capabilities = map[Capability]bool{CapV6: true, CapRapidCommit6: true, CapTemporary6: true, CapPD: true, CapPref64: true, CapV6ServerStop: true}
+	v6Features     = map[Feature]bool{FeatureRapidCommit6: true, FeatureTemporary6: true, FeaturePD: true}
 )
 
 func (p *PairAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
@@ -524,6 +524,14 @@ func (p *PairAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
 
 func (p *PairAdapter) SetRA(ctx context.Context, rp RAParams) (func(context.Context) error, error) {
 	r, err := p.Peers[0].Adapter.SetRA(ctx, rp)
+	if err != nil {
+		return nil, fmt.Errorf("pair: %s: %w", p.Peers[0].Name, err)
+	}
+	return r, nil
+}
+
+func (p *PairAdapter) StopV6Server(ctx context.Context) (func(context.Context) error, error) {
+	r, err := p.Peers[0].Adapter.StopV6Server(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("pair: %s: %w", p.Peers[0].Name, err)
 	}

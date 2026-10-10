@@ -1227,3 +1227,19 @@ func TestPoolDemandCountsOnlyApplicableScenarios(t *testing.T) {
 		t.Errorf("a source declaring nothing runs nothing: demand %d, want 0", got)
 	}
 }
+
+// Defeat 14 (#23 group D part 2): ipv6_main_prefix's CIDR reaches the
+// create line; admitting "/" admits nothing a shell reads.
+func TestNetworkOptionAdmitsACIDRAndStillRefusesShellCharacters(t *testing.T) {
+	const opt = "ipv6_main_prefix=fd42:200:0:101::/64"
+	cmd, err := networkCreateCmd(ShapeMacvlan, "net1-d4m", "", []string{"ipv6_mode=slaac", opt})
+	if err != nil || !strings.Contains(cmd, " -o "+opt+" ") {
+		t.Fatalf("networkCreateCmd(%q) = %q, %v; want the option on the create line", opt, cmd, err)
+	}
+	for _, bad := range []string{"ipv6_main_prefix=fd42::/64;id", "ipv6_main_prefix=fd42::/64 x", "ipv6_main_prefix=fd42::/64|id",
+		"ipv6_main_prefix=fd42::/64&", "ipv6_main_prefix=fd42::/64>x", "ipv6_main_prefix=`id`", "ipv6_main_prefix=fd42::/64\nid"} {
+		if _, err := networkCreateCmd(ShapeMacvlan, "net1-d4m", "", []string{bad}); err == nil {
+			t.Errorf("option %q was accepted", bad)
+		}
+	}
+}

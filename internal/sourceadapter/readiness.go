@@ -131,7 +131,7 @@ func parseState(out string, u sourceUnits, portable bool) (sourceState, error) {
 			st.addrs = val
 			seen++
 		case "addr6":
-			st.addrs6 = val
+			st.addrs6 = sortedFields(val)
 			seen++
 		case "cfg6":
 			path, enc, ok := strings.Cut(val, ":")
@@ -232,10 +232,10 @@ func (h host) sourceRecover(ctx context.Context, r Runner, u sourceUnits, b *bas
 		}
 	}
 	b.mu.Lock()
-	taken, addrs, cfg, extra := b.taken, b.addrs, b.cfg, b.extra
+	taken, addrs, addrs6, cfg, extra := b.taken, b.addrs, b.addrs6, b.cfg, b.extra
 	b.mu.Unlock()
 	if taken {
-		if err := h.restoreBaseline(ctx, r, u, addrs, cfg, extra); err != nil {
+		if err := h.restoreBaseline(ctx, r, u, addrs, addrs6, cfg, extra); err != nil {
 			return err
 		}
 	}
@@ -259,9 +259,9 @@ func (h host) sweepActors(ctx context.Context, r Runner) error {
 	return nil
 }
 
-// restoreBaseline puts the baseline v4 segment addresses and every
-// baseline config back where they differ from what the source holds.
-func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addrs, cfg string, extra map[string]string) error {
+// restoreBaseline puts the baseline v4 and v6 segment addresses and
+// every baseline config back where they differ from what the source holds (#23).
+func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addrs, addrs6, cfg string, extra map[string]string) error {
 	st, err := h.readState(ctx, r, u)
 	if err != nil {
 		return fmt.Errorf("recover: %w", err)
@@ -282,6 +282,11 @@ func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addr
 			return fmt.Errorf("recover: %w", err)
 		}
 	}
+	if st.addrs6 != addrs6 {
+		if err := h.restoreAddrs6(ctx, r, st.addrs6, addrs6); err != nil {
+			return err
+		}
+	}
 	want := map[string]string{u.cfgPath: cfg}
 	got := map[string]string{u.cfgPath: st.cfg}
 	paths := []string{u.cfgPath}
@@ -298,6 +303,42 @@ func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addr
 		}
 		if err := writeRemoteConfig(ctx, r, p, want[p]); err != nil {
 			return fmt.Errorf("recover: write %s back: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// sortedFields is s's fields in sorted order, so a reorder of the same
+// addresses by the kernel never fails Ready (#23 group D part 2).
+func sortedFields(s string) string {
+	f := strings.Fields(s)
+	slices.Sort(f)
+	return strings.Join(f, " ")
+}
+
+// restoreAddrs6 deletes the permanent global v6 addresses the baseline
+// does not hold (a SetRA Second left behind, #23 group D) and adds back
+// the ones it lost; the baseline address itself is never flushed.
+func (h host) restoreAddrs6(ctx context.Context, r Runner, have, want string) error {
+	for _, a := range strings.Fields(have + " " + want) {
+		if _, err := netip.ParsePrefix(a); err != nil {
+			return fmt.Errorf("recover: %s v6 address %q: %w", h.nic, a, err)
+		}
+	}
+	var cmds []string
+	for _, a := range strings.Fields(have) {
+		if !slices.Contains(strings.Fields(want), a) {
+			cmds = append(cmds, fmt.Sprintf("sudo ip -6 addr del %s dev %s", a, h.nic))
+		}
+	}
+	for _, a := range strings.Fields(want) {
+		if !slices.Contains(strings.Fields(have), a) {
+			cmds = append(cmds, fmt.Sprintf("sudo ip -6 addr add %s dev %s nodad", a, h.nic))
+		}
+	}
+	for _, c := range cmds {
+		if _, err := r.Run(ctx, c); err != nil {
+			return fmt.Errorf("recover: %s v6 addresses back to %q: %w", h.nic, want, err)
 		}
 	}
 	return nil
