@@ -90,7 +90,8 @@ The terms in the picture:
 - A **cell** is a small set of virtual machines on one isolated network:
   a Docker host with the plugin installed, and a DHCP server.
 - A **source** is the DHCP server in a cell: Kea, ISC dhcpd, dnsmasq, udhcpd
-  or Pi-hole, installed with its stock config plus an address pool.
+  or Pi-hole, installed with its stock config plus an address pool (for
+  Pi-hole the pool comes from the `pihole.toml` the lab writes).
 - A **shape** is one way of creating the Docker network: `bridge`,
   `macvlan`, `ipvlan`, and the plugin as IPAM driver on a bridge
   (`bridge-ipam`) or on a macvlan network (`macvlan-ipam`).
@@ -256,15 +257,18 @@ scripts/down-cell.sh kea <work-dir>
 | Source | Cell | Host run |
 |---|---|---|
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
+| udhcpd | `udhcpd` | pending, host not cleared |
 | Pi-hole | `pihole` | pending, host not cleared |
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
 changes go in `/etc/dnsmasq.d/90-lab.conf`, and reservations in
 `/etc/dnsmasq.d/lab-reservations.conf`. FTL owns the address range and the
-lease time there, so the short-lease, narrow-pool and renumber rows and
-the class-pool rows report N/A on the Pi-hole cell; the dnsmasq cell covers
-them.
+lease time there, so A14, B5, B6, C2, C3, C4, C5, C5c, C8, C9 and the
+user-class pool row report N/A on the Pi-hole cell, as do all DHCPv6 rows
+(D1 to D2b, DHCPv6 rapid commit, temporary address, prefix delegation and
+PREF64), because the cell is DHCPv4 only; the dnsmasq cell covers the first
+group.
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.
