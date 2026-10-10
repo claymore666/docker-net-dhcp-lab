@@ -293,6 +293,9 @@ func TestJudgeF7(t *testing.T) {
 	r.BindHealth.NAT64Prefixes = nil
 	needF(t, judgeF7(ras, true, r), FAIL, "bound after PREF64")
 	r = good
+	r.BindHealth.NAT64Prefixes = []string{"fd42:200:0:165::/96"}
+	needF(t, judgeF7(ras, true, r), FAIL, "bound after PREF64")
+	r = good
 	r.Addrs = append(slices.Clone(r.Addrs), addr6{Addr: netip.MustParseAddr("fd42:200:0:164::1"), Bits: 128, Scope: "global"})
 	needF(t, judgeF7(ras, true, r), FAIL, "first container's link")
 	r = good

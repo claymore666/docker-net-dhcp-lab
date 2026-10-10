@@ -222,9 +222,10 @@ const (
 // plus group D's 14: one IPv4 lease for each row's container, the slaac
 // rows included, since the container also leases IPv4 (#23), and three
 // for D3c, whose legs each start one,
-// plus group F's 11: one each for the user class, 108 not asked, both rapid commits,
-// the temporary address, prefix delegation and PREF64, two each for 108 forced and
-// FORCERENEW (their control clients, #21).
+// plus group F's 12: one each for the user class, 108 not asked, both rapid commits,
+// the temporary address and prefix delegation, two each for 108 forced and
+// FORCERENEW (their control clients, #21) and for PREF64, whose second
+// container binds after the RA (#23).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against PoolDemand, this sum less what the cell's source cannot run
 // (the C5 family's 22 count only on a failover pair, lab #12), and

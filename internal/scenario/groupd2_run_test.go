@@ -151,6 +151,9 @@ func TestRunF7JudgesTheBindAfterPref64(t *testing.T) {
 		}
 		return fmt.Sprintf(`{"endpoint":%q}`, ep)
 	}
+	wrong := func(ep string) string {
+		return fmt.Sprintf(`{"endpoint":%q,"nat64_prefixes":["fd42:200:0:165::/96"]}`, ep)
+	}
 	for _, tc := range []struct {
 		name, after, health string
 		want                Result
@@ -159,6 +162,7 @@ func TestRunF7JudgesTheBindAfterPref64(t *testing.T) {
 		{"documented", base, entry(first, false) + "," + entry(second, true), PASS, "bound after PREF64"},
 		{"both show it", base, entry(first, true) + "," + entry(second, true), PASS, "bound after PREF64"},
 		{"bind lacks it", base, entry(first, true) + "," + entry(second, false), FAIL, "bound after PREF64 was advertised, the RA carried"},
+		{"bind shows another prefix", base, entry(first, false) + "," + wrong(second), FAIL, "bound after PREF64 was advertised, the RA carried"},
 		{"bind not listed", base, entry(first, true), FAIL, "no entry"},
 		{"route added", base + "fd42:200:0:99::/64 via fe80::1 dev eth0 metric 1024 pref medium\n", entry(first, false) + "," + entry(second, true), FAIL, "routes changed"},
 	} {
