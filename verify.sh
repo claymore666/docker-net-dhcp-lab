@@ -49,6 +49,9 @@ echo "== up-source.sh: the five cloud-init sources render as pinned; seed and im
 echo "== fetch-base-image.sh: archives decompress and convert, a mismatching sum is refused =="
 ./scripts/fetch-base-image-kinds-test.sh
 
+echo "== source-types.sh: per-type version and config reads; every schema type has an arm =="
+./scripts/source-types-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.

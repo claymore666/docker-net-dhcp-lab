@@ -48,6 +48,8 @@ if [ -z "$source_type" ]; then
 	echo "run-cell: cell $CELL has no source; nothing can run against it" >&2
 	exit 1
 fi
+. "$REPO_ROOT/scripts/source-types.sh"
+version_line=$(source_version_cmd "$source_type")
 
 echo "== bring up cell $CELL =="
 "$REPO_ROOT/scripts/up-cell.sh" "$CELL" "$WORK"
@@ -71,7 +73,7 @@ echo "== versions =="
 	echo "docker_host kernel: $(ssh_run "$mgmt_ip" "uname -r")"
 	echo "source type: $source_type"
 	for peer in $peers; do
-		echo "${peer%%=*} kernel: $(ssh_run "${peer#*=}" "uname -r")"
+		echo "${peer%%=*} ${version_line%%$'\t'*}: $(ssh_run "${peer#*=}" "${version_line#*$'\t'}")"
 	done
 	if [ -n "$relay_mgmt_ip" ]; then
 		echo "relay distro: $(ssh_run "$relay_mgmt_ip" ". /etc/os-release && echo \$PRETTY_NAME")"

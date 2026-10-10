@@ -24,42 +24,53 @@ ssh_run() {
 		-i ~/.ssh/id_ed25519_lab lab@"$MGMT_IP" "$@"
 }
 
-# mask_stock=1 (udhcpd, DESIGN-910 5.8, lab #10): the stock side's vendor
-# example addresses become a placeholder before the diff; the other types
-# still refuse an address in a stock code line.
-mask_stock=0
-case "$SOURCE_TYPE" in
-kea) pairs=("kea-dhcp4.conf.stock:/etc/kea/kea-dhcp4.conf" "kea-ctrl-agent.conf.stock:/etc/kea/kea-ctrl-agent.conf") ;;
-isc-dhcp) pairs=("dhcpd.conf.stock:/etc/dhcp/dhcpd.conf" "isc-dhcp-server.stock:/etc/default/isc-dhcp-server") ;;
-dnsmasq) pairs=("dnsmasq.conf.stock:/etc/dnsmasq.conf") ;;
-udhcpd)
-	pairs=("udhcpd.conf.stock:/etc/udhcpd.conf")
-	mask_stock=1
-	;;
-pihole) pairs=("pihole.toml.stock:/etc/pihole/pihole.toml") ;;
-*)
+. "$REPO_ROOT/scripts/source-types.sh"
+pairs_text=$(source_config_pairs "$SOURCE_TYPE") || {
 	echo "capture-source-config-diff: unknown source type $SOURCE_TYPE" >&2
 	exit 1
-	;;
-esac
+}
+mapfile -t pairs <<<"$pairs_text"
+# Every arm resolves before the first read (#9): an arm that fails or
+# prints nothing refuses the capture with no ssh and no diff file, never
+# an empty command sent to the cell.
+refuse_arm() {
+	echo "capture-source-config-diff: REFUSED -- source type $SOURCE_TYPE has no $1 arm in source-types.sh" >&2
+	exit 1
+}
+if ! mask_stock=$(source_stock_mask "$SOURCE_TYPE") || [ -z "$mask_stock" ]; then
+	refuse_arm source_stock_mask
+fi
+stock_cmds=()
+live_cmds=()
+for pair in "${pairs[@]}"; do
+	if ! cmd=$(source_stock_cmd "$SOURCE_TYPE" "${pair%%:*}") || [ -z "$cmd" ]; then
+		refuse_arm source_stock_cmd
+	fi
+	stock_cmds+=("$cmd")
+	if ! cmd=$(source_live_cmd "$SOURCE_TYPE" "${pair##*:}") || [ -z "$cmd" ]; then
+		refuse_arm source_live_cmd
+	fi
+	live_cmds+=("$cmd")
+done
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 sha=$(cd "$REPO_ROOT" && git rev-parse HEAD)
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 echo "# config diff for cell $CELL ($SOURCE_TYPE), commit $sha, captured $ts" >"$scratch/out"
-for pair in "${pairs[@]}"; do
+for i in "${!pairs[@]}"; do
+	pair=${pairs[$i]}
 	stock_name=${pair%%:*}
 	live_path=${pair##*:}
 	# Each side lands in a file under set -e: a failed read ends the
 	# capture instead of diffing against nothing.
-	ssh_run "sudo cat /root/lab-stock-config/$stock_name" >"$scratch/stock" ||
+	ssh_run "${stock_cmds[$i]}" >"$scratch/stock" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read the stock backup $stock_name" >&2; exit 1; }
 	if [ "$mask_stock" -eq 1 ]; then
 		config_mask_vendor_examples "$scratch/stock" ||
 			{ echo "capture-source-config-diff: REFUSED -- the stock backup $stock_name kept a disallowed address after masking" >&2; exit 1; }
 	fi
-	ssh_run "sudo cat $live_path" >"$scratch/live" ||
+	ssh_run "${live_cmds[$i]}" >"$scratch/live" ||
 		{ echo "capture-source-config-diff: REFUSED -- could not read $live_path" >&2; exit 1; }
 	if [ ! -s "$scratch/live" ]; then
 		echo "capture-source-config-diff: REFUSED -- $live_path is empty on the cell" >&2

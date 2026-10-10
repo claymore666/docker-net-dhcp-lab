@@ -13,6 +13,7 @@ trap 'rm -rf "$tmp"' EXIT
 fake="$tmp/repo"
 mkdir -p "$fake/scripts" "$tmp/bin"
 cp "$REPO_ROOT/scripts/run-cell.sh" "$fake/scripts/run-cell.sh"
+cp "$REPO_ROOT/scripts/source-types.sh" "$fake/scripts/source-types.sh"
 stub() {
 	printf '#!/bin/bash\n%s\n' "$2" >"$1"
 	chmod +x "$1"
