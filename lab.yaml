@@ -405,3 +405,30 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: openwrt
+    description: >
+      OpenWrt 25.12.5 (x86-64), its own dnsmasq configured through uci and
+      /etc/dnsmasq.conf, in an image scripts/build-openwrt-image.sh builds
+      with the cell's addresses baked in. No br-lan, odhcpd off. Issue #9.
+    segment:
+      bridge: lab-br-openwrt
+      subnet: 10.200.15.0/24
+    source:
+      type: openwrt
+      base_image: openwrt-25.12.5-x86-64
+      mgmt_address: 10.200.255.151/24
+      seg_address: 10.200.15.2/24
+      pool_start: 10.200.15.100
+      pool_end: 10.200.15.200
+      vcpus: 1
+      memory_mib: 256
+      disk_gib: 1
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.150/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

@@ -21,7 +21,7 @@ cat >"$tmp/repo/scripts/fetch-base-image.sh" <<'EOF'
 #!/bin/bash
 printf 'fetch-base-image %s %s\n' "$1" "$2" >>"$STUB_LOG"
 printf '%s|' "$@" >>"$STUB_LOG.fetch"
-echo /srv/lab/images/"$1".qcow2
+echo "${STUB_BASE:-/srv/lab/images/$1.qcow2}"
 EOF
 cat >"$tmp/bin/go" <<'EOF'
 #!/bin/bash
@@ -69,7 +69,7 @@ render() {
 	: >"$tmp/log.fetch"
 	{
 		STUB_LOG="$tmp/log" RESOLVED_FILE="$resolved" HOME="$tmp/home" PATH="$tmp/bin:$PATH" \
-			bash "$tmp/repo/scripts/up-source.sh" "$cell" "$tmp/work-$cell" 2>&1
+			bash "$tmp/repo/scripts/up-source.sh" "$cell" "$tmp/work-$cell" "${4:-}" 2>&1
 		echo "exit=$?"
 		echo "=== calls"
 		cat "$tmp/log"
@@ -109,9 +109,10 @@ variant() {
 variant '.source_image.kind = "archive" | .source_image.checksum_url = "https://example.invalid/SHA256SUMS"'
 grep -qF '|archive|https://example.invalid/SHA256SUMS|' "$tmp/log.fetch" || bad "archive: fetch-base-image.sh got $(cat "$tmp/log.fetch")"
 cmp -s "$tmp/got-variant" "$FIX/dnsmasq.golden" || bad "archive: the cloud-init bring-up changed"
+# baked (#9) on an image no build script makes is refused.
 variant '.source_image.seed = "baked"'
-{ grep -qx 'exit=1' "$tmp/got-variant" && grep -q "the baked seed hook is not built" "$tmp/got-variant"; } ||
-	bad "baked: the stub did not refuse"
+{ grep -qx 'exit=1' "$tmp/got-variant" && grep -q "the baked image debian-13-generic-amd64 has no build script" "$tmp/got-variant"; } ||
+	bad "baked: the hook did not refuse"
 grep -qE '^(genisoimage|sudo -n virt-install|ssh[ ])' "$tmp/got-variant" && bad "baked: another seed kind's hook ran"
 # qga (#9): the agent channel goes to virt-install, firmware bios drops
 # the OVMF loader, no cloud-init ISO is built, and ready_qga's identity
@@ -147,6 +148,45 @@ rm -f "$tmp/log.lockout"
 variant '.source_image.seed = "floppy"'
 { grep -qx 'exit=1' "$tmp/got-variant" && grep -q "unknown seed kind 'floppy'" "$tmp/got-variant"; } || bad "an unknown seed kind was not refused"
 grep -q '^fetch-base-image' "$tmp/got-variant" && bad "an unknown seed kind still fetched its image"
+
+# baked (#9) on the openwrt cell: the ready probe asks the boot marker for
+# the cache's build id, so a marker a reflashed older image left fails it.
+(cd "$REPO_ROOT" && go run ./cmd/labctl resolve lab.yaml openwrt) >"$tmp/resolved-openwrt.json"
+mkdir -p "$tmp/cache"
+baked=$(RESOLVED_FILE="$tmp/resolved-openwrt.json" PATH="$tmp/bin:$PATH" LAB_PUBKEY="$(cat "$tmp/home/.ssh/id_ed25519_lab.pub")" \
+	bash "$tmp/repo/scripts/build-openwrt-image.sh" --id openwrt)
+echo "$baked" >"$tmp/cache/openwrt-25.12.5-x86-64.build-id"
+set +e
+LAB_IMAGE_CACHE="$tmp/cache" render openwrt "$tmp/resolved-openwrt.json" "$tmp/got-openwrt"
+set -e
+grep -qF "grep\\ -qxF\\ $baked\\ /etc/lab-bootstrap-done" "$tmp/got-openwrt" ||
+	bad "openwrt: the ready probe does not ask the marker for build id $baked: $(grep -E '^(ssh|exit=)' "$tmp/got-openwrt")"
+grep -qE '^genisoimage' "$tmp/got-openwrt" && bad "openwrt: a baked image got seed media"
+# A baked image serves one plain cell: a relay or a partner is refused
+# before any VM (lab #9).
+jq '.cell.relay.client_address = "10.200.15.9"' "$tmp/resolved-openwrt.json" >"$tmp/resolved-openwrt-relay.json"
+jq '.cell.source.partner = {seg_address: "10.200.15.3/24", mgmt_address: "10.200.255.152/24"}' \
+	"$tmp/resolved-openwrt.json" >"$tmp/resolved-openwrt-partner.json"
+for v in relay partner; do
+	peer=
+	[ "$v" != partner ] || peer=partner
+	set +e
+	LAB_IMAGE_CACHE="$tmp/cache" render openwrt "$tmp/resolved-openwrt-$v.json" "$tmp/got-openwrt-$v" "$peer"
+	set -e
+	{ grep -qx 'exit=1' "$tmp/got-openwrt-$v" && grep -q 'a baked image serves one plain cell' "$tmp/got-openwrt-$v"; } ||
+		bad "openwrt $v: not refused: $(tail -5 "$tmp/got-openwrt-$v")"
+	grep -q '^sudo -n virt-install' "$tmp/got-openwrt-$v" && bad "openwrt $v: a VM was created"
+done
+# An overlay older than the image it overlays was cut from a previous
+# build and is refused (lab #9).
+touch "$tmp/base.qcow2"
+touch -d '2020-01-01' "$tmp/work-openwrt/lab-openwrt-source.qcow2"
+set +e
+STUB_BASE="$tmp/base.qcow2" LAB_IMAGE_CACHE="$tmp/cache" render openwrt "$tmp/resolved-openwrt.json" "$tmp/got-openwrt-stale"
+set -e
+{ grep -qx 'exit=1' "$tmp/got-openwrt-stale" && grep -q 'predates the image it overlays' "$tmp/got-openwrt-stale"; } ||
+	bad "openwrt: a stale overlay was not refused: $(tail -5 "$tmp/got-openwrt-stale")"
+grep -q '^sudo -n virt-install' "$tmp/got-openwrt-stale" && bad "openwrt: a stale overlay booted"
 
 [ "$fail" -eq 0 ]
 echo "up-source-golden-test: PASS"

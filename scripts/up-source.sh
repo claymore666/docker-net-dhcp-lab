@@ -146,8 +146,7 @@ class_pool_end="$class_prefix.$class_last_host"
 # the VM exists and sets seed_args, the virt-install arguments that hand
 # the seed over; ready_<kind> runs after it boots and exits 0 once the
 # source has finished its own setup, 1 to be polled again. Both read the
-# variables above. baked (OpenWrt: the image carries its seed) is a stub
-# that refuses until its cell fills it.
+# variables above. qga (CHR) and baked (OpenWrt) are below.
 seed_cloud_init() {
 	case "${partner_seg:+pair}-$source_type" in
 	-*) tmpl_name="$source_type" ;;
@@ -252,11 +251,40 @@ ready_qga() {
 	fi
 	return 1
 }
-seed_baked() { seed_stub; }
-ready_baked() { seed_stub; }
-seed_stub() {
-	echo "up-source: REFUSED -- the $seed_kind seed hook is not built yet" >&2
-	exit 1
+
+# baked (#9): the image carries the cell's addresses, key and pool, so
+# the cache's build id must be the one the build script derives from the
+# cell now, an overlay must not predate its base, and the boot marker
+# must hold that id, not one a reflashed older image left behind.
+seed_baked() {
+	if [ "$PEER" != primary ] || [ -n "$relay_client" ]; then
+		echo "up-source: REFUSED -- a baked image serves one plain cell, not $PEER${relay_client:+ behind a relay}" >&2
+		exit 1
+	fi
+	local sidecar want build="scripts/build-${image_name%%-*}-image.sh"
+	if [ ! -x "$REPO_ROOT/$build" ]; then
+		echo "up-source: REFUSED -- the baked image $image_name has no build script $build" >&2
+		exit 1
+	fi
+	sidecar="${LAB_IMAGE_CACHE:-/srv/lab/images}/$image_name.build-id"
+	want=$(LAB_PUBKEY="$pubkey" "$REPO_ROOT/$build" --id "$CELL")
+	baked_id=$(cat "$sidecar" 2>/dev/null || true)
+	if [ "$baked_id" != "$want" ]; then
+		echo "up-source: REFUSED -- $sidecar holds '${baked_id:-nothing}', cell $CELL needs $want; run $build $CELL" >&2
+		exit 1
+	fi
+	if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then exit 0; fi
+	if [ "$overlay" -ot "$base_path" ]; then
+		echo "up-source: REFUSED -- $overlay predates the image it overlays; tear the cell down first" >&2
+		exit 1
+	fi
+}
+
+ready_baked() {
+	ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
+		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
+		lab@"$mgmt_ip" "grep -qxF $baked_id /etc/lab-bootstrap-done" 2>/dev/null
 }
 
 seed_args=()

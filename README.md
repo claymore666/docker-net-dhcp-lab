@@ -260,6 +260,7 @@ scripts/down-cell.sh kea <work-dir>
 | udhcpd | `udhcpd` | pending, host not cleared |
 | Pi-hole | `pihole` | pending, host not cleared |
 | MikroTik CHR | `chr` | pending, host not cleared |
+| OpenWrt 25.12 | `openwrt` | pending, host not cleared |
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
@@ -279,6 +280,15 @@ helper program on the source VM report N/A there: C6 and C6b (squatter), C7
 the router's resolver does not answer the segment in its stock config, and
 all DHCPv6 rows are N/A because the cell is DHCPv4 only (the seed turns
 IPv6 off).
+
+The OpenWrt cell (issue #9) boots an image that
+`scripts/build-openwrt-image.sh openwrt` builds once with the OpenWrt
+ImageBuilder: the cell's addresses, pool and key are baked in, there is no
+`br-lan`, and odhcpd's RA and DHCPv6 are off, so the cell is DHCPv4 only.
+Scenario changes go through `uci` where OpenWrt has an option, else into
+`/etc/dnsmasq.conf`. C6, C6b, C7, C10 and F8-forcerenew report N/A there: they
+run against dnsmasq on the dnsmasq cell, and here would need `tc`, netem,
+macvlan and python3 in the image. The DHCPv6 rows are N/A as on Pi-hole.
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.

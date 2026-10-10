@@ -22,10 +22,13 @@ declare -A want_pairs=(
 	[dnsmasq]='dnsmasq.conf.stock:/etc/dnsmasq.conf'
 	[udhcpd]='udhcpd.conf.stock:/etc/udhcpd.conf'
 	[pihole]='pihole.toml.stock:/etc/pihole/pihole.toml'
+	[openwrt]='network.stock:/etc/config/network dhcp.stock:/etc/config/dhcp dnsmasq.conf.stock:/etc/dnsmasq.conf'
 )
-declare -A want_mask=([kea]=0 [isc-dhcp]=0 [dnsmasq]=0 [udhcpd]=1 [pihole]=0)
-for t in kea isc-dhcp dnsmasq udhcpd pihole; do
-	[ "$(source_version_cmd "$t")" = $'kernel\tuname -r' ] || bad "$t: version $(source_version_cmd "$t")"
+declare -A want_mask=([kea]=0 [isc-dhcp]=0 [dnsmasq]=0 [udhcpd]=1 [pihole]=0 [openwrt]=1)
+for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt; do
+	want_version=$'kernel\tuname -r'
+	[ "$t" != openwrt ] || want_version=$'openwrt\t'"$openwrt_version"
+	[ "$(source_version_cmd "$t")" = "$want_version" ] || bad "$t: version $(source_version_cmd "$t")"
 	got=$(source_config_pairs "$t" | tr '\n' ' ')
 	[ "$got" = "${want_pairs[$t]} " ] || bad "$t: pairs $got"
 	[ "$(source_stock_cmd "$t" x.stock)" = "sudo cat /root/lab-stock-config/x.stock" ] || bad "$t: stock read"
@@ -59,7 +62,7 @@ echo "${!#}" >>"$SSH_LOG"
 echo "option=1"
 STUB
 chmod +x "$tmp/bin/ssh"
-for t in kea isc-dhcp dnsmasq udhcpd pihole; do
+for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt; do
 	: >"$tmp/ssh.log"
 	want=""
 	for p in ${want_pairs[$t]}; do

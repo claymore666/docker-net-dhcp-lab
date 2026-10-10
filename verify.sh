@@ -55,6 +55,9 @@ echo "== fetch-base-image.sh: archives decompress and convert, a mismatching sum
 echo "== source-types.sh: per-type version and config reads; every schema type has an arm =="
 ./scripts/source-types-test.sh
 
+echo "== build-openwrt-image.sh: the overlay has no br-lan, odhcpd off, an id that follows the cell (lab #9) =="
+./scripts/build-openwrt-image-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.
