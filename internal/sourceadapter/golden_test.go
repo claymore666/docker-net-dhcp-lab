@@ -53,6 +53,9 @@ func (g *goldenRunner) Run(ctx context.Context, cmd string) (string, error) {
 	case cmd == "sudo cat "+dnsmasqLabV6Conf:
 		g.calls = append(g.calls, cmd)
 		return "enable-ra\ndhcp-range=fd42:200:0:100::100,fd42:200:0:100::1ff,slaac,64,2h\n", nil
+	case strings.HasPrefix(cmd, "ip route get "):
+		g.calls = append(g.calls, cmd)
+		return "10.200.1.150 via 10.200.1.1 dev eth1 src 10.200.1.2 uid 0 \n", nil
 	case strings.HasPrefix(cmd, "ip neigh show "):
 		g.calls = append(g.calls, cmd)
 		return "10.200.1.150 lladdr 02:aa:bb:cc:dd:ee REACHABLE\n", nil
@@ -262,8 +265,20 @@ func TestKeaBehindTheRelaySendsTheBareCommands(t *testing.T) {
 		p.Source = source
 		_, _ = s.run(context.Background(), bare, gb)
 		_, _ = s.run(context.Background(), WithRelay(inner, relay, p), gw)
-		if strings.Join(gw.calls, "\n") != strings.Join(gb.calls, "\n") {
-			t.Errorf("%s: behind the relay kea sent\n%q\nbare\n%q", s.name, gw.calls, gb.calls)
+		bareCalls := gb.calls
+		if strings.HasPrefix(s.name, "SendForceRenew") {
+			// F8 behind a relay asks for the next hop first (#11).
+			bareCalls = nil
+			for _, c := range gb.calls {
+				if strings.HasPrefix(c, "ip neigh show 10.200.1.150") {
+					bareCalls = append(bareCalls, "ip route get 10.200.1.150", "ip neigh show 10.200.1.1 dev eth1")
+					continue
+				}
+				bareCalls = append(bareCalls, c)
+			}
+		}
+		if strings.Join(gw.calls, "\n") != strings.Join(bareCalls, "\n") {
+			t.Errorf("%s: behind the relay kea sent\n%q\nbare\n%q", s.name, gw.calls, bareCalls)
 		}
 	}
 }

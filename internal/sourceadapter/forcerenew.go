@@ -21,9 +21,14 @@ type ForceRenewParams struct {
 	Server    string
 	Nonce     []byte
 	AckReplay uint64
+	// Offlink sends to the source's next hop for Addr, not to Addr's own
+	// MAC: behind a relay the client is on another subnet (#11, F8).
+	Offlink bool
 }
 
 const forceRenewScriptPath = "/run/lab/forcerenew-send.py"
+
+var routeViaRE = regexp.MustCompile(`\bvia ([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b`)
 
 var neighMACRE = regexp.MustCompile(`\blladdr ([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b`)
 
@@ -73,13 +78,27 @@ func (h host) sendForceRenew(ctx context.Context, r Runner, script []byte, p For
 	if err := reachable(ctx, r, addr); err != nil {
 		return "", fmt.Errorf("forcerenew: %w", err)
 	}
-	neigh, err := r.Run(ctx, fmt.Sprintf("ip neigh show %s dev %s", addr, h.nic))
+	neighOf := addr
+	if p.Offlink {
+		route, err := r.Run(ctx, "ip route get "+addr)
+		if err != nil {
+			return "", fmt.Errorf("forcerenew: ip route get %s: %w", addr, err)
+		}
+		v := routeViaRE.FindStringSubmatch(route)
+		if v == nil {
+			return "", fmt.Errorf("forcerenew: %s has no next hop on the source (%q), but this cell is behind a relay", addr, strings.TrimSpace(route))
+		}
+		if neighOf, err = validateAddr(v[1]); err != nil {
+			return "", err
+		}
+	}
+	neigh, err := r.Run(ctx, fmt.Sprintf("ip neigh show %s dev %s", neighOf, h.nic))
 	if err != nil {
-		return "", fmt.Errorf("forcerenew: read the neighbour entry for %s: %w", addr, err)
+		return "", fmt.Errorf("forcerenew: read the neighbour entry for %s: %w", neighOf, err)
 	}
 	m := neighMACRE.FindStringSubmatch(strings.ToLower(neigh))
 	if m == nil {
-		return "", fmt.Errorf("forcerenew: no neighbour MAC for %s on %s: %q", addr, h.nic, strings.TrimSpace(neigh))
+		return "", fmt.Errorf("forcerenew: no neighbour MAC for %s on %s: %q", neighOf, h.nic, strings.TrimSpace(neigh))
 	}
 	if _, err := r.Run(ctx, fmt.Sprintf("sudo mkdir -p /run/lab && sudo tee %s >/dev/null <<'LABEOF'\n%sLABEOF\n", forceRenewScriptPath, body)); err != nil {
 		return "", fmt.Errorf("forcerenew: write the sender to %s: %w", forceRenewScriptPath, err)

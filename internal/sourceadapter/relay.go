@@ -122,6 +122,44 @@ func (a *relayAdapter) Capabilities() []Capability {
 	return append(caps, CapRelay)
 }
 
+// relayNAReasons say why the relay cell leaves a capability out (#11,
+// RFC 3046): the N/A verdict carries them through NAExplainer. dhcrelay
+// -4 relays DHCPv4 only and an RA never crosses it, hence the group D text.
+var relayNAReasons = map[Capability]string{
+	CapSquatter:        "relay cell: a squatter on the server segment is invisible to clients, by design",
+	CapRogueServer:     "relay cell: a squatter on the server segment is invisible to clients, by design",
+	CapRenumber:        "relay cell: renumbering needs the relay leg renumbered too",
+	CapFailoverPair:    "relay cell: one source behind one relay, no failover peer; the failover pair cell carries C5 (claymore666/docker-net-dhcp-lab#12)",
+	CapDNSRegistration: "relay cell: the Kea source serves no DNS, so register_dns has nothing to register with",
+}
+
+const relayV6Reason = "relay cell: dhcrelay -4 relays DHCPv4 only and no router advertisement crosses the relay, so the client segment gets no DHCPv6 and no RA from the source"
+
+// NAReason names the relay cell's own reason first and falls back to the
+// inner adapter's, so a capability the source itself lacks keeps its text.
+func (a *relayAdapter) NAReason(c Capability) (string, bool) {
+	if why, ok := relayNAReasons[c]; ok {
+		return why, true
+	}
+	if slices.Contains(relayDropped, c) {
+		return relayV6Reason, true
+	}
+	if x, ok := a.Adapter.(NAExplainer); ok {
+		return x.NAReason(c)
+	}
+	return "", false
+}
+
+var _ NAExplainer = (*relayAdapter)(nil)
+
+// SendForceRenew aims the frame at the source's next hop for the client
+// (#11): the container is off-link, so its own MAC is never in the
+// source's neighbour table.
+func (a *relayAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
+	p.Offlink = true
+	return a.Adapter.SendForceRenew(ctx, script, p)
+}
+
 func (a *relayAdapter) Ready(ctx context.Context) error {
 	if err := a.Adapter.Ready(ctx); err != nil {
 		return err
