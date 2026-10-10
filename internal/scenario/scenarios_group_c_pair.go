@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -106,6 +107,14 @@ func c5Rebind(msgs []DHCPMsg, addr, serverID string, from, until time.Time) (DHC
 	return DHCPMsg{}, DHCPMsg{}, false
 }
 
+// c5Windows is T1, T2 and the expiry of a lease the ACK gave for lease
+// (RFC 2131 4.4.5). An ISC pair's first lease is its 60 s MCLT whatever
+// default-lease-time says, so the windows come from option 51 alone
+// (measured, lab #12).
+func c5Windows(bind time.Time, lease time.Duration) (t1, t2, expiry time.Time) {
+	return bind.Add(lease / 2), bind.Add(lease * 7 / 8), bind.Add(lease)
+}
+
 // runC5Tuned -- the peer that granted the lease stops at bind + 10 s:
 // the client's T1 renewal to it goes unanswered and its T2 rebind must
 // be ACKed by the survivor before the lease expires.
@@ -128,7 +137,7 @@ func runC5Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 		return blocked(NameC5, e.Cell, e.Shape, fmt.Sprintf("the bound ACK's server-id %q is neither peer's: the granting peer is unknown", b.bindMsg.Server), e.GitSHA)
 	}
 	deadID, survivorID := b.bindMsg.Server, serverID(pc, survivor)
-	t1, t2, expiry := b.bindAt.Add(lease/2), b.bindAt.Add(lease*7/8), b.bindAt.Add(lease)
+	t1, t2, expiry := c5Windows(b.bindAt, lease)
 	if err := sleepUntil(ctx, b.bindAt.Add(t.stopAfter)); err != nil {
 		return blocked(NameC5, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
@@ -240,6 +249,19 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		c5Back(bCleanupCtx(ctx), pc, o.primary, t)
 		_ = restore(bCleanupCtx(ctx))
 	}
+	var half []string
+	if pc.Profile().SplitPool {
+		r, ok := pc.(sourceadapter.PoolSplitReader)
+		if !ok {
+			v := blocked(scenario, e.Cell, e.Shape, "the pair splits its pool but offers no read of the primary's backup half", e.GitSHA)
+			return o, cleanup, &v
+		}
+		var err error
+		if half, err = r.PeerBackupAddrs(ctx, o.primary); err != nil || len(half) == 0 {
+			v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the primary's table names no backup (partner half) address before the stop: %v", err), e.GitSHA)
+			return o, cleanup, &v
+		}
+	}
 	if err := pc.StopPeer(ctx, o.primary); err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("could not stop the primary %s: %v", o.primary, err), e.GitSHA)
 		return o, cleanup, &v
@@ -282,6 +304,10 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		return o, cleanup, &v
 	default:
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the ACK's server-id %q is neither peer's", o.ack.Server), e.GitSHA)
+		return o, cleanup, &v
+	}
+	if half != nil && !slices.Contains(half, o.addr) {
+		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the partner leased %s, which the primary did not list as the partner's half (%d backup addresses) before the stop: the survivor did not serve its own half, so what it proved is not the half-pool takeover", o.addr, len(half)), e.GitSHA)
 		return o, cleanup, &v
 	}
 	snap := evidencePath(e, scenario, "partner-leases")
