@@ -11,7 +11,7 @@ import (
 )
 
 // Group D part 2 judges (#23): D3 (ipv6_mode=auto against the RA's M and
-// A bits), D4 (two prefixes), F6 (prefix delegation) and F7 (PREF64).
+// A bits), D4 (two prefixes), prefix delegation and PREF64.
 // Every flag and prefix is read from the capture, never from the RAParams
 // the row asked for (design defeat 6).
 
@@ -321,7 +321,7 @@ func judgeF6(o d1Obs, serverPD bool, pool netip.Prefix, routes string, h healthE
 	return fOK("%s; IA_PD %s delegated from %s, in the source's table, routed as %q, in delegated_prefixes", d1.Reason, pd, pool, line)
 }
 
-// f7Reads is what F7 reads inside the container and from the plugin.
+// f7Reads is what the PREF64 row reads inside the container and from the plugin.
 type f7Reads struct {
 	Addrs           []addr6
 	Routes, Routes2 string

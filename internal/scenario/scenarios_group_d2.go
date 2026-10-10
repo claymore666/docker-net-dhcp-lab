@@ -18,7 +18,7 @@ import (
 // changed turns the verdict BLOCKED (DESIGN-23d, "Ready/Recover").
 
 // v6Plan is what a row advertises beside the cell's Subnet6 /64: the
-// second PIO (D4), the PREF64 /96 (F7) and the PD pool (F6), all inside
+// second PIO (D4), the PREF64 /96 and the PD pool, all inside
 // the cell's /56 so no two cells overlap (DESIGN-23d, "RA/v6 source").
 type v6Plan struct {
 	Second, Pref64, PDPool netip.Prefix
@@ -549,7 +549,7 @@ func runF6(ctx context.Context, e Env) (v Verdict) {
 	return fFinish(NameF6, e, judgeF6(o, serverPD, plan.PDPool, routes, h, found), "", ev)
 }
 
-// f7Settle is the gap between F7's two reads of the container: RAs keep
+// f7Settle is the gap between the PREF64 row's two reads of the container: RAs keep
 // arriving and nothing they carry may change it.
 const f7Settle = 15 * time.Second
 

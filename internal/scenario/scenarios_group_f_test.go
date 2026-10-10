@@ -495,7 +495,7 @@ func (a *fakeAdapter) featureEnabled() int { return len(a.features) }
 
 // ---- catalog ----
 
-// F6 and F7 run wherever the IPv6 segment is: dnsmasq declares neither
+// The prefix delegation and PREF64 rows run wherever the IPv6 segment is: dnsmasq declares neither
 // CapPD nor CapPref64 and is the documented negative case of each (#23).
 func TestGroupFPartTwoRowsRunOnEveryV6Source(t *testing.T) {
 	for _, name := range []string{NameF6, NameF7} {

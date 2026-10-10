@@ -34,7 +34,7 @@ const (
 	// FeatureTemporary6 grants IA_TA from the source's temp6_pool
 	// (F5-temporary-address, RFC 8415 section 21.5).
 	FeatureTemporary6 Feature = "temporary-6"
-	// FeaturePD delegates /64s from FeatureParams.PDPool (F6, RFC 8415
+	// FeaturePD delegates /64s from FeatureParams.PDPool (RFC 8415
 	// section 6.3): Kea pd-pools, ISC prefix6.
 	FeaturePD Feature = "pd"
 )

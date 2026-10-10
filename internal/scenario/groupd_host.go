@@ -151,7 +151,7 @@ func containerRoute6(ctx context.Context, r sourceadapter.Runner, name string) (
 type healthEndpoint struct {
 	Endpoint             string `json:"endpoint"`
 	IPv6TemporaryAddress string `json:"ipv6_temporary_address"`
-	// DelegatedPrefixes (v2.5.0, F6) and NAT64Prefixes (v2.4.0, F7) are
+	// DelegatedPrefixes (v2.5.0, prefix delegation) and NAT64Prefixes (v2.4.0, PREF64) are
 	// absent when there are none (docs/reference.md, "Plugin.Health").
 	DelegatedPrefixes []healthPrefix `json:"delegated_prefixes"`
 	NAT64Prefixes     []string       `json:"nat64_prefixes"`

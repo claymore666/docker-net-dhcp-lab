@@ -39,7 +39,7 @@ func (a *KeaAdapter) EnableFeature(ctx context.Context, f Feature, p FeaturePara
 		edits := []configEdit{{keaRapidCommit6RE, `"rapid-commit": true`, "the subnet6 rapid-commit flag"}}
 		return enableFeatureViaSubstitution(ctx, a.Runner, keaDHCP6Conf, `"rapid-commit": true`, edits, a.restart6, "kea")
 	case FeaturePD:
-		// Kea ARM "Subnet and Prefix Delegation Pools": /64 per client (F6, #23).
+		// Kea ARM "Subnet and Prefix Delegation Pools": /64 per client (#23).
 		pd := fmt.Sprintf(`${1}, "pd-pools": [ { "prefix": "%s", "prefix-len": %d, "delegated-len": 64 } ]`, v.pdPool.Addr(), v.pdPool.Bits())
 		edits := []configEdit{{keaPool6RE, pd, "the subnet6 pools list"}}
 		return enableFeatureViaSubstitution(ctx, a.Runner, keaDHCP6Conf, `"pd-pools"`, edits, a.restart6, "kea")

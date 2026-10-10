@@ -40,7 +40,7 @@ func (a *ISCDHCPAdapter) EnableFeature(ctx context.Context, f Feature, p Feature
 			func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 	case FeaturePD:
 		// dhcpd.conf(5) prefix6: low and high are the first and the last
-		// /64 of the pool (F6, #23).
+		// /64 of the pool (#23).
 		first, last := pdBounds(v.pdPool)
 		edits := []configEdit{{iscRange6RE, fmt.Sprintf("${1}${2}\n${1}prefix6 %s %s /64;", first, last), "the range6 line"}}
 		return enableFeatureViaSubstitution(ctx, a.Runner, iscDHCP6Conf, "prefix6 ", edits,
