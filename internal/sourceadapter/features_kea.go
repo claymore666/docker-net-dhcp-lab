@@ -18,6 +18,9 @@ var (
 	// keaRapidCommit6RE anchors on the subnet6 flag kea-dhcp6.conf
 	// carries off at baseline (cloud-init/kea-user-data).
 	keaRapidCommit6RE = regexp.MustCompile(`"rapid-commit": false`)
+	// keaPool6RE anchors on the one-line subnet6 pools list; the v4 pools
+	// span lines, so only the v6 one matches (cloud-init/kea-user-data).
+	keaPool6RE = regexp.MustCompile(`("pools": \[ \{ "pool": "[0-9a-f:]+ - [0-9a-f:]+" \} \])`)
 )
 
 // EnableFeature rewrites the running kea-dhcp4.conf (#20). Kea 2.6.3
@@ -31,9 +34,15 @@ func (a *KeaAdapter) EnableFeature(ctx context.Context, f Feature, p FeaturePara
 	if err != nil {
 		return nil, err
 	}
-	if f == FeatureRapidCommit6 {
+	switch f {
+	case FeatureRapidCommit6:
 		edits := []configEdit{{keaRapidCommit6RE, `"rapid-commit": true`, "the subnet6 rapid-commit flag"}}
 		return enableFeatureViaSubstitution(ctx, a.Runner, keaDHCP6Conf, `"rapid-commit": true`, edits, a.restart6, "kea")
+	case FeaturePD:
+		// Kea ARM "Subnet and Prefix Delegation Pools": /64 per client (F6, #23).
+		pd := fmt.Sprintf(`${1}, "pd-pools": [ { "prefix": "%s", "prefix-len": %d, "delegated-len": 64 } ]`, v.pdPool.Addr(), v.pdPool.Bits())
+		edits := []configEdit{{keaPool6RE, pd, "the subnet6 pools list"}}
+		return enableFeatureViaSubstitution(ctx, a.Runner, keaDHCP6Conf, `"pd-pools"`, edits, a.restart6, "kea")
 	}
 	var edits []configEdit
 	var already string

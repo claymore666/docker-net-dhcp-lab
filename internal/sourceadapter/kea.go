@@ -37,7 +37,7 @@ func (a *KeaAdapter) Capabilities() []Capability {
 }
 
 func (a *KeaAdapter) allCapabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop}
 }
 
 const keaLeaseCmd = `curl -sf -X POST -H "Content-Type: application/json" ` +

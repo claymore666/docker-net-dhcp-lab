@@ -32,7 +32,7 @@ func (a *ISCDHCPAdapter) Capabilities() []Capability {
 }
 
 func (a *ISCDHCPAdapter) allCapabilities() []Capability {
-	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6}
+	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop}
 }
 
 // iscLeaseFile is the on-disk lease table this adapter reads directly

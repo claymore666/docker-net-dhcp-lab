@@ -90,6 +90,11 @@ type fakeAdapter struct {
 	raErr      error
 	raOffs     int
 	raRestores int
+	raParams   []sourceadapter.RAParams
+	// v6Stops and v6StopRestores count StopV6Server and its restores.
+	v6StopErr      error
+	v6Stops        int
+	v6StopRestores int
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -204,12 +209,20 @@ func (f *fakeAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error)
 	}
 	return f.leases6, f.leases6Err
 }
-func (f *fakeAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
+func (f *fakeAdapter) SetRA(_ context.Context, p sourceadapter.RAParams) (func(context.Context) error, error) {
 	if f.raErr != nil {
 		return nil, f.raErr
 	}
 	f.raOffs++
+	f.raParams = append(f.raParams, p)
 	return func(context.Context) error { f.raRestores++; return nil }, nil
+}
+func (f *fakeAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	if f.v6StopErr != nil {
+		return nil, f.v6StopErr
+	}
+	f.v6Stops++
+	return func(context.Context) error { f.v6StopRestores++; return nil }, nil
 }
 func (f *fakeAdapter) SendForceRenew(_ context.Context, _ []byte, p sourceadapter.ForceRenewParams) (string, error) {
 	f.forceRenews = append(f.forceRenews, p)

@@ -92,6 +92,12 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 			h.links = ""
 		}
 		return "", nil
+	case strings.HasPrefix(cmd, "sudo ip -6 addr add "):
+		h.addrs6 += strings.Fields(cmd)[5] + " "
+		return "", nil
+	case strings.HasPrefix(cmd, "sudo ip -6 addr del "):
+		h.addrs6 = strings.Replace(h.addrs6, strings.Fields(cmd)[5]+" ", "", 1)
+		return "", nil
 	case strings.Contains(cmd, "systemctl restart"):
 		h.active = true
 		delete(h.stopped, cmd[strings.LastIndex(cmd, " ")+1:])

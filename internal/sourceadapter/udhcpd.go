@@ -184,6 +184,10 @@ func (a *UdhcpdAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Con
 	return nil, errors.New("udhcpd: " + udhcpdNAReasons[CapV6])
 }
 
+func (a *UdhcpdAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return nil, errors.New("udhcpd: " + udhcpdNAReasons[CapV6])
+}
+
 // ReserveClientID is refused: udhcpd has no client-id handling (lab #10,
 // DESIGN-910 3.1).
 func (a *UdhcpdAdapter) ReserveClientID(ctx context.Context, clientID, addr string) error {

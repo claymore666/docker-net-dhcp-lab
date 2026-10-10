@@ -660,3 +660,6 @@ func (a *sequencedLeaseAdapter) Leases6(_ context.Context) ([]sourceadapter.Leas
 func (a *sequencedLeaseAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *sequencedLeaseAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

@@ -118,3 +118,6 @@ func (a *countingReachAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease
 func (a *countingReachAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *countingReachAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}

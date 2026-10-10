@@ -69,6 +69,9 @@ func (f *fakePeer) Leases6(context.Context) ([]Lease6, error) { return nil, f.re
 func (f *fakePeer) SetRA(context.Context, RAParams) (func(context.Context) error, error) {
 	return f.restorable("SetRA")
 }
+func (f *fakePeer) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return f.restorable("StopV6Server")
+}
 func (f *fakePeer) SendForceRenew(context.Context, []byte, ForceRenewParams) (string, error) {
 	return "sent", f.rec("SendForceRenew")
 }
@@ -394,7 +397,7 @@ func TestPairCapabilities(t *testing.T) {
 	fp.b.caps = []Capability{CapV4, CapImpair, CapReserveMAC, CapRenumber, CapNarrowPool}
 	got := fp.pair.Capabilities()
 	// The partner is v4-only, so v6 comes from the primary alone (lab #12).
-	want := []Capability{CapV4, CapReserveMAC, CapNarrowPool, CapV6, CapRapidCommit6, CapFailoverPair}
+	want := []Capability{CapV4, CapReserveMAC, CapNarrowPool, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop, CapFailoverPair}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
