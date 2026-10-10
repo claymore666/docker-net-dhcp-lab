@@ -78,6 +78,10 @@ echo "== versions =="
 		echo "relay kernel: $(ssh_run "$relay_mgmt_ip" "uname -r")"
 		echo "relay isc-dhcp-relay: $(ssh_run "$relay_mgmt_ip" "dpkg-query -W -f '\${Version}' isc-dhcp-relay")"
 	fi
+	# Pi-hole's installer is not pinned (#10), so the run records what it got.
+	if [ "$source_type" = pihole ]; then
+		echo "source pihole: $(ssh_run "$source_mgmt_ip" "sudo pihole -v 2>&1 | tr '\n' ';'" || echo unavailable)"
+	fi
 } >"$EVIDENCE_DIR/${CELL}-versions.txt"
 
 echo "== config diff from stock =="

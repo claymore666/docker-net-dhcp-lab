@@ -351,3 +351,30 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: pihole
+    description: >
+      Pi-hole 6 (FTL, an embedded dnsmasq), installed by its own unattended
+      installer on Debian 13; scenario edits go to a lab-owned file under
+      /etc/dnsmasq.d. Issue #10.
+    segment:
+      bridge: lab-br-pihole
+      subnet: 10.200.13.0/24
+    source:
+      type: pihole
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.131/24
+      seg_address: 10.200.13.2/24
+      pool_start: 10.200.13.100
+      pool_end: 10.200.13.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.130/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

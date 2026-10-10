@@ -52,6 +52,7 @@ var baselines = map[string]struct{ tmpl, path string }{
 	"kea-ha":   {"kea-ha-user-data.tmpl.yaml", "/etc/kea/kea-dhcp4.conf"},
 	"isc-dhcp": {"isc-dhcp-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"},
 	"dnsmasq":  {"dnsmasq-user-data.tmpl.yaml", "/etc/dnsmasq.conf"},
+	"pihole":   {"pihole-user-data.tmpl.yaml", "/etc/dnsmasq.d/90-lab.conf"},
 }
 
 // cfgRunner is a source whose config file the adapter reads and writes;
@@ -86,7 +87,12 @@ func (c *cfgRunner) Run(_ context.Context, cmd string) (string, error) {
 	return "", nil
 }
 
-func featureAdapter(name string, r Runner) Adapter { return groupBAdapters(r)[name] }
+func featureAdapter(name string, r Runner) Adapter {
+	if name == "pihole" {
+		return &PiholeAdapter{Runner: r}
+	}
+	return groupBAdapters(r)[name]
+}
 
 func baselineRunner(t *testing.T, name string) *cfgRunner {
 	b := baselines[name]

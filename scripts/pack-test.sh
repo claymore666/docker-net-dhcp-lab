@@ -331,6 +331,49 @@ option	staticroutes	10.0.0.0/8 10.127.0.1, 10.11.12.0/24 10.11.12.1
 FIXTURE_EOF
 }
 
+# pihole.toml as Pi-hole 6 writes it (FTL v6.7.1, #10): vendor help text
+# with example addresses in comments, and each key the cell sets marked
+# "### CHANGED, default = D". stock_pihole is the same file with every
+# marked key back at its default.
+live_pihole() {
+	cat <<'FIXTURE_EOF'
+# Pi-hole configuration file (v6.4.3)
+[dns]
+  # Array of upstream DNS servers used by Pi-hole
+  # Example: [ "8.8.8.8", "127.0.0.1#5335", "docker-resolver" ]
+  upstreams = [ ]
+
+  # The interface for DNS
+  interface = "eth1" ### CHANGED, default = ""
+
+  # Listening mode
+  listeningMode = "BIND" ### CHANGED, default = "LOCAL"
+
+[dhcp]
+  # Is the DHCP server enabled?
+  active = true ### CHANGED, default = false
+
+  # Start address of the DHCP address pool
+  # Example: start = "192.168.0.10"
+  start = "10.200.1.100" ### CHANGED, default = ""
+
+  # Router (gateway) address
+  # Examples: "192.168.0.0/16", "10.0.1.39"
+  router = "10.200.1.2" ### CHANGED, default = ""
+
+  # Lease time
+  leaseTime = "12h" ### CHANGED, default = ""
+
+[misc]
+  # Read /etc/dnsmasq.d
+  etc_dnsmasq_d = true ### CHANGED, default = false
+FIXTURE_EOF
+}
+
+stock_pihole() {
+	live_pihole | sed -E 's/^([[:space:]]*[A-Za-z0-9_]+ = ).* ### CHANGED, default = (.*)$/\1\2/'
+}
+
 # live_from_template FILE N prints the Nth heredoc of a cloud-init template
 # (the config the cell writes), placeholders replaced by lab addresses.
 live_from_template() {
@@ -381,6 +424,11 @@ source_tree() {
 	udhcpd)
 		stock_udhcpd >"$d/root/lab-stock-config/udhcpd.conf.stock"
 		live_from_template "$t/udhcpd-user-data.tmpl.yaml" 1 >"$d/etc/udhcpd.conf"
+		;;
+	pihole)
+		mkdir -p "$d/etc/pihole"
+		stock_pihole >"$d/root/lab-stock-config/pihole.toml.stock"
+		live_pihole >"$d/etc/pihole/pihole.toml"
 		;;
 	esac
 }
@@ -465,7 +513,7 @@ packed_vs_files() {
 }
 
 # new_capture OUT-DIR TYPE: lays out a tree and runs the real capture.
-cfg_types="kea isc-dhcp dnsmasq"
+cfg_types="kea isc-dhcp dnsmasq pihole"
 for ty in $cfg_types; do
 	tree="$tmp/tree-$ty"
 	source_tree "$ty" "$tree"
@@ -491,6 +539,7 @@ for ty in $cfg_types; do
 		isc-dhcp:/etc/dhcp/dhcpd.conf) sf="$tree/root/lab-stock-config/dhcpd.conf.stock" ;;
 		isc-dhcp:/etc/default/isc-dhcp-server) sf="$tree/root/lab-stock-config/isc-dhcp-server.stock" ;;
 		dnsmasq:/etc/dnsmasq.conf) sf="$tree/root/lab-stock-config/dnsmasq.conf.stock" ;;
+		pihole:/etc/pihole/pihole.toml) sf="$tree/root/lab-stock-config/pihole.toml.stock" ;;
 		esac
 		effective "$sf" >"$tmp/want-stock"
 		effective "$tree$p" >"$tmp/want-live"
@@ -516,6 +565,45 @@ for ty in $cfg_types; do
 		;;
 	esac
 done
+
+# pihole-code-address-refused, pihole-trailing-comment-address-refused,
+# pihole-mask-is-pihole-only (#10): the
+# source-pihole case above passes with vendor examples in the toml's
+# comments; a real address on a code line still refuses, and the same
+# comments still refuse when the capture is a dnsmasq one.
+tree="$tmp/tree-pihole-code"
+source_tree pihole "$tree"
+sed -i 's|^  router = "10.200.1.2" ### CHANGED, default = ""$|  router = "192.168.0.1" ### CHANGED, default = ""|' "$tree/etc/pihole/pihole.toml"
+grep -qF 'router = "192.168.0.1"' "$tree/etc/pihole/pihole.toml" || { echo "pack-test: FAIL -- pihole-code-address-refused: the fixture edit did not apply" >&2; fail=1; }
+ev=$(new_dir)
+if run_capture pihole "$tree" "$ev"; then
+	echo "pack-test: FAIL -- pihole-code-address-refused: capture exited 0 over a code-line address" >&2
+	fail=1
+elif ! grep -qF 'code lines only' "$tmp/capture.err"; then
+	echo "pack-test: FAIL -- pihole-code-address-refused: refusal did not name the line scope" >&2
+	fail=1
+elif ! grep -qF "line(s) $(grep -nF 'router = "192.168.0.1"' "$tree/etc/pihole/pihole.toml" | cut -d: -f1)," "$tmp/capture.err"; then
+	echo "pack-test: FAIL -- pihole-code-address-refused: refusal did not name the line of the address in the file (comment lines must be blanked, not dropped)" >&2
+	fail=1
+fi
+tree="$tmp/tree-pihole-trailing"
+source_tree pihole "$tree"
+sed -i 's|^  leaseTime = "12h" ###|  leaseTime = "12h" # via 192.168.0.1 ###|' "$tree/etc/pihole/pihole.toml"
+grep -qF 'via 192.168.0.1' "$tree/etc/pihole/pihole.toml" || { echo "pack-test: FAIL -- pihole-trailing-comment-address-refused: the fixture edit did not apply" >&2; fail=1; }
+ev=$(new_dir)
+if run_capture pihole "$tree" "$ev"; then
+	echo "pack-test: FAIL -- pihole-trailing-comment-address-refused: capture exited 0 over an address after a code line" >&2
+	fail=1
+fi
+tree="$tmp/tree-pihole-as-dnsmasq"
+source_tree pihole "$tree"
+cp "$tree/etc/pihole/pihole.toml" "$tree/etc/dnsmasq.conf"
+cp "$tree/root/lab-stock-config/pihole.toml.stock" "$tree/root/lab-stock-config/dnsmasq.conf.stock"
+ev=$(new_dir)
+if run_capture dnsmasq "$tree" "$ev"; then
+	echo "pack-test: FAIL -- pihole-mask-is-pihole-only: a dnsmasq capture accepted comment-line vendor addresses" >&2
+	fail=1
+fi
 
 # Old stored format (a plain `diff -u` of the raw files) packs when the diff
 # covers both whole files, and the bundle on disk is not rewritten.

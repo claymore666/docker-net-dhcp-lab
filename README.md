@@ -20,7 +20,7 @@ flowchart TD
   host --> ctrl
 
   subgraph cell ["One cell: VMs on a segment with no route out"]
-    src["Source VM<br/>the DHCP server:<br/>Kea, ISC dhcpd, dnsmasq or udhcpd"]
+    src["Source VM<br/>the DHCP server:<br/>Kea, ISC dhcpd, dnsmasq, udhcpd or Pi-hole"]
     seg{{"Segment<br/>10.200.N.0/24"}}
     dock["Docker host VM<br/>Docker Engine and the<br/>docker-net-dhcp plugin"]
     obs["Observer<br/>records every packet<br/>on the segment"]
@@ -62,6 +62,7 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 <td align="center">ISC dhcpd</td>
 <td align="center">dnsmasq</td>
 <td align="center">udhcpd</td>
+<td align="center">Pi-hole</td>
 </tr>
 <tr>
 <td align="center"><a href="https://www.debian.org/">Debian</a> 13</td>
@@ -71,12 +72,15 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 <td align="center"><a href="https://github.com/isc-projects/dhcp">isc-projects/dhcp</a></td>
 <td align="center"><a href="https://thekelleys.org.uk/dnsmasq/doc.html">dnsmasq</a></td>
 <td align="center"><a href="https://busybox.net/">BusyBox</a> udhcpd</td>
+<td align="center"><a href="https://github.com/pi-hole/pi-hole">pi-hole/pi-hole</a></td>
 </tr>
 </table>
 
 At v0.1.0 the servers were the Debian 13 packages: Kea 2.6.3, ISC dhcpd
 4.4.3-P1, dnsmasq 2.91. The udhcpd cell (issue #10) uses the Debian 13
 package `udhcpd` 1:1.37.0-6, BusyBox 1.37; its host run is pending, host not
+cleared. The Pi-hole cell installs Pi-hole 6 with its own installer (FTL 6.7.1
+when first built), which is not pinned; its host run is pending, host not
 cleared. The Debian, Ubuntu and Docker marks belong to their owners; their files and
 licences are listed in [`docs/logos/`](docs/logos/README.md). No project
 named here endorses this lab.
@@ -85,8 +89,9 @@ The terms in the picture:
 
 - A **cell** is a small set of virtual machines on one isolated network:
   a Docker host with the plugin installed, and a DHCP server.
-- A **source** is the DHCP server in a cell: Kea, ISC dhcpd, dnsmasq or udhcpd,
-  apt-installed with its stock config plus an address pool.
+- A **source** is the DHCP server in a cell: Kea, ISC dhcpd, dnsmasq, udhcpd
+  or Pi-hole, installed with its stock config plus an address pool (for
+  Pi-hole the pool comes from the `pihole.toml` the lab writes).
 - A **shape** is one way of creating the Docker network: `bridge`,
   `macvlan`, `ipvlan`, and the plugin as IPAM driver on a bridge
   (`bridge-ipam`) or on a macvlan network (`macvlan-ipam`).
@@ -136,7 +141,7 @@ Group B runs today (IPv4; a scenario whose source lacks the feature reports N/A,
 |---|---|---|
 | B1 | reservation by MAC | the source reserves an address for a fixed MAC; the container must get it (not on ipvlan, which shares the parent's MAC) |
 | B2 | reservation by client id | the source reserves an address for the `client_id` option; the container must get it |
-| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq only) |
+| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq; Pi-hole expected, not yet confirmed on the host) |
 | B4 | same MAC, same address | a container is removed and a new one with the same MAC must get the same address from the same single lease |
 | B5 | vendor class pool | with `vendor_class` the source serves the address from the class pool |
 | B6 | option change on renewal | the source changes its DNS option; after the lease renews, the container's `resolv.conf` carries the new server |
@@ -189,8 +194,8 @@ Group F runs today (the plugin's client options, judged by the bytes the contain
 | F1 | user class pool | with `user_class` the container sends a short label naming its kind of client (DHCP option 77); the source serves that label from its own address range, outside the main one |
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
 | F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
-| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Kea and ISC answer as usual and the normal four messages follow |
-| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source grants it, so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
+| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Pi-hole's embedded dnsmasq is expected to (the host run has not confirmed it yet), Kea and ISC answer as usual and the normal four messages follow |
+| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source that serves DHCPv6 grants it (not udhcpd or Pi-hole, whose cells are DHCPv4 only), so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
 | F5 | temporary address | with `ipv6_temporary` the client also asks for a temporary address (IA_TA); ISC and dnsmasq grant one, which must be on the link beside the stable address, in the source's table and on `/Plugin.Health`, never in docker inspect. Kea grants none, so there the container must run as without the option |
 | F6 | prefix delegation | N/A on every source until the sources delegate prefixes (#23 group D part 2) |
 | F7 | NAT64 prefix | N/A on every source until the router advertisements carry one (#23 group D part 2) |
@@ -238,14 +243,32 @@ every push and PR).
 ## Bring up a source cell
 
 Kea, ISC dhcpd, dnsmasq and udhcpd each get their own cell, apt-installed with a
-stock config plus a pool (issue #2). A Go adapter reads each source's
-own lease table (control API, `dhcpd.leases`, the dnsmasq lease
-file, or `dumpleases` for udhcpd), never the plugin's own report.
+stock config plus a pool (issue #2). The Pi-hole cell runs Pi-hole's own
+installer on Debian 13 with a `pihole.toml` that turns DHCP on (issue
+#10). A Go adapter reads each source's own lease table (control API,
+`dhcpd.leases`, the dnsmasq lease file, `dumpleases` for udhcpd, or Pi-hole's
+`dhcp.leases`), never the plugin's own report.
 
 ```
-scripts/demo-source-cell.sh kea        # or isc-dhcp, dnsmasq, or udhcpd
+scripts/demo-source-cell.sh kea        # or isc-dhcp, dnsmasq, udhcpd, or pihole
 scripts/down-cell.sh kea <work-dir>
 ```
+
+| Source | Cell | Host run |
+|---|---|---|
+| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
+| udhcpd | `udhcpd` | pending, host not cleared |
+| Pi-hole | `pihole` | pending, host not cleared |
+
+Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
+`pihole.toml` on every start, so the lab never edits the toml: scenario
+changes go in `/etc/dnsmasq.d/90-lab.conf`, and reservations in
+`/etc/dnsmasq.d/lab-reservations.conf`. FTL owns the address range and the
+lease time there, so A14, B5, B6, C2, C3, C4, C5, C5c, C8, C9 and the
+user-class pool row report N/A on the Pi-hole cell, as do all DHCPv6 rows
+(D1 to D2b, DHCPv6 rapid commit, temporary address, prefix delegation and
+PREF64), because the cell is DHCPv4 only; the dnsmasq cell covers the first
+group.
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.

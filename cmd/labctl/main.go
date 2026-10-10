@@ -253,6 +253,8 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.DnsmasqAdapter{Runner: runner}, nil
 	case "udhcpd":
 		return &sourceadapter.UdhcpdAdapter{Runner: runner}, nil
+	case "pihole":
+		return &sourceadapter.PiholeAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}

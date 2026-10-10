@@ -1,7 +1,7 @@
 #!/bin/bash
 # up-source.sh's IPv6 gate is driven by the source type (lab #10, #23): a
 # type that serves DHCPv6 is refused without its v6 fields, a v4-only type
-# (udhcpd) passes without them and renders no v6 address. UP_SOURCE_RENDER_ONLY
+# (udhcpd, pihole) passes without them and renders no v6 address. UP_SOURCE_RENDER_ONLY
 # stops the script after the seed files, so no VM, image or key is touched.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -11,15 +11,34 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 fail=0
 
-# Case 1: the udhcpd cell passes and its network-config has no v6 address.
-if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh udhcpd "$tmp/w1" 2>&1); then
-	echo "up-source-test: udhcpd cell refused: $out" >&2
-	fail=1
-elif grep -q '::\|SEG_ADDR6\|""' "$tmp/w1/seed-source/network-config"; then
-	echo "up-source-test: udhcpd network-config carries a v6 address" >&2
-	cat "$tmp/w1/seed-source/network-config" >&2
-	fail=1
-fi
+# Case 1: each v4-only cell (udhcpd, pihole) passes and its network-config
+# has no v6 address. The placeholder up-source.sh hands the renderer for the
+# dropped item (the literal none) must never reach an address: no code line
+# contains it, and eth1's address list is exactly one IPv4 item.
+for typ in udhcpd pihole; do
+	w="$tmp/w1-$typ"
+	if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh "$typ" "$w" 2>&1); then
+		echo "up-source-test: $typ cell refused: $out" >&2
+		fail=1
+		continue
+	fi
+	nc="$w/seed-source/network-config"
+	if grep -q '::\|SEG_ADDR6\|""' "$nc"; then
+		echo "up-source-test: $typ network-config carries a v6 address" >&2
+		cat "$nc" >&2
+		fail=1
+	fi
+	if grep -v '^[[:space:]]*#' "$nc" | grep -qw 'none'; then
+		echo "up-source-test: $typ network-config carries the literal none" >&2
+		cat "$nc" >&2
+		fail=1
+	fi
+	eth1_addrs=$(awk '/set-name: eth1/{on=1;next} on && /addresses:/{print;exit}' "$nc")
+	if ! grep -qE '^[[:space:]]+addresses: \[[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}\]$' <<<"$eth1_addrs"; then
+		echo "up-source-test: $typ eth1 addresses is not exactly one IPv4 item: $eth1_addrs" >&2
+		fail=1
+	fi
+done
 
 # Case 2: the kea cell with its v6 fields passes and keeps the v6 address.
 if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh kea "$tmp/w2" 2>&1); then
