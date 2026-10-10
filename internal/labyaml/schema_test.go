@@ -536,6 +536,13 @@ func TestAcceptsUdhcpdSourceType(t *testing.T) {
 	}
 }
 
+func TestAcceptsPiholeSourceType(t *testing.T) {
+	ok := strings.Replace(withSource, "type: kea", "type: pihole", 1)
+	if _, err := Load(write(t, ok)); err != nil {
+		t.Fatalf("source.type pihole rejected: %v", err)
+	}
+}
+
 // D18 (DESIGN-910): C9 moves a cell's third octet by C9OctetShift; a cell
 // sitting on that target would share a bridge with the renumbered source.
 func TestRejectsCellOnAnotherCellsC9Target(t *testing.T) {
@@ -567,18 +574,20 @@ func TestRejectsCellOnAnotherCellsC9Target(t *testing.T) {
 }
 
 // Lab #10: the IPv6 block follows the source type. A v4-only server
-// (udhcpd) cannot sit on a cell with segment.subnet6, and SourceServesV6
-// is what labctl resolve hands up-source.sh.
+// (udhcpd, pihole) cannot sit on a cell with segment.subnet6, and
+// SourceServesV6 is what labctl resolve hands up-source.sh.
 func TestV4OnlySourceTypeRefusesSegmentSubnet6(t *testing.T) {
-	bad := strings.Replace(withSource6, "type: kea", "type: udhcpd", 1)
-	_, err := Load(write(t, bad))
-	if err == nil || !strings.Contains(err.Error(), "DHCPv4 only") {
-		t.Fatalf("udhcpd on a subnet6 cell: %v", err)
+	for _, typ := range []string{"udhcpd", "pihole"} {
+		bad := strings.Replace(withSource6, "type: kea", "type: "+typ, 1)
+		_, err := Load(write(t, bad))
+		if err == nil || !strings.Contains(err.Error(), "DHCPv4 only") {
+			t.Fatalf("%s on a subnet6 cell: %v", typ, err)
+		}
 	}
 }
 
 func TestSourceServesV6ByType(t *testing.T) {
-	for typ, want := range map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": false} {
+	for typ, want := range map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": false, "pihole": false} {
 		if got := SourceServesV6(typ); got != want {
 			t.Errorf("SourceServesV6(%s) = %v, want %v", typ, got, want)
 		}

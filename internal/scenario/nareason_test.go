@@ -177,3 +177,40 @@ func TestUdhcpdKeepsEveryV6ScenarioOffWithTheReason(t *testing.T) {
 		t.Fatalf("SetRA must refuse with the reason: %v", err)
 	}
 }
+
+// Pi-hole keeps the toml-owned scenarios and group D off through Applicable
+// with its own reason (lab #10, #23): FTL owns the range and the lease time
+// in pihole.toml and the lab never edits the toml.
+func TestPiholeKeepsTheTomlOwnedAndV6ScenariosOffWithTheReason(t *testing.T) {
+	a := &sourceadapter.PiholeAdapter{}
+	want := map[sourceadapter.Capability]string{
+		sourceadapter.CapShortLease:      "pihole.toml",
+		sourceadapter.CapNarrowPool:      "pihole.toml",
+		sourceadapter.CapRenumber:        "pihole.toml",
+		sourceadapter.CapVendorClassPool: "pihole.toml",
+		sourceadapter.CapUserClassPool:   "pihole.toml",
+		sourceadapter.CapV6:              "DHCPv4 only",
+	}
+	seen := map[sourceadapter.Capability]int{}
+	for _, s := range Catalog {
+		for _, need := range s.Needs {
+			frag, ok := want[need]
+			if !ok {
+				continue
+			}
+			seen[need]++
+			okRun, reason := Applicable(s, a)
+			if okRun {
+				t.Errorf("%s runs on pihole", s.Name)
+			}
+			if !strings.Contains(reason, frag) {
+				t.Errorf("%s: reason %q does not name %q", s.Name, reason, frag)
+			}
+		}
+	}
+	for c := range want {
+		if seen[c] == 0 {
+			t.Errorf("no catalog scenario needs %q; the test checks nothing for it", c)
+		}
+	}
+}

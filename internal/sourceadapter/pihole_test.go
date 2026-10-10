@@ -251,7 +251,7 @@ func TestPiholeFeatureSnippets(t *testing.T) {
 func TestPiholeReadyHoldsTheLabFileToItsBaseline(t *testing.T) {
 	ctx := context.Background()
 	h := healthyHost()
-	h.cfg = baselineConfig(t, "pihole-user-data.tmpl.yaml", "LABEOF")
+	h.cfg = baselineConfig(t, "pihole-user-data.tmpl.yaml", piholeLabConf)
 	orig := h.cfg
 	a := &PiholeAdapter{Runner: h}
 	if err := a.Ready(ctx); err != nil {
@@ -348,5 +348,55 @@ func TestPiholeTemplateOrdersTomlInstallerMarker(t *testing.T) {
 		if !strings.Contains(tmpl, want) {
 			t.Errorf("template lacks %q", want)
 		}
+	}
+}
+
+// Group D and the toml-owned scenarios stay off Pi-hole with a printed
+// reason (#10, DESIGN-910 5.2): every undeclared capability the lab knows
+// has one, a declared one has none, and the shared table keeps failover
+// and relay.
+func TestPiholeNAReasonCoversEveryUndeclaredCapabilityItKnows(t *testing.T) {
+	a := &PiholeAdapter{}
+	declared := map[Capability]bool{}
+	for _, c := range a.Capabilities() {
+		declared[c] = true
+		if _, ok := a.NAReason(c); ok {
+			t.Errorf("declared capability %q carries a N/A reason", c)
+		}
+	}
+	const toml = "Pi-hole's FTL owns dhcp-range and lease time in pihole.toml; the lab does not edit the toml."
+	for _, c := range []Capability{CapShortLease, CapNarrowPool, CapRenumber, CapVendorClassPool, CapUserClassPool} {
+		if declared[c] {
+			t.Errorf("%q is declared", c)
+		}
+		if why, ok := a.NAReason(c); !ok || why != toml {
+			t.Errorf("N/A reason for %q = %q, %v; want the toml reason verbatim", c, why, ok)
+		}
+	}
+	if why, ok := a.NAReason(CapV6); !ok || !strings.Contains(why, "DHCPv4 only") || !strings.Contains(why, "does not edit the toml") {
+		t.Errorf("the v6 reason must name the v4-only cell and the toml: %q, %v", why, ok)
+	}
+	_, pair := a.NAReason(CapFailoverPair)
+	_, relay := a.NAReason(CapRelay)
+	if pair || relay {
+		t.Error("failover and relay reasons belong to the shared table")
+	}
+}
+
+// Leases6 and SetRA are refused with the reason and run nothing: the cell
+// serves DHCPv4 only because the lab never edits the toml (#10).
+func TestPiholeRefusesV6AndRunsNothing(t *testing.T) {
+	r := &fakeRunner{}
+	a := &PiholeAdapter{Runner: r}
+	ctx := context.Background()
+	_, e1 := a.Leases6(ctx)
+	_, e2 := a.SetRA(ctx, RAParams{})
+	for i, err := range []error{e1, e2} {
+		if err == nil || !strings.Contains(err.Error(), "DHCPv4 only") || !strings.Contains(err.Error(), "toml") {
+			t.Errorf("refusal %d = %v, want the v4-only toml reason", i, err)
+		}
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("a refused call ran %q", r.calls)
 	}
 }
