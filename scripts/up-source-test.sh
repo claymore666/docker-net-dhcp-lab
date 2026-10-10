@@ -117,5 +117,25 @@ else
 	}
 fi
 
+# Case 6: the baked seed (#9) passes only when the cache's build id is
+# the one the build script derives from the cell as lab.yaml has it now;
+# a pool edit after the build is refused (defeat N2).
+cache="$tmp/cache"
+mkdir -p "$cache"
+LAB_PUBKEY="ssh-ed25519 AAAA render-only" ./scripts/build-openwrt-image.sh --id openwrt >"$cache/openwrt-25.12.5-x86-64.build-id"
+if ! out=$(LAB_IMAGE_CACHE="$cache" UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh openwrt "$tmp/w6" 2>&1); then
+	echo "up-source-test: openwrt refused a current build id: $out" >&2
+	fail=1
+fi
+sed '/^  - name: openwrt$/,$ s/pool_end: 10\.200\.15\.200/pool_end: 10.200.15.199/' lab.yaml >"$tmp/stale.yaml"
+if cmp -s lab.yaml "$tmp/stale.yaml"; then
+	echo "up-source-test: the openwrt pool edit did not apply" >&2
+	fail=1
+elif out=$(LAB_YAML="$tmp/stale.yaml" LAB_IMAGE_CACHE="$cache" UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh openwrt "$tmp/w6b" 2>&1) ||
+	! grep -q 'run scripts/build-openwrt-image.sh openwrt' <<<"$out"; then
+	echo "up-source-test: openwrt accepted a stale image: $out" >&2
+	fail=1
+fi
+
 [ "$fail" -eq 0 ] && echo "up-source-test: ok"
 exit "$fail"

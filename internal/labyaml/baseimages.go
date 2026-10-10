@@ -106,6 +106,16 @@ var baseImages = map[string]BaseImage{
 		Seed:      "qga",
 		Firmware:  "bios",
 	},
+	// Built by scripts/build-openwrt-image.sh, which bakes the cell's
+	// addresses and the lab user into the image (lab #9).
+	"openwrt-25.12.5-x86-64": {
+		Name:      "openwrt-25.12.5-x86-64",
+		Distro:    "openwrt",
+		Suite:     "25.12.5",
+		OSVariant: "linux2022",
+		Kind:      "built",
+		Seed:      "baked",
+	},
 }
 
 // LookupBaseImage returns name's registered image, or an error naming

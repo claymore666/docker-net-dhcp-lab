@@ -62,5 +62,19 @@ if [ "$ph_iface" -ne 1 ] || [ "$ph_bind" -ne 1 ] || [ "$ph_other" -ne 2 ]; then
 	fail=1
 fi
 
+# OpenWrt's dnsmasq takes its interfaces from the uci list in the image's
+# /etc/config/dhcp; lan is eth1 in its /etc/config/network (#9).
+ow=$(mktemp -d)
+LAB_PUBKEY="ssh-ed25519 AAAA bind-check" ./scripts/build-openwrt-image.sh --render openwrt "$ow" >/dev/null
+sed -n '/^config dnsmasq/,/^$/p' "$ow/etc/config/dhcp" >"$ow/dnsmasq-section"
+ow_iface=$(grep -c "^[[:space:]]*list interface 'lan'\$" "$ow/dnsmasq-section" || true)
+ow_other=$(grep -cE '^[[:space:]]*(list|option) (interface|notinterface|listen_address)[[:space:]]' "$ow/dnsmasq-section" || true)
+ow_dev=$(sed -n "/^config interface 'lan'\$/,/^\$/p" "$ow/etc/config/network" | grep -c "^[[:space:]]*option device 'eth1'\$" || true)
+rm -rf "$ow"
+if [ "$ow_iface" -ne 1 ] || [ "$ow_other" -ne 1 ] || [ "$ow_dev" -ne 1 ]; then
+	echo "source-bind-check: FAIL -- the OpenWrt overlay does not bind exactly lan on eth1" >&2
+	fail=1
+fi
+
 [ "$fail" -eq 0 ] || exit 1
-echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd, udhcpd and pihole all bind eth1 only"
+echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd, udhcpd, pihole and openwrt all bind eth1 only"

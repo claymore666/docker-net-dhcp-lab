@@ -56,6 +56,7 @@ func (s service) do(ctx context.Context, r Runner, action, label string) error {
 type host struct {
 	unit     func(name string) service
 	main     string
+	label    string // names the source in a refusal when main does not (lab #9)
 	nic      string
 	tc       string
 	portable bool
@@ -73,7 +74,11 @@ func (h host) svc() service { return h.unit(h.main) }
 // needPortable refuses what before any command reaches the source.
 func (h host) needPortable(what string) error {
 	if !h.portable {
-		return fmt.Errorf("%s: the %s source has no iproute2 netns, pgrep, tc or python3", what, h.main)
+		name := h.main
+		if h.label != "" {
+			name = h.label
+		}
+		return fmt.Errorf("%s: the %s source has no iproute2 netns, pgrep, tc or python3", what, name)
 	}
 	return nil
 }
