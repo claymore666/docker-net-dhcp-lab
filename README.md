@@ -259,6 +259,7 @@ scripts/down-cell.sh kea <work-dir>
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
 | udhcpd | `udhcpd` | pending, host not cleared |
 | Pi-hole | `pihole` | pending, host not cleared |
+| MikroTik CHR | `chr` | pending, host not cleared |
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
@@ -269,6 +270,15 @@ user-class pool row report N/A on the Pi-hole cell, as do all DHCPv6 rows
 (D1 to D2b, DHCPv6 rapid commit, temporary address, prefix delegation and
 PREF64), because the cell is DHCPv4 only; the dnsmasq cell covers the first
 group.
+
+The `chr` cell runs MikroTik's Cloud Hosted Router 7.24.5 (RouterOS, free
+licence, issue #9), seeded through its QEMU guest agent and driven with the
+RouterOS command line over ssh; it has no Linux shell. The rows that need a
+helper program on the source VM report N/A there: C6 and C6b (squatter), C7
+(rogue server), C10 (loss and latency) and F8-forcerenew. B3 is N/A because
+the router's resolver does not answer the segment in its stock config, and
+all DHCPv6 rows are N/A because the cell is DHCPv4 only (the seed turns
+IPv6 off).
 
 `labctl leases <source-type> <mgmt-ip> <known-hosts>` prints one
 source's table on its own, through the same adapter.

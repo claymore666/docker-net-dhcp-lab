@@ -214,3 +214,40 @@ func TestPiholeKeepsTheTomlOwnedAndV6ScenariosOffWithTheReason(t *testing.T) {
 		}
 	}
 }
+
+// The CHR has no shell for the source-side actors and serves DHCPv4 only
+// (#9): every catalog scenario that needs one of those is off with the
+// reason, never run.
+func TestRouterOSKeepsActorAndV6ScenariosOffWithTheReason(t *testing.T) {
+	a := &sourceadapter.RouterOSAdapter{}
+	want := map[sourceadapter.Capability]string{
+		sourceadapter.CapImpair:          "no shell",
+		sourceadapter.CapSquatter:        "no shell",
+		sourceadapter.CapRogueServer:     "no shell",
+		sourceadapter.CapForceRenewNonce: "no shell",
+		sourceadapter.CapDNSRegistration: "allow-remote-requests",
+		sourceadapter.CapV6:              "DHCPv4 only",
+	}
+	seen := map[sourceadapter.Capability]int{}
+	for _, s := range Catalog {
+		for _, need := range s.Needs {
+			frag, ok := want[need]
+			if !ok {
+				continue
+			}
+			seen[need]++
+			okRun, reason := Applicable(s, a)
+			if okRun {
+				t.Errorf("%s runs on routeros", s.Name)
+			}
+			if !strings.Contains(reason, frag) {
+				t.Errorf("%s: reason %q does not name %q", s.Name, reason, frag)
+			}
+		}
+	}
+	for c := range want {
+		if seen[c] == 0 {
+			t.Errorf("no catalog scenario needs %q; the test checks nothing for it", c)
+		}
+	}
+}

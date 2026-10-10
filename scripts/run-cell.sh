@@ -72,8 +72,9 @@ echo "== versions =="
 	echo "docker_host engine: $(ssh_run "$mgmt_ip" "sudo docker version --format '{{.Server.Version}}'")"
 	echo "docker_host kernel: $(ssh_run "$mgmt_ip" "uname -r")"
 	echo "source type: $source_type"
+	# RouterOS ends its lines in CR (#9).
 	for peer in $peers; do
-		echo "${peer%%=*} ${version_line%%$'\t'*}: $(ssh_run "${peer#*=}" "${version_line#*$'\t'}")"
+		echo "${peer%%=*} ${version_line%%$'\t'*}: $(ssh_run "${peer#*=}" "${version_line#*$'\t'}" | tr -d '\r')"
 	done
 	if [ -n "$relay_mgmt_ip" ]; then
 		echo "relay distro: $(ssh_run "$relay_mgmt_ip" ". /etc/os-release && echo \$PRETTY_NAME")"

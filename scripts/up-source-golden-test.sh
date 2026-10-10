@@ -2,7 +2,8 @@
 # up-source.sh's rendered seed files, its stdout and every qemu-img,
 # genisoimage, virt-install and ssh call for the five cloud-init source
 # types, pinned to the copy taken at dev b19470b before the per-seed-kind
-# hooks landed (#9), then the seed and image kind dispatch. Stubs on PATH
+# hooks landed (#9), then the seed and image kind dispatch and the qga
+# (CHR) hooks. Stubs on PATH
 # and a copy of the repo, no VM. LAB_GOLDEN_WRITE=1 rewrites the goldens.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -13,6 +14,7 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/repo/scripts" "$tmp/bin" "$tmp/home/.ssh"
 cp "$REPO_ROOT"/scripts/*.sh "$tmp/repo/scripts/"
 cp -r "$REPO_ROOT/cloud-init" "$tmp/repo/cloud-init"
+cp -r "$REPO_ROOT/routeros" "$tmp/repo/routeros"
 echo "ssh-ed25519 AAAAC3NzaGolden lab-controller" >"$tmp/home/.ssh/id_ed25519_lab.pub"
 
 cat >"$tmp/repo/scripts/fetch-base-image.sh" <<'EOF'
@@ -42,6 +44,23 @@ for s in qemu-img ssh-keygen sleep ssh; do
 	# shellcheck disable=SC2016 # the stub expands $@ when it runs, not here
 	printf '#!/bin/bash\n{ printf %q; printf " %%q" "$@"; echo; } >>"$STUB_LOG"\n' "$s" >"$tmp/bin/$s"
 done
+# The CHR's ready probe (#9) reads lab-ready, or the stock identity once
+# while $STUB_LOG.stock exists, or is refused while $STUB_LOG.lockout
+# exists; every other call logs as the generic stub does.
+cat >"$tmp/bin/ssh" <<'EOF'
+#!/bin/bash
+{ printf ssh; printf ' %q' "$@"; echo; } >>"$STUB_LOG"
+[ "${*: -1}" = ':put [/system identity get name]' ] || exit 0
+if [ -e "$STUB_LOG.stock" ]; then
+	rm -f "$STUB_LOG.stock"
+	echo MikroTik
+elif [ -e "$STUB_LOG.lockout" ]; then
+	echo 'lab@10.200.255.141: Permission denied (publickey).' >&2
+	exit 255
+else
+	echo lab-ready
+fi
+EOF
 chmod +x "$tmp"/bin/* "$tmp/repo/scripts/fetch-base-image.sh"
 
 render() {
@@ -90,12 +109,41 @@ variant() {
 variant '.source_image.kind = "archive" | .source_image.checksum_url = "https://example.invalid/SHA256SUMS"'
 grep -qF '|archive|https://example.invalid/SHA256SUMS|' "$tmp/log.fetch" || bad "archive: fetch-base-image.sh got $(cat "$tmp/log.fetch")"
 cmp -s "$tmp/got-variant" "$FIX/dnsmasq.golden" || bad "archive: the cloud-init bring-up changed"
-for seed in qga baked; do
-	variant ".source_image.seed = \"$seed\""
-	{ grep -qx 'exit=1' "$tmp/got-variant" && grep -q "the $seed seed hook is not built" "$tmp/got-variant"; } ||
-		bad "$seed: the stub did not refuse"
-	grep -qE '^(genisoimage|sudo -n virt-install|ssh[ ])' "$tmp/got-variant" && bad "$seed: another seed kind's hook ran"
-done
+variant '.source_image.seed = "baked"'
+{ grep -qx 'exit=1' "$tmp/got-variant" && grep -q "the baked seed hook is not built" "$tmp/got-variant"; } ||
+	bad "baked: the stub did not refuse"
+grep -qE '^(genisoimage|sudo -n virt-install|ssh[ ])' "$tmp/got-variant" && bad "baked: another seed kind's hook ran"
+# qga (#9): the agent channel goes to virt-install, firmware bios drops
+# the OVMF loader, no cloud-init ISO is built, and ready_qga's identity
+# read ends the wait.
+variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
+grep -qx 'exit=0' "$tmp/got-variant" || bad "qga: up-source did not finish: $(tail -5 "$tmp/got-variant")"
+vi=$(grep '^sudo -n virt-install' "$tmp/got-variant" || true)
+grep -qF -- '--channel unix\,target.type=virtio\,target.name=org.qemu.guest_agent.0' <<<"$vi" || bad "qga: no agent channel in $vi"
+grep -qF -- '--boot uefi=off' <<<"$vi" || bad "qga: firmware bios does not pin uefi=off: $vi"
+grep -qF -- 'loader=' <<<"$vi" && bad "qga: firmware bios still passes the OVMF loader"
+grep -q '^genisoimage' "$tmp/got-variant" && bad "qga: a cloud-init ISO was built"
+grep -qF ':put\ \[/system\ identity\ get\ name\]' "$tmp/got-variant" || bad "qga: ready_qga did not read the identity"
+grep -q 'qemu-agent-command' "$tmp/got-variant" && bad "qga: a seeded VM was seeded again"
+# The stock identity is not ready: the wait hands the VM to seed-chr.sh.
+touch "$tmp/log.stock"
+variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
+grep -qx 'exit=0' "$tmp/got-variant" || bad "qga stock: up-source did not finish: $(tail -5 "$tmp/got-variant")"
+grep -q '^sudo -n virsh qemu-agent-command .*guest-ping' "$tmp/got-variant" || bad "qga stock: the stock identity counted as ready"
+# Seeded, but the lab key is refused: every poll names the failed login.
+touch "$tmp/log.lockout"
+mv "$tmp/repo/scripts/seed-chr.sh" "$tmp/seed-chr.sh.real"
+cat >"$tmp/repo/scripts/seed-chr.sh" <<'EOF'
+#!/bin/bash
+echo "seed-chr: $1 is seeded"
+EOF
+chmod +x "$tmp/repo/scripts/seed-chr.sh"
+variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
+grep -qx 'exit=1' "$tmp/got-variant" || bad "qga lockout: a refused lab login counted as ready"
+grep -qF 'is seeded, but the lab login read identity "": lab@10.200.255.141: Permission denied (publickey).' "$tmp/got-variant" ||
+	bad "qga lockout: the wait did not name the failed login: $(tail -5 "$tmp/got-variant")"
+mv "$tmp/seed-chr.sh.real" "$tmp/repo/scripts/seed-chr.sh"
+rm -f "$tmp/log.lockout"
 variant '.source_image.seed = "floppy"'
 { grep -qx 'exit=1' "$tmp/got-variant" && grep -q "unknown seed kind 'floppy'" "$tmp/got-variant"; } || bad "an unknown seed kind was not refused"
 grep -q '^fetch-base-image' "$tmp/got-variant" && bad "an unknown seed kind still fetched its image"

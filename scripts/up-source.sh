@@ -146,9 +146,8 @@ class_pool_end="$class_prefix.$class_last_host"
 # the VM exists and sets seed_args, the virt-install arguments that hand
 # the seed over; ready_<kind> runs after it boots and exits 0 once the
 # source has finished its own setup, 1 to be polled again. Both read the
-# variables above. qga (CHR: a virtio-serial org.qemu.guest_agent.0
-# channel, then guest-exec) and baked (OpenWrt: the image carries its
-# seed) are stubs that refuse until their cells fill them.
+# variables above. baked (OpenWrt: the image carries its seed) is a stub
+# that refuses until its cell fills it.
 seed_cloud_init() {
 	case "${partner_seg:+pair}-$source_type" in
 	-*) tmpl_name="$source_type" ;;
@@ -206,8 +205,53 @@ ready_cloud_init() {
 		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null
 }
 
-seed_qga() { seed_stub; }
-ready_qga() { seed_stub; }
+# qga (CHR, #9): RouterOS has no cloud-init. The three scripts and the key
+# go to the VM through its guest agent once it boots; seed-chr.sh does it
+# from ready_qga, which polls until the identity the seed sets last reads
+# back over ssh as lab.
+seed_qga() {
+	if [ -n "$partner_seg$relay_client" ]; then
+		echo "up-source: REFUSED -- the qga seed builds a single source with no relay" >&2
+		exit 1
+	fi
+	seed_dir="$WORK/seed-source"
+	mkdir -p "$seed_dir"
+	for f in lab-mgmt lab-baseline lab-seed; do
+		sed -e "s#__MGMT_ADDR__#$mgmt_addr#g" -e "s#__MGMT_GW__#$mgmt_gw#g" \
+			-e "s#__SEG_ADDR__#$seg_addr#g" -e "s#__SEG_SUBNET__#$seg_subnet#g" \
+			-e "s#__SEG_GATEWAY__#$gateway_ip#g" \
+			-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
+			-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
+			"$REPO_ROOT/routeros/$f.tmpl.rsc" >"$seed_dir/$f.rsc"
+	done
+	printf '%s\n' "$pubkey" >"$seed_dir/lab.pub"
+	if [ -n "${UP_SOURCE_RENDER_ONLY:-}" ]; then
+		echo "up-source: render-only, seed in $seed_dir"
+		exit 0
+	fi
+	seed_args=(--channel "unix,target.type=virtio,target.name=org.qemu.guest_agent.0")
+}
+
+# seed-chr.sh exits 1 while the agent or sshd is not up yet; 2 is a refusal.
+# A seeded CHR the lab key cannot log in to says why on every poll (#9).
+ready_qga() {
+	local id
+	id=$(ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
+		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
+		lab@"$mgmt_ip" ':put [/system identity get name]' 2>"$WORK/lab-login.err" | tr -d '\r') || true
+	[ "$id" = lab-ready ] && return 0
+	local rc=0
+	"$REPO_ROOT/scripts/seed-chr.sh" "$domain" "$seed_dir" "$mgmt_ip" "$known_hosts" || rc=$?
+	if [ "$rc" = 2 ]; then
+		echo "up-source: REFUSED -- seed-chr.sh refused $domain" >&2
+		exit 1
+	fi
+	if [ "$rc" = 0 ]; then
+		echo "up-source: $domain is seeded, but the lab login read identity \"$id\": $(tr -d '\r' <"$WORK/lab-login.err")" >&2
+	fi
+	return 1
+}
 seed_baked() { seed_stub; }
 ready_baked() { seed_stub; }
 seed_stub() {
@@ -222,6 +266,14 @@ ovmf_code=/usr/share/OVMF/OVMF_CODE_4M.fd
 ovmf_vars_template=/usr/share/OVMF/OVMF_VARS_4M.fd
 nvram="$WORK/${domain}-VARS.fd"
 
+# CHR 7.24.5 does not boot under OVMF (M3, #9): firmware bios pins SeaBIOS.
+# uefi=off stops virt-install (5.0) from picking UEFI for an OS that
+# osinfo lists as UEFI-only.
+boot_args=(--boot "loader=$ovmf_code,loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template=$ovmf_vars_template,nvram=$nvram")
+if [ "$(jq -r '.source_image.firmware // ""' <<<"$RESOLVED")" = bios ]; then
+	boot_args=(--boot uefi=off)
+fi
+
 echo "== source VM ($source_type, $PEER) =="
 if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 	sudo -n virt-install \
@@ -233,7 +285,7 @@ if ! sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 		--network bridge="$bridge",model=virtio,mac="$seg_mac" \
 		--os-variant "$os_variant" \
 		--cpu host-model \
-		--boot loader="$ovmf_code",loader_ro=yes,loader_type=pflash,loader_secure=off,nvram_template="$ovmf_vars_template",nvram="$nvram" \
+		"${boot_args[@]}" \
 		--graphics none \
 		--noautoconsole \
 		--import

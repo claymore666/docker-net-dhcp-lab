@@ -46,6 +46,9 @@ echo "== Docker host user-data carries the Debian 11 archive rewrite, and only t
 echo "== up-source.sh: the five cloud-init sources render as pinned; seed and image kinds dispatch =="
 ./scripts/up-source-golden-test.sh
 
+echo "== seed-chr.sh: a seeded CHR is left alone, a stock one is seeded once, failures map to poll or stop (lab #9) =="
+./scripts/seed-chr-test.sh
+
 echo "== fetch-base-image.sh: archives decompress and convert, a mismatching sum is refused =="
 ./scripts/fetch-base-image-kinds-test.sh
 
