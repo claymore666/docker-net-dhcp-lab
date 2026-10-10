@@ -56,7 +56,7 @@ Some prose that must not be mistaken for a table row.
 | ` + "`bogus`" + ` | this table | is past the last known heading |
 `
 
-// TestParseOptionsFindsEveryTableRowOnceEach is the "a cell is
+// TestParseRowsFindsEveryTableRowOnceEach is the "a cell is
 // misplaced" guard for the coverage side: the At-a-glance table (before
 // the first known heading) and the trailing Behaviour table (after the
 // last one) must both be ignored, the ### subsection inside the
@@ -65,47 +65,48 @@ Some prose that must not be mistaken for a table row.
 // once leaked a "web" pseudo-option into this package's own output)
 // must not be read as more option rows, and each real row is namespaced
 // by the table it came from.
-func TestParseOptionsFindsEveryTableRowOnceEach(t *testing.T) {
-	got, err := ParseOptions(fixtureMD)
+func TestParseRowsFindsEveryTableRowOnceEach(t *testing.T) {
+	rows, err := ParseRows(fixtureMD)
 	if err != nil {
-		t.Fatalf("ParseOptions: %v", err)
+		t.Fatalf("ParseRows: %v", err)
 	}
+	got := Keys(rows)
 	want := []string{"network:mode", "network:bridge", "network:gateway", "endpoint:ip", "setting:LOG_LEVEL"}
 	sort.Strings(got)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ParseOptions: got %v, want %v", got, want)
+		t.Fatalf("ParseRows: got %v, want %v", got, want)
 	}
 }
 
-// TestParseOptionsFailsOnNoKnownHeadings guards against a silent,
+// TestParseRowsFailsOnNoKnownHeadings guards against a silent,
 // empty, all-green coverage report when docs/reference.md's headings
 // have all changed out from under this package.
-func TestParseOptionsFailsOnNoKnownHeadings(t *testing.T) {
-	if _, err := ParseOptions("# Reference\n\nnothing recognisable here\n"); err == nil {
+func TestParseRowsFailsOnNoKnownHeadings(t *testing.T) {
+	if _, err := ParseRows("# Reference\n\nnothing recognisable here\n"); err == nil {
 		t.Fatal("expected an error when no known heading is present, got nil")
 	}
 }
 
-// TestParseOptionsFailsWhenOneHeadingIsRenamed is the B6 guard: one
+// TestParseRowsFailsWhenOneHeadingIsRenamed is the B6 guard: one
 // table's heading changing under it (docs/reference.md renaming a
-// section) must fail ParseOptions outright, never just drop that
+// section) must fail ParseRows outright, never just drop that
 // table's options from the count as though nothing were missing.
-func TestParseOptionsFailsWhenOneHeadingIsRenamed(t *testing.T) {
+func TestParseRowsFailsWhenOneHeadingIsRenamed(t *testing.T) {
 	renamed := strings.Replace(fixtureMD, "## Plugin settings", "## Plugin configuration", 1)
-	if _, err := ParseOptions(renamed); err == nil {
+	if _, err := ParseRows(renamed); err == nil {
 		t.Fatal("expected an error when a known heading is renamed, got nil")
 	}
 }
 
-// TestParseOptionsFailsWhenAHeaderRowGainsAColumn is B6's other shape:
+// TestParseRowsFailsWhenAHeaderRowGainsAColumn is B6's other shape:
 // the heading survives but its header row picks up an extra column, so
 // that table's own rows never start being captured either.
-func TestParseOptionsFailsWhenAHeaderRowGainsAColumn(t *testing.T) {
+func TestParseRowsFailsWhenAHeaderRowGainsAColumn(t *testing.T) {
 	changed := strings.Replace(fixtureMD,
 		"| name | default | meaning |\n| ---- | ------- | ------- |",
 		"| name | default | meaning | notes |\n| ---- | ------- | ------- | ----- |", 1)
-	if _, err := ParseOptions(changed); err == nil {
+	if _, err := ParseRows(changed); err == nil {
 		t.Fatal("expected an error when a header row gains a column, got nil")
 	}
 }

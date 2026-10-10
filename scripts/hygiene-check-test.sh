@@ -25,6 +25,8 @@ run_case() {
 	: >"$fixture_repo/note.txt"
 	: >"$fixture_repo/verify.sh"
 	: >"$fixture_repo/sample_test.go"
+	rm -rf "$fixture_repo/internal" "$fixture_repo/docs"
+	mkdir -p "$(dirname "$fixture_repo/$file")"
 	printf '%s' "$content" >"$fixture_repo/$file"
 	git -C "$fixture_repo" add -A
 	if (cd "$fixture_repo" && ./scripts/hygiene-check.sh) >/dev/null 2>&1; then
@@ -131,6 +133,17 @@ run_case "verify.sh, same words with no marker" \
 run_case "verify.sh, prose ending with the marker is not exempt" \
 	$'match lead coordinator maintainer reviewer # hygiene: pattern literal, not prose\n' \
 	fail verify.sh || fail=1
+# The pinned copy of the plugin's published reference is exempt, and only
+# that file: the same line in any other file under the data directory, or
+# in a file merely named like it elsewhere, is still caught.
+run_case "pinned reference.md, plugin example address exempt" \
+	$'host at 192.168.7.7\n' ok internal/coverage/data/pinned/v9.9.9/reference.md || fail=1
+run_case "pinned tests.txt is not exempt" \
+	$'host at 192.168.7.7\n' fail internal/coverage/data/pinned/v9.9.9/tests.txt || fail=1
+run_case "inventory.yaml is not exempt" \
+	$'host at 192.168.7.7\n' fail internal/coverage/data/inventory.yaml || fail=1
+run_case "a reference.md elsewhere is not exempt" \
+	$'host at 192.168.7.7\n' fail docs/reference.md || fail=1
 # A review finding's own number must be caught, with no address or role
 # word anywhere on the line.
 run_case "finding number" \
