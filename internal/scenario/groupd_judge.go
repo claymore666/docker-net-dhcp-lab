@@ -355,7 +355,7 @@ func judgeD2(o d2Obs) fOutcome {
 
 // slaacFormed is judgeD2 past its Solicit rule, shared with D3b and the
 // fallback leg of D3c, where auto forms the same address (docs,
-// ipv6_mode: "a clear flag means the prefix").
+// ipv6_mode: "a clear flag means the prefix") (#23 rows D2, D3b).
 func slaacFormed(o d2Obs) fOutcome {
 	var pio PIO
 	var last RAMsg

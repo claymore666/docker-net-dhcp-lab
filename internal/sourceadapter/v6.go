@@ -29,13 +29,13 @@ type RAParams struct {
 // it from a failed toggle (#23 D4b).
 var ErrRAUnsupported = errors.New("this source's RA cannot carry it")
 
-// BaselineRA is the M=1 A=1 single-PIO advertisement every cell starts from.
+// BaselineRA is the M=1 A=1 single-PIO advertisement every cell starts from (#23).
 var BaselineRA = RAParams{Managed: true, Autonomous: true}
 
 var ulaRange = netip.MustParsePrefix("fd00::/8")
 
 // validateULA returns p masked, refusing anything outside fd00::/8 or
-// with a length outside [min, max]; a ULA is all the lab advertises.
+// with a length outside [min, max]; a ULA is all the lab advertises (RFC 4193).
 func validateULA(p netip.Prefix, min, max int) (netip.Prefix, error) {
 	if !p.IsValid() || !p.Addr().Is6() || p.Addr().Is4In6() {
 		return netip.Prefix{}, fmt.Errorf("%v is not an IPv6 prefix", p)
@@ -78,7 +78,7 @@ func validateRA(p RAParams) (RAParams, error) {
 	return p, nil
 }
 
-// pdBounds returns the first and the last /64 inside pool.
+// pdBounds returns the first and the last /64 inside pool (RFC 8415 section 6.3).
 func pdBounds(pool netip.Prefix) (netip.Addr, netip.Addr) {
 	b := pool.Masked().Addr().As16()
 	for i := pool.Bits(); i < 64; i++ {
@@ -88,7 +88,7 @@ func pdBounds(pool netip.Prefix) (netip.Addr, netip.Addr) {
 }
 
 // secondAddr is the source's address in the second prefix, ::2 as on
-// the main one (lab.yaml seg_address6).
+// the main one (lab.yaml seg_address6) (#23 row D4).
 func secondAddr(p netip.Prefix) string {
 	b := p.Addr().As16()
 	b[15] = 2
@@ -102,7 +102,7 @@ var (
 )
 
 // renderRadvd edits the baseline radvd.conf cloud-init writes; every
-// anchor must match, so a drifted file is refused, never half-edited.
+// anchor must match, so a drifted file is refused, never half-edited (#23).
 func renderRadvd(orig string, p RAParams) (string, error) {
 	var edits []configEdit
 	if !p.Managed {
@@ -172,7 +172,7 @@ func (h host) setRAViaRadvd(ctx context.Context, r Runner, p RAParams, label str
 
 // applyV6 writes changed to path, adds the second eth1 address when
 // second is set, and runs apply; the restore (also run on any failure)
-// writes orig back, deletes the address and applies again.
+// writes orig back, deletes the address and applies again (#23).
 func (h host) applyV6(ctx context.Context, r Runner, path, orig, changed string, second netip.Prefix, apply func(context.Context) error, label string) (func(context.Context) error, error) {
 	restore := func(ctx context.Context) error {
 		var errs []error
@@ -255,7 +255,7 @@ func (a *ISCDHCPAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Co
 }
 
 // iscStop6Cmd stops the -6 daemon by its pid file and then requires the
-// -4 daemon's pid to be alive, so a stop that took v4 with it fails.
+// -4 daemon's pid to be alive, so a stop that took v4 with it fails (#23 row D3c).
 var iscStop6Cmd = fmt.Sprintf("sudo start-stop-daemon --stop --quiet --retry 5 --pidfile %s --exec /usr/sbin/dhcpd && sudo rm -f %s && sudo start-stop-daemon --status --pidfile %s",
 	iscDHCP6PID, iscDHCP6PID, iscDHCP4PID)
 
@@ -283,7 +283,7 @@ func (a *DnsmasqAdapter) StopV6Server(context.Context) (func(context.Context) er
 	return nil, errors.New("dnsmasq: " + DnsmasqNoV6ServerStop)
 }
 
-// DnsmasqNoV6ServerStop is why dnsmasq does not declare CapV6ServerStop.
+// DnsmasqNoV6ServerStop is why dnsmasq does not declare CapV6ServerStop (#23 row D3c).
 const DnsmasqNoV6ServerStop = "one dnsmasq process sends the RA and answers DHCPv6, so the RA cannot ask for DHCPv6 while the server is silent"
 
 // NAReason gives D3c's N/A on dnsmasq its reason (DESIGN-23d row D3,

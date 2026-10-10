@@ -154,6 +154,26 @@ func TestReadyTakesTheBaselineThenHoldsTheSourceToIt(t *testing.T) {
 	}
 }
 
+// The kernel may list the same permanent v6 addresses in another order;
+// Ready compares them as a set (#23 group D part 2).
+func TestReadyComparesTheV6AddressesAsASet(t *testing.T) {
+	h := healthyHost()
+	h.addrs6 = "fd42:200:0:100::2/64 fd42:200:0:100::3/64 "
+	a := &DnsmasqAdapter{Runner: h}
+	ctx := context.Background()
+	if err := a.Ready(ctx); err != nil {
+		t.Fatalf("first Ready on a healthy source: %v", err)
+	}
+	h.addrs6 = "fd42:200:0:100::3/64 fd42:200:0:100::2/64 "
+	if err := a.Ready(ctx); err != nil {
+		t.Errorf("Ready after a reorder of the baseline v6 addresses: %v", err)
+	}
+	h.addrs6 = "fd42:200:0:100::3/64 "
+	if err := a.Ready(ctx); err == nil || !strings.Contains(err.Error(), "eth1 carries v6") {
+		t.Errorf("Ready with a baseline v6 address gone = %v", err)
+	}
+}
+
 // A source whose DHCPv6 table cannot be read fails Ready, so a v6 row
 // never judges an empty table as "no lease" (#23 group D).
 func TestReadyFailsWhenTheV6LeaseTableIsUnreadable(t *testing.T) {

@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
@@ -86,6 +87,87 @@ func TestRunD4AsksForTheSecondPrefixAndRestoresIt(t *testing.T) {
 		}
 		if len(f.src.raParams) != 1 || !f.src.raParams[0].Second.IsValid() || f.src.raRestores != 1 {
 			t.Errorf("RA params %+v, restores %d", f.src.raParams, f.src.raRestores)
+		}
+	}
+}
+
+// f7Host answers the container's route read with after once the fake
+// SetRA ran, before otherwise, and stamps the cell's RA at the network
+// create, inside runF7's window (#23).
+type f7Host struct {
+	*d6Host
+	src           *bAdapter
+	cap           *d6Cap
+	before, after string
+}
+
+func (h f7Host) Run(ctx context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "docker network create") {
+		h.cap.raAt = time.Now()
+	}
+	if strings.HasSuffix(cmd, "ip -6 route show") {
+		if len(h.src.raParams) > 0 {
+			return h.after, nil
+		}
+		return h.before, nil
+	}
+	return h.d6Host.Run(ctx, cmd)
+}
+
+// f7Cap adds an RA carrying the SetRA's PREF64, stamped at the first read
+// after the fake SetRA ran (#23).
+type f7Cap struct {
+	*d6Cap
+	src *bAdapter
+	at  time.Time
+}
+
+func (c *f7Cap) Messages6(ctx context.Context, ident, snap string) ([]DHCP6Msg, []RAMsg, error) {
+	msgs, ras, err := c.d6Cap.Messages6(ctx, ident, snap)
+	if err != nil || len(c.src.raParams) == 0 || len(ras) == 0 {
+		return msgs, ras, err
+	}
+	if c.at.IsZero() {
+		c.at = time.Now()
+	}
+	ra := ras[0]
+	ra.At, ra.Pref64 = c.at, []netip.Prefix{c.src.raParams[0].Pref64}
+	return msgs, append(ras, ra), nil
+}
+
+// F7-pref64's routes baseline is read before the PREF64 RA is set, so a route the
+// RA brings, even one outside the NAT64 prefix, is a FAIL (#23).
+func TestRunF7ReadsTheRoutesBeforePref64(t *testing.T) {
+	s := f7Settle
+	f7Settle = 10 * time.Millisecond
+	t.Cleanup(func() { f7Settle = s })
+	const base = "fd42:200:0:100::/64 dev eth0 proto kernel metric 256 pref medium\ndefault via fe80::1 dev eth0 proto ra metric 1024 pref medium\n"
+	for _, tc := range []struct {
+		after string
+		want  Result
+	}{
+		{base, PASS},
+		{base + "fd42:200:0:99::/64 via fe80::1 dev eth0 metric 1024 pref medium\n", FAIL},
+	} {
+		f := newD6Fix(t, ShapeMacvlan, "", sourceadapter.CapPref64)
+		f.e.Subnet6 = "fd42:200:0:100::/64"
+		o, want := goodD2(t)
+		f.h.forceMAC = d2MAC
+		f.cap.msgs, f.cap.ras = nil, o.RAs[:1]
+		ll := addrLine(d6LL.Addr.String(), 64, "link", "forever", "forever")
+		f.h.start = ll + addrLine(want.String(), 64, "global", "7200sec", "3600sec")
+		f.h.settled = f.h.start
+		f.h.inspect = want.String()
+		f.h.health = fmt.Sprintf(`{"endpoints":[{"endpoint":%q,"nat64_prefixes":["fd42:200:0:164::/96"]}]}`, fmt.Sprintf("%016x%048x", 1, 0))
+		f.src.leases6 = nil
+		f.e.Host = f7Host{d6Host: f.h, src: f.src, cap: f.cap, before: base, after: tc.after}
+		f.e.Capture = &f7Cap{d6Cap: f.cap, src: f.src}
+		v := runF7(context.Background(), f.e)
+		if v.Result != tc.want {
+			t.Errorf("after %q: %s %q", tc.after, v.Result, v.Reason)
+		}
+		if tc.want == FAIL && !strings.Contains(v.Reason, "routes changed") {
+			t.Errorf("reason %q", v.Reason)
 		}
 	}
 }

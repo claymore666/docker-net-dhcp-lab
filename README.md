@@ -211,6 +211,8 @@ Group F runs today (the plugin's client options, judged by the bytes the contain
 
 The user class, forced 108, rapid commit and temporary address rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class, rapid commit and temporary address rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send none of these options, and a tag that is not a release leaves them BLOCKED. The two IPv6 rows also need v2.2.0 and are N/A before it. A source VM needs no rebuild for group F; the settings are written at run time.
 
+The dnsmasq PASS for F6-prefix-delegation and F7-pref64 is a negative (no prefix delegated, no NAT64 prefix reported) and means something only next to the Kea or ISC PASS of the same row in the same matrix: a client that ignores delegation or NAT64 entirely would also pass on dnsmasq.
+
 ## Reading a result
 
 Each scenario on each shape and source gets one verdict:

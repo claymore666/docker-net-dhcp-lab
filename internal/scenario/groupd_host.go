@@ -152,7 +152,7 @@ type healthEndpoint struct {
 	Endpoint             string `json:"endpoint"`
 	IPv6TemporaryAddress string `json:"ipv6_temporary_address"`
 	// DelegatedPrefixes (v2.5.0, prefix delegation) and NAT64Prefixes (v2.4.0, PREF64) are
-	// absent when there are none (docs/reference.md, "Plugin.Health").
+	// absent when there are none (docs/reference.md, "Plugin.Health") (#23 rows F6-prefix-delegation, F7-pref64).
 	DelegatedPrefixes []healthPrefix `json:"delegated_prefixes"`
 	NAT64Prefixes     []string       `json:"nat64_prefixes"`
 }
@@ -193,7 +193,7 @@ func pluginHealth(ctx context.Context, r sourceadapter.Runner, endpointID, path 
 	return parseHealthEndpoint(out, endpointID)
 }
 
-// pluginHealthBody reads /Plugin.Health once and keeps it at path.
+// pluginHealthBody reads /Plugin.Health once and keeps it at path (#23).
 func pluginHealthBody(ctx context.Context, r sourceadapter.Runner, path string) (string, error) {
 	out, err := r.Run(ctx, pluginHealthCmd)
 	if err != nil {
@@ -203,7 +203,7 @@ func pluginHealthBody(ctx context.Context, r sourceadapter.Runner, path string) 
 }
 
 // healthCounter is one top-level /Plugin.Health counter, such as
-// dhcpv6_auto_fallbacks (docs/reference.md field table, D3c).
+// dhcpv6_auto_fallbacks (docs/reference.md field table, D3c) (#23 row D3c).
 func healthCounter(body, name string) (int64, bool) {
 	var h map[string]json.RawMessage
 	if json.Unmarshal([]byte(body), &h) != nil {

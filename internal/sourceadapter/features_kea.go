@@ -19,7 +19,7 @@ var (
 	// carries off at baseline (cloud-init/kea-user-data).
 	keaRapidCommit6RE = regexp.MustCompile(`"rapid-commit": false`)
 	// keaPool6RE anchors on the one-line subnet6 pools list; the v4 pools
-	// span lines, so only the v6 one matches (cloud-init/kea-user-data).
+	// span lines, so only the v6 one matches (cloud-init/kea-user-data) (#23).
 	keaPool6RE = regexp.MustCompile(`("pools": \[ \{ "pool": "[0-9a-f:]+ - [0-9a-f:]+" \} \])`)
 )
 

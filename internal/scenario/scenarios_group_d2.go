@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,7 +42,7 @@ func v6Derive(subnet6 string) (v6Plan, error) {
 	return v6Plan{Second: at(0x01, 64), Pref64: at(0x64, 96), PDPool: at(0x80, 57)}, nil
 }
 
-// d2Gate is bIPAMNA, then dState, then the release a row's option needs.
+// d2Gate is bIPAMNA, then dState, then the release a row's option needs (#821, #23).
 func d2Gate(e Env, name string, since [3]int, why string) (Verdict, bool) {
 	if v, ok := bIPAMNA(name, e); ok {
 		return v, true
@@ -60,7 +61,7 @@ func d2Gate(e Env, name string, since [3]int, why string) (Verdict, bool) {
 }
 
 // ipvlanSlaacNA: slaac and auto are refused on ipvlan, which D2 and D3a
-// judge (plugin docs/reference.md, ipv6_mode).
+// judge (plugin docs/reference.md, ipv6_mode) (#23 rows D2, D3a).
 func ipvlanSlaacNA(name string, e Env) (Verdict, bool) {
 	if e.Shape != ShapeIpvlan {
 		return Verdict{}, false
@@ -69,14 +70,14 @@ func ipvlanSlaacNA(name string, e Env) (Verdict, bool) {
 }
 
 // judgeIpvlanRefusal creates the row's network on ipvlan and judges the
-// refusal; a create that went through is torn down again.
+// refusal; a create that went through is torn down again (#23).
 func judgeIpvlanRefusal(ctx context.Context, e Env, name, suffix string, opts []string) Verdict {
 	_, down, err := cNetwork(ctx, e, suffix, opts)
 	down()
 	return fFinish(name, e, judgeRefused(strings.Join(opts, " "), err), "", map[string]string{})
 }
 
-// once makes a restore safe to call early and again from the defer.
+// once makes a restore safe to call early and again from the defer (#23).
 func once(f func(context.Context) error) func(context.Context) error {
 	done := false
 	var err error
@@ -97,7 +98,7 @@ func setRA(ctx context.Context, e Env, p sourceadapter.RAParams) (func(context.C
 }
 
 // containerText runs one read-only command in the container and keeps
-// its output as evidence under label.
+// its output as evidence under label (#23).
 func containerText(ctx context.Context, e Env, scenario, label, name, cmd string, ev map[string]string) (string, error) {
 	out, err := e.Host.Run(ctx, fmt.Sprintf("sudo docker exec %s %s", name, cmd))
 	if err != nil {
@@ -116,7 +117,7 @@ func (r dRead) d2Obs() d2Obs {
 }
 
 // d3Row is D3a and D3b: the RA set to want, one container on an auto
-// network, the wire's flags proven, then judge.
+// network, the wire's flags proven, then judge (#23 rows D3a, D3b).
 func d3Row(ctx context.Context, e Env, name string, want sourceadapter.RAParams, ready func([]DHCP6Msg, []RAMsg) bool, judge func(dRead) fOutcome) (v Verdict) {
 	if v, stop := d2Gate(e, name, dSince, "ipv6_mode arrived in plugin v2.2.0 (#821)"); stop {
 		return v
@@ -153,7 +154,7 @@ func d3Row(ctx context.Context, e Env, name string, want sourceadapter.RAParams,
 }
 
 // runD3a -- auto with M=1 A=0: "the managed-address flag means DHCPv6"
-// (docs, ipv6_mode), judged as D1; on ipvlan the create is refused.
+// (docs, ipv6_mode), judged as D1; on ipvlan the create is refused (#23 row D3a).
 func runD3a(ctx context.Context, e Env) Verdict {
 	return d3Row(ctx, e, NameD3a, sourceadapter.RAParams{Managed: true}, hasNAReply, func(r dRead) fOutcome {
 		o, _ := judgeD1(r.d1Obs(ctx, e))
@@ -162,7 +163,7 @@ func runD3a(ctx context.Context, e Env) Verdict {
 }
 
 // runD3b -- auto with M=0 A=1: "a clear flag means the prefix", judged
-// as D2.
+// as D2 (#23 row D3b).
 func runD3b(ctx context.Context, e Env) Verdict {
 	return d3Row(ctx, e, NameD3b, sourceadapter.RAParams{Autonomous: true}, hasAutoRA, func(r dRead) fOutcome {
 		return judgeD2(r.d2Obs())
@@ -172,7 +173,7 @@ func runD3b(ctx context.Context, e Env) Verdict {
 // runD3c -- M=1 A=1 with the source's DHCPv6 server stopped, three legs
 // on one network name, removed between them (which also clears the
 // plugin's DHCPV6_ABSENCE_MEMORY, docs): auto falls back to the prefix,
-// auto with ipv6_auto_strict=true fails the endpoint, dhcp fails it.
+// auto with ipv6_auto_strict=true fails the endpoint, dhcp fails it (#23 row D3c).
 func runD3c(ctx context.Context, e Env) (v Verdict) {
 	if v, stop := d2Gate(e, NameD3c, dSince, "ipv6_mode arrived in plugin v2.2.0 (#821)"); stop {
 		return v
@@ -249,6 +250,7 @@ func d3cAutoLeg(ctx context.Context, e Env, ev map[string]string) (fOutcome, err
 }
 
 func d3cFailLeg(ctx context.Context, e Env, opts []string, ev map[string]string) (fOutcome, error) {
+	t0 := time.Now()
 	net, down, err := cNetwork(ctx, e, "d3", opts)
 	defer down()
 	if err != nil {
@@ -257,16 +259,27 @@ func d3cFailLeg(ctx context.Context, e Env, opts []string, ev map[string]string)
 	name := containerName(e, NameD3c)
 	defer removeContainer(bCleanupCtx(ctx), e.Host, name)
 	_, _, _, startErr := runContainer(ctx, e.Host, e.Shape, net, name)
+	leg := strings.TrimPrefix(opts[len(opts)-1], "ipv6_")
 	var settled []addr6
+	var msgs []DHCP6Msg
 	if startErr == nil {
-		label := "addrs-" + strings.TrimPrefix(opts[len(opts)-1], "ipv6_")
-		r, err := readAddrs(ctx, e, NameD3c, label, name, "-", ev)
+		r, err := readAddrs(ctx, e, NameD3c, "addrs-"+leg, name, "-", ev)
 		if err != nil {
 			return fOutcome{}, err
 		}
 		settled = r.Addrs
+	} else {
+		// A failed container has no MAC to filter on, so the whole link
+		// since this leg's network create is read; one container per row
+		// bounds it (DESIGN-23d defeat A2, #23).
+		solicited := func(ms []DHCP6Msg, _ []RAMsg) bool {
+			return slices.ContainsFunc(ms, func(m DHCP6Msg) bool { return m.Type == "SOLICIT" })
+		}
+		if msgs, _, err = dCapture(ctx, e, NameD3c, "capture-v6-"+leg, "*", t0, solicited, ev); err != nil {
+			return fOutcome{}, fmt.Errorf("could not read the capture: %w", err)
+		}
 	}
-	return judgeD3cFails(strings.Join(opts, " "), startErr, settled), nil
+	return judgeD3cFails(strings.Join(opts, " "), startErr, settled, msgs), nil
 }
 
 // runD3d -- the RA's managed flag turned on while an auto endpoint runs.
@@ -327,7 +340,7 @@ func runD3d(ctx context.Context, e Env) (v Verdict) {
 
 // d3dRecord is D3d's verdict: BLOCKED unless an RA after the flip
 // carries M=1, else N/A carrying the record (an N/A holds no evidence,
-// verdict.go).
+// verdict.go) (#23 row D3d).
 func d3dRecord(name string, e Env, msgs []DHCP6Msg, ras []RAMsg, before, after []addr6) Verdict {
 	flipped := false
 	for _, ra := range ras {
@@ -362,7 +375,7 @@ func hasTwoAutoPIOs(_ []DHCP6Msg, ras []RAMsg) bool {
 }
 
 // d4Row is D4, D4m and D4b: a second autonomous PIO beside the cell's,
-// one container on a slaac network (-d4).
+// one container on a slaac network (-d4) (#23 row D4).
 func d4Row(ctx context.Context, e Env, name string) (v Verdict) {
 	if v, stop := d2Gate(e, name, dSince, "ipv6_mode arrived in plugin v2.2.0 (#821)"); stop {
 		return v
@@ -418,17 +431,17 @@ func runD4m(ctx context.Context, e Env) Verdict { return d4Row(ctx, e, NameD4m) 
 func runD4b(ctx context.Context, e Env) Verdict { return d4Row(ctx, e, NameD4b) }
 
 // d4bPoll is how long D4b waits for the container to act on an RA: two
-// of the cell's RA intervals and the plugin's refresh.
+// of the cell's RA intervals and the plugin's refresh (#23 row D4b).
 const d4bPoll = 45 * time.Second
 
 // d4bRAWait is the least D4b waits after the expiry RA is set, so the
 // capture holds one: the cells' radvd and dnsmasq send every 10 s at most
-// (cloud-init templates, MaxRtrAdvInterval and ra-param).
+// (cloud-init templates, MaxRtrAdvInterval and ra-param) (#23 row D4b).
 const d4bRAWait = 25 * time.Second
 
 // d4bWithdraw drops the second PIO (the baseline again), then advertises
 // it with valid lifetime 0; dnsmasq cannot send the second
-// (ErrRAUnsupported), so there the drop is judged alone.
+// (ErrRAUnsupported), so there the drop is judged alone (#23 row D4b).
 func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, second netip.Prefix, drop func(context.Context) error, d4 string, ev map[string]string) (v Verdict) {
 	if err := drop(ctx); err != nil {
 		return blocked(NameD4b, e.Cell, e.Shape, fmt.Sprintf("could not drop the second prefix: %v", err), e.GitSHA)
@@ -474,7 +487,7 @@ func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, secon
 }
 
 // d4bAwait reads the container every 3 s until done or d4bPoll, then the
-// capture from `from` on.
+// capture from `from` on (#23 row D4b).
 func d4bAwait(ctx context.Context, e Env, cname string, r dRead, step string, from time.Time, done func([]addr6, string) bool, ev map[string]string) ([]addr6, string, []RAMsg, error) {
 	var as []addr6
 	var routes string
@@ -549,12 +562,15 @@ func runF6(ctx context.Context, e Env) (v Verdict) {
 	return fFinish(NameF6, e, judgeF6(o, serverPD, plan.PDPool, routes, h, found), "", ev)
 }
 
-// f7Settle is the gap between the PREF64 row's two reads of the container: RAs keep
-// arriving and nothing they carry may change it.
-const f7Settle = 15 * time.Second
+// f7Settle is how long the PREF64 row lets the plugin act on the first
+// RA carrying PREF64 before it reads the container and /Plugin.Health:
+// the cells send an RA every 10 s at most (cloud-init templates, #23).
+var f7Settle = 15 * time.Second
 
-// runF7 -- PREF64 (v2.4.0): kea and isc advertise the cell's /96 beside
-// the baseline; dnsmasq's RA cannot carry it and is the negative case.
+// runF7 -- PREF64 (v2.4.0): the container starts on the baseline RA and
+// its routes and resolv.conf are read; then kea and isc add the cell's
+// /96 to the RA, dnsmasq's RA cannot carry it and is the negative case
+// (DESIGN-23d row F7-pref64).
 func runF7(ctx context.Context, e Env) (v Verdict) {
 	if v, stop := d2Gate(e, NameF7, fSince4, "nat64_prefixes arrived in plugin v2.4.0"); stop {
 		return v
@@ -567,15 +583,6 @@ func runF7(ctx context.Context, e Env) (v Verdict) {
 		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
 	serverP := serverHas(e.Source, sourceadapter.CapPref64)
-	if serverP {
-		p := sourceadapter.BaselineRA
-		p.Pref64 = plan.Pref64
-		restore, err := setRA(ctx, e, p)
-		defer fRestoreInto(bCleanupCtx(ctx), e, NameF7, restore, &v)
-		if err != nil {
-			return blocked(NameF7, e.Cell, e.Shape, fmt.Sprintf("could not advertise PREF64 %s: %v", plan.Pref64, err), e.GitSHA)
-		}
-	}
 	const opt = "ipv6_mode=slaac"
 	ev := map[string]string{}
 	t0 := time.Now()
@@ -596,33 +603,64 @@ func runF7(ctx context.Context, e Env) (v Verdict) {
 	if d2 := judgeD2(r.d2Obs()); d2.Result != PASS {
 		return fFinish(NameF7, e, d2, "", ev)
 	}
-	rd, err := f7Read(ctx, e, name, r, ev)
+	var rd f7Reads
+	if rd.BaseRoutes, err = containerText(ctx, e, NameF7, "routes-v6-before", name, "ip -6 route show", ev); err != nil {
+		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	if rd.BaseResolv, err = containerText(ctx, e, NameF7, "resolv-conf-before", name, "cat /etc/resolv.conf", ev); err != nil {
+		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	tSet := time.Now()
+	if serverP {
+		p := sourceadapter.BaselineRA
+		p.Pref64 = plan.Pref64
+		restore, err := setRA(ctx, e, p)
+		defer fRestoreInto(bCleanupCtx(ctx), e, NameF7, restore, &v)
+		if err != nil {
+			return blocked(NameF7, e.Cell, e.Shape, fmt.Sprintf("could not advertise PREF64 %s: %v", plan.Pref64, err), e.GitSHA)
+		}
+	}
+	ll, _ := linkLocal(r.start.Addrs)
+	ras, err := f7Read(ctx, e, name, r, v6Ident(r.mac, ll), tSet, serverP, &rd, ev)
 	if err != nil {
 		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
-	return fFinish(NameF7, e, judgeF7(r.ras, serverP, rd), "", ev)
+	return fFinish(NameF7, e, judgeF7(ras, serverP, rd), "", ev)
 }
 
-func f7Read(ctx context.Context, e Env, name string, r dRead, ev map[string]string) (f7Reads, error) {
-	rd := f7Reads{Addrs: r.settled.Addrs}
-	var err error
-	if rd.Routes, err = containerText(ctx, e, NameF7, "routes-v6", name, "ip -6 route show", ev); err != nil {
-		return rd, err
+// f7Read waits for an RA after tSet (one carrying PREF64 when the source
+// was set to send it), lets the plugin act on it, then reads the
+// container and /Plugin.Health; it returns the RAs since tSet (#23 row F7-pref64).
+func f7Read(ctx context.Context, e Env, name string, r dRead, ident string, tSet time.Time, serverP bool, rd *f7Reads, ev map[string]string) ([]RAMsg, error) {
+	ready := func(_ []DHCP6Msg, ras []RAMsg) bool {
+		return slices.ContainsFunc(ras, func(ra RAMsg) bool { return !serverP || len(ra.Pref64) > 0 })
 	}
-	if rd.Resolv, err = containerText(ctx, e, NameF7, "resolv-conf", name, "cat /etc/resolv.conf", ev); err != nil {
-		return rd, err
+	if _, _, err := dCapture(ctx, e, NameF7, "capture-v6-pref64-wait", ident, tSet, ready, ev); err != nil {
+		return nil, fmt.Errorf("could not read the capture: %w", err)
+	}
+	if err := sleepCtx(ctx, f7Settle); err != nil {
+		return nil, err
+	}
+	after, err := readAddrs(ctx, e, NameF7, "addrs-after", name, "-", ev)
+	if err != nil {
+		return nil, err
+	}
+	rd.Addrs = after.Addrs
+	if rd.Routes, err = containerText(ctx, e, NameF7, "routes-v6-after", name, "ip -6 route show", ev); err != nil {
+		return nil, err
+	}
+	if rd.Resolv, err = containerText(ctx, e, NameF7, "resolv-conf-after", name, "cat /etc/resolv.conf", ev); err != nil {
+		return nil, err
 	}
 	hp := evidencePath(e, NameF7, "plugin-health")
 	if rd.Health, rd.Found, err = pluginHealth(ctx, e.Host, r.endpointID, hp); err != nil {
-		return rd, err
+		return nil, err
 	}
 	ev["plugin-health"] = hp
-	if err := sleepCtx(ctx, f7Settle); err != nil {
-		return rd, err
+	all := func([]DHCP6Msg, []RAMsg) bool { return true }
+	_, ras, err := dCapture(ctx, e, NameF7, "capture-v6-pref64", ident, tSet, all, ev)
+	if err != nil {
+		return nil, fmt.Errorf("could not read the capture: %w", err)
 	}
-	if rd.Routes2, err = containerText(ctx, e, NameF7, "routes-v6-later", name, "ip -6 route show", ev); err != nil {
-		return rd, err
-	}
-	rd.Resolv2, err = containerText(ctx, e, NameF7, "resolv-conf-later", name, "cat /etc/resolv.conf", ev)
-	return rd, err
+	return ras, nil
 }

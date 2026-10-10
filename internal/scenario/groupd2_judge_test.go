@@ -64,14 +64,32 @@ func TestJudgeD4InspectFollowsTheFirstPIOOnTheWire(t *testing.T) {
 	o := d4Good(t, inOrder...)
 	needF(t, judgeD4(o), PASS, "first advertised")
 	o.Inspect = a2.String()
-	needF(t, judgeD4(o), FAIL, "first advertised prefix's address")
+	needF(t, judgeD4(o), FAIL, "first advertised prefix "+d4P1.String())
 	o = d4Good(t, swapped...)
-	needF(t, judgeD4(o), FAIL, "first advertised prefix's address")
+	needF(t, judgeD4(o), FAIL, "first advertised prefix "+d4P2.String())
 	o.Inspect = a2.String()
 	needF(t, judgeD4(o), PASS, "first advertised")
+	// The anchor is the last RA at or before the start read (d6At(1)): a
+	// later RA with the other order does not move it.
 	o = d4Good(t, inOrder[0], swapped[1])
+	needF(t, judgeD4(o), PASS, "the last RA before the container's start read")
 	o.Inspect = a2.String()
-	needF(t, judgeD4(o), PASS, "unstable on the wire")
+	needF(t, judgeD4(o), FAIL, "first advertised prefix "+d4P1.String())
+	// Two RAs before the start read with the order turned round: either
+	// prefix could be the plugin's, so neither is accepted.
+	for _, ins := range []netip.Addr{a1, a2} {
+		o = d4Good(t, inOrder[0], raWith(0, false, pio(d4P2, true), pio(d4P1, true)))
+		o.Inspect = ins.String()
+		needF(t, judgeD4(o), BLOCKED, "which one the plugin read")
+	}
+	// No RA before the start read: every RA before the settled read must
+	// agree on the first prefix.
+	o = d4Good(t, raWith(5, false, pio(d4P2, true), pio(d4P1, true)), raWith(15, false, pio(d4P2, true), pio(d4P1, true)))
+	o.Inspect = a2.String()
+	needF(t, judgeD4(o), PASS, "no RA before the start read")
+	o = d4Good(t, raWith(5, false, pio(d4P2, true), pio(d4P1, true)), raWith(15, false, pio(d4P1, true), pio(d4P2, true)))
+	o.Inspect = a2.String()
+	needF(t, judgeD4(o), BLOCKED, "which one the plugin read")
 	o = d4Good(t, inOrder...)
 	o.Settled.Addrs = o.Settled.Addrs[:2]
 	needF(t, judgeD4(o), FAIL, "no "+a2.String())
@@ -80,7 +98,16 @@ func TestJudgeD4InspectFollowsTheFirstPIOOnTheWire(t *testing.T) {
 	o = d4Good(t, inOrder...)
 	o.Msgs = []DHCP6Msg{d6Msg(0, "SOLICIT", false, nil, nil)}
 	needF(t, judgeD4(o), FAIL, "sends no Solicit")
-	_ = a1
+}
+
+// Defeat 7, first against lowest: the first PIO on the wire is the
+// higher prefix, so a plugin that names the lowest prefix fails.
+func TestJudgeD4TellsTheFirstPIOFromTheLowestPrefix(t *testing.T) {
+	hiFirst := []RAMsg{raWith(-5, false, pio(d4P2, true), pio(d4P1, true))}
+	o := d4Good(t, hiFirst...)
+	needF(t, judgeD4(o), FAIL, "first advertised prefix "+d4P2.String())
+	o.Inspect = mustEUI(t, d4P2).String()
+	needF(t, judgeD4(o), PASS, "lists "+d4P2.String()+" first")
 }
 
 func TestJudgeD4mInspectFollowsTheMainPrefix(t *testing.T) {
@@ -104,7 +131,8 @@ func TestJudgeD4bDropAndExpiry(t *testing.T) {
 	needF(t, judgeD4bDrop(after, only1, kept, d4P1, d4P2, d2MAC, true), PASS, "route for "+d4P2.String()+" kept")
 	needF(t, judgeD4bDrop(after, only1, gone, d4P1, d4P2, d2MAC, true), FAIL, "#1088")
 	needF(t, judgeD4bDrop(after, only1, gone, d4P1, d4P2, d2MAC, false), PASS, "not judged before v2.2.3")
-	needF(t, judgeD4bDrop(after, both, kept, d4P1, d4P2, d2MAC, true), FAIL, "still on the link")
+	needF(t, judgeD4bDrop(after, both, kept, d4P1, d4P2, d2MAC, true), FAIL, "docs/reference.md:967")
+	needF(t, judgeD4bDrop(after, only1, kept, d4P1, d4P2, d2MAC, true), PASS, "docs/reference.md:1824-1828")
 	needF(t, judgeD4bDrop(after, []addr6{d6LL}, kept, d4P1, d4P2, d2MAC, true), FAIL, "left the link")
 	needF(t, judgeD4bDrop(nil, only1, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "no RA after")
 	needF(t, judgeD4bDrop([]RAMsg{raWith(30, true, pio(d4P1, true), pio(d4P2, true))}, only1, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "still carries")
@@ -135,9 +163,27 @@ func TestRouteForReadsPastTheRouteType(t *testing.T) {
 // address on the link included.
 func TestJudgeD3cFailsLegsCountAStartAsFail(t *testing.T) {
 	slaac := []addr6{d6LL, {Addr: mustEUI(t, d4P1), Bits: 64, Scope: "global"}}
-	needF(t, judgeD3cFails("ipv6_mode=dhcp", nil, slaac), FAIL, mustEUI(t, d4P1).String())
-	needF(t, judgeD3cFails("ipv6_mode=dhcp", nil, nil), FAIL, "fail the endpoint")
-	needF(t, judgeD3cFails("ipv6_mode=auto ipv6_auto_strict=true", errors.New("exit 125"), nil), PASS, "endpoint failed")
+	sol := []DHCP6Msg{d6Msg(0, "SOLICIT", false, []IA6{{IAID: 1}}, nil)}
+	needF(t, judgeD3cFails("ipv6_mode=dhcp", nil, slaac, sol), FAIL, mustEUI(t, d4P1).String())
+	needF(t, judgeD3cFails("ipv6_mode=dhcp", nil, nil, nil), FAIL, "fail the endpoint")
+	needF(t, judgeD3cFails("ipv6_mode=auto ipv6_auto_strict=true", errors.New("exit 125"), nil, sol), PASS, "1 Solicits unanswered")
+}
+
+// TestJudgeD3cFailsLegsTieTheErrorToTheSilence: a start error passes only
+// beside unanswered Solicits or the plugin's ErrNoV6Server text; an image
+// pull or pool error is BLOCKED with its text (#23).
+func TestJudgeD3cFailsLegsTieTheErrorToTheSilence(t *testing.T) {
+	const opts = "ipv6_mode=dhcp"
+	pull := errors.New("exit 125: Unable to find image 'busybox:latest' locally")
+	needF(t, judgeD3cFails(opts, pull, nil, nil), BLOCKED, "Unable to find image")
+	plugin := errors.New("exit 125: failed to set up container networking: dhcp: no DHCPv6 server answered on this segment: 3 Solicits")
+	needF(t, judgeD3cFails(opts, plugin, nil, nil), PASS, "naming it")
+	sol := []DHCP6Msg{d6Msg(0, "SOLICIT", false, []IA6{{IAID: 1}}, nil), d6Msg(1, "SOLICIT", false, []IA6{{IAID: 1}}, nil)}
+	needF(t, judgeD3cFails(opts, pull, nil, sol), PASS, "2 Solicits unanswered")
+	answered := append(sol, d6Msg(1.1, "ADVERTISE", false, d6IA(d6NA), nil))
+	needF(t, judgeD3cFails(opts, plugin, nil, answered), BLOCKED, "not silent")
+	replied := append(sol[:1:1], d6Msg(1.1, "REPLY", false, d6IA(d6NA), nil))
+	needF(t, judgeD3cFails(opts, plugin, nil, replied), BLOCKED, "REPLY")
 }
 
 func TestJudgeD3cAutoFallsBackToThePrefix(t *testing.T) {
@@ -225,9 +271,9 @@ func TestJudgeF7(t *testing.T) {
 	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
 	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
 	ras[0].Pref64 = []netip.Prefix{p64}
-	routes := "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1790sec\n"
-	good := f7Reads{Addrs: []addr6{d6LL}, Routes: routes, Routes2: "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1775sec\n",
-		Resolv: "nameserver 10.200.1.1\n", Resolv2: "nameserver 10.200.1.1\n", Health: healthEndpoint{NAT64Prefixes: []string{"fd42:200:0:164::/96"}}, Found: true}
+	base := "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1790sec\n"
+	good := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: base, Routes: "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1775sec\n",
+		BaseResolv: "nameserver 10.200.1.1\n", Resolv: "nameserver 10.200.1.1\n", Health: healthEndpoint{NAT64Prefixes: []string{"fd42:200:0:164::/96"}}, Found: true}
 	needF(t, judgeF7(ras, true, good), PASS, "equals the RA's PREF64")
 	r := good
 	r.Health.NAT64Prefixes = nil
@@ -236,19 +282,54 @@ func TestJudgeF7(t *testing.T) {
 	r.Addrs = append(r.Addrs, addr6{Addr: netip.MustParseAddr("fd42:200:0:164::1"), Bits: 128, Scope: "global"})
 	needF(t, judgeF7(ras, true, r), FAIL, "inside PREF64")
 	r = good
-	r.Routes = "fd42:200:0:164::/96 dev eth0 metric 1024\n"
-	r.Routes2 = r.Routes
-	needF(t, judgeF7(ras, true, r), FAIL, "route")
-	r = good
-	r.Resolv2 = "nameserver fd42:200:0:164::35\n"
+	r.Resolv = "nameserver fd42:200:0:164::35\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "resolv.conf")
 	r = good
-	r.Routes2 = "default via fe80::1 dev eth0\n"
+	r.Routes = "default via fe80::1 dev eth0\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, true, good), BLOCKED, "no RA carrying it")
+	needF(t, judgeF7(nil, false, good), BLOCKED, "no RA after the baseline read")
 	needF(t, judgeF7(ras, false, good), BLOCKED, "out of date")
+	r = good
+	r.Found = false
+	needF(t, judgeF7(ras, true, r), FAIL, "no entry")
 	neg := good
 	neg.Health = healthEndpoint{}
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, neg), PASS, "carries no PREF64")
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, good), FAIL, "nat64_prefixes")
+	neg.Found = false
+	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, neg), BLOCKED, "proves nothing")
+}
+
+// A route inside PREF64 fails whatever its ip-route(8) type, a /128
+// printed as a bare address included, even when it was there before.
+func TestJudgeF7FailsATypedRouteInsidePref64(t *testing.T) {
+	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
+	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
+	ras[0].Pref64 = []netip.Prefix{p64}
+	for _, line := range []string{
+		"fd42:200:0:164::/96 dev eth0 metric 1024",
+		"unreachable fd42:200:0:164::/96 dev lo metric 1024 pref medium",
+		"blackhole fd42:200:0:164::/96 dev lo metric 1024",
+		"prohibit fd42:200:0:164::/96 dev lo metric 1024",
+		"throw fd42:200:0:164::/96 metric 1024",
+		"unreachable fd42:200:0:164::1 dev lo metric 1024",
+		"fd42:200:0:164::5 via fe80::1 dev eth0 metric 1024",
+	} {
+		r := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: line + "\n", Routes: line + "\n", Health: healthEndpoint{NAT64Prefixes: []string{p64.String()}}, Found: true}
+		needF(t, judgeF7(ras, true, r), FAIL, "inside PREF64")
+	}
+}
+
+// The routes after PREF64 are held to the read before it, type and
+// destination: a route that only changed its type is a change.
+func TestJudgeF7HoldsTheRoutesToTheReadBeforePref64(t *testing.T) {
+	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
+	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
+	ras[0].Pref64 = []netip.Prefix{p64}
+	r := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: "fd42:200:0:1ff::/64 dev eth0 metric 1024\n", Routes: "unreachable fd42:200:0:1ff::/64 dev lo metric 1024\n",
+		Health: healthEndpoint{NAT64Prefixes: []string{p64.String()}}, Found: true}
+	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
+	r.Routes = r.BaseRoutes + "fd42:200:0:1fe::/64 dev eth0 metric 1024\n"
+	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
 }

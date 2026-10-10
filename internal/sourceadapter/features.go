@@ -54,7 +54,7 @@ type FeatureParams struct {
 	ClientID string
 	// Nonce is the FORCERENEW key, ForceRenewNonceLen bytes.
 	Nonce []byte
-	// PDPool is FeaturePD's pool: a ULA prefix of length 48 to 63.
+	// PDPool is FeaturePD's pool: a ULA prefix of length 48 to 63 (RFC 8415 section 6.3).
 	PDPool netip.Prefix
 }
 

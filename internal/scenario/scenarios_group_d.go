@@ -97,7 +97,7 @@ func dCollect(ctx context.Context, e Env, scenario, net string, t0 time.Time, le
 }
 
 // dCollectWith is dCollect; leases false skips the source's DHCPv6 table,
-// which kea serves from the daemon StopV6Server stopped (D3c).
+// which kea serves from the daemon StopV6Server stopped (D3c) (#23 row D3c).
 func dCollectWith(ctx context.Context, e Env, scenario, net string, t0 time.Time, lease func([]DHCP6Msg, []RAMsg) bool, ev map[string]string, leases bool) (r dRead, startErr, err error) {
 	name := containerName(e, scenario)
 	r.mac, _, r.endpointID, startErr = runContainer(ctx, e.Host, e.Shape, net, name)
@@ -389,7 +389,7 @@ func runF5(ctx context.Context, e Env) (v Verdict) {
 // plugin FAIL (#23 group D part 2).
 var errMainSwap = errors.New("the IPAM main-network swap")
 
-// dCreateFailed is the verdict for a network dNetwork could not create.
+// dCreateFailed is the verdict for a network dNetwork could not create (#23).
 func dCreateFailed(e Env, scenario string, opts []string, err error) Verdict {
 	if errors.Is(err, errMainSwap) {
 		return blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)

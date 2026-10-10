@@ -131,7 +131,7 @@ func parseState(out string, u sourceUnits, portable bool) (sourceState, error) {
 			st.addrs = val
 			seen++
 		case "addr6":
-			st.addrs6 = val
+			st.addrs6 = sortedFields(val)
 			seen++
 		case "cfg6":
 			path, enc, ok := strings.Cut(val, ":")
@@ -260,7 +260,7 @@ func (h host) sweepActors(ctx context.Context, r Runner) error {
 }
 
 // restoreBaseline puts the baseline v4 and v6 segment addresses and
-// every baseline config back where they differ from what the source holds.
+// every baseline config back where they differ from what the source holds (#23).
 func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addrs, addrs6, cfg string, extra map[string]string) error {
 	st, err := h.readState(ctx, r, u)
 	if err != nil {
@@ -306,6 +306,14 @@ func (h host) restoreBaseline(ctx context.Context, r Runner, u sourceUnits, addr
 		}
 	}
 	return nil
+}
+
+// sortedFields is s's fields in sorted order, so a reorder of the same
+// addresses by the kernel never fails Ready (#23 group D part 2).
+func sortedFields(s string) string {
+	f := strings.Fields(s)
+	slices.Sort(f)
+	return strings.Join(f, " ")
 }
 
 // restoreAddrs6 deletes the permanent global v6 addresses the baseline
