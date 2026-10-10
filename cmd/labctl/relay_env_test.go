@@ -171,6 +171,16 @@ func TestCellEnvWiresTheRelay(t *testing.T) {
 	if got, all := scenario.PoolDemand(scenario.Catalog, env.Source), scenario.PoolDemand(scenario.Catalog, plain); got >= all {
 		t.Errorf("relay cell pool demand %d, want less than the plain source's %d", got, all)
 	}
+	// C12 and C12b take two and one addresses on the relay cell only (#11).
+	var relayScns []scenario.Scenario
+	for _, sc := range scenario.Catalog {
+		if sc.Name == scenario.NameC12 || sc.Name == scenario.NameC12b {
+			relayScns = append(relayScns, sc)
+		}
+	}
+	if got, none := scenario.PoolDemand(relayScns, env.Source), scenario.PoolDemand(relayScns, plain); len(relayScns) != 2 || got != 3 || none != 0 {
+		t.Errorf("C12+C12b demand: relay cell %d (want 3), plain Kea %d (want 0), %d scenarios", got, none, len(relayScns))
+	}
 	if capacity, err := poolCapacity(cell.Source.PoolStart, cell.Source.PoolEnd); err != nil {
 		t.Fatal(err)
 	} else if ok, reason := poolHasCapacityFor(capacity, 0, scenario.PoolDemand(scenario.Catalog, env.Source)); !ok {

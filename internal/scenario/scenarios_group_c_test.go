@@ -26,7 +26,7 @@ var cFast = cTiming{
 	c3Record: 40 * ms, c3Start: 80 * ms, c3Window: 200 * ms,
 	c4Wait: 40 * ms, c1Settle: 5 * ms, c10Lift: 300 * ms,
 	c6bWindow: 200 * ms, c8Settle: 20 * ms, c8Links: 50 * ms, c9Wait: 300 * ms,
-	c5Wait: 50 * ms,
+	c5Wait: 50 * ms, c12bWait: 60 * ms,
 }
 
 // cRunner is bRunner plus what group C asks the docker host: the timed
