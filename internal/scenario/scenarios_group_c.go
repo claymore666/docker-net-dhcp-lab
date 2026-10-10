@@ -75,8 +75,8 @@ const (
 
 func within(d, want, tol time.Duration) bool { return d >= want-tol && d <= want+tol }
 
-// runNeverReached backs C5 and F6, F7: no adapter declares their
-// capability, so Applicable answers N/A before Run (capabilityNAReason).
+// runNeverReached backs the scenarios whose capability no adapter declares
+// (C5 among them): Applicable answers N/A before Run (capabilityNAReason).
 func runNeverReached(_ context.Context, e Env) Verdict {
 	return blocked("unreachable", e.Cell, e.Shape, "a scenario whose capability no adapter declares reached Run", e.GitSHA)
 }

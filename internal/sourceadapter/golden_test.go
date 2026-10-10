@@ -267,7 +267,7 @@ func TestKeaBehindTheRelaySendsTheBareCommands(t *testing.T) {
 		_, _ = s.run(context.Background(), WithRelay(inner, relay, p), gw)
 		bareCalls := gb.calls
 		if strings.HasPrefix(s.name, "SendForceRenew") {
-			// F8 behind a relay asks for the next hop first (#11).
+			// FORCERENEW behind a relay asks for the next hop first (#11).
 			bareCalls = nil
 			for _, c := range gb.calls {
 				if strings.HasPrefix(c, "ip neigh show 10.200.1.150") {

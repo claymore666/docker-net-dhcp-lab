@@ -22,7 +22,7 @@ type ForceRenewParams struct {
 	Nonce     []byte
 	AckReplay uint64
 	// Offlink sends to the source's next hop for Addr, not to Addr's own
-	// MAC: behind a relay the client is on another subnet (#11, F8).
+	// MAC: behind a relay the client is on another subnet (#11).
 	Offlink bool
 }
 

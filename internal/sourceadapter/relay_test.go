@@ -269,7 +269,7 @@ func TestRelayNAReasonFallsBackToTheInnerAdapter(t *testing.T) {
 	}
 }
 
-// F8 behind a relay (#11): the client is off-link, so the FORCERENEW goes
+// FORCERENEW behind a relay (#11): the client is off-link, so the FORCERENEW goes
 // to the MAC of the source's next hop, read through the same neighbour
 // seam; the container's own MAC is never looked up.
 func TestRelayForceRenewGoesToTheNextHop(t *testing.T) {

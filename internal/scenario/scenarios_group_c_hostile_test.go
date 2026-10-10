@@ -152,7 +152,7 @@ func TestC9TargetCollidesWithNoLabYAMLSubnet(t *testing.T) {
 	var taken []netip.Prefix
 	for _, c := range cfg.Cells {
 		taken = append(taken, netip.MustParsePrefix(c.Segment.Subnet))
-		// A relay cell's server segment is a subnet too (#11, r2 finding 2).
+		// A relay cell's server segment is a subnet too (#11).
 		if c.Relay != nil {
 			taken = append(taken, netip.MustParsePrefix(c.Relay.ServerSegment.Subnet))
 		}
