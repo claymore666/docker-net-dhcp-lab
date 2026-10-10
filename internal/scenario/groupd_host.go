@@ -151,6 +151,14 @@ func containerRoute6(ctx context.Context, r sourceadapter.Runner, name string) (
 type healthEndpoint struct {
 	Endpoint             string `json:"endpoint"`
 	IPv6TemporaryAddress string `json:"ipv6_temporary_address"`
+	// DelegatedPrefixes (v2.5.0, F6) and NAT64Prefixes (v2.4.0, F7) are
+	// absent when there are none (docs/reference.md, "Plugin.Health").
+	DelegatedPrefixes []healthPrefix `json:"delegated_prefixes"`
+	NAT64Prefixes     []string       `json:"nat64_prefixes"`
+}
+
+type healthPrefix struct {
+	Prefix string `json:"prefix"`
 }
 
 // pluginHealthCmd is the plugin docs' own recipe: GET on the plugin
@@ -178,14 +186,34 @@ func parseHealthEndpoint(body, endpointID string) (healthEndpoint, bool, error) 
 }
 
 func pluginHealth(ctx context.Context, r sourceadapter.Runner, endpointID, path string) (healthEndpoint, bool, error) {
-	out, err := r.Run(ctx, pluginHealthCmd)
+	out, err := pluginHealthBody(ctx, r, path)
 	if err != nil {
-		return healthEndpoint{}, false, fmt.Errorf("read /Plugin.Health: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return healthEndpoint{}, false, err
 	}
 	return parseHealthEndpoint(out, endpointID)
+}
+
+// pluginHealthBody reads /Plugin.Health once and keeps it at path.
+func pluginHealthBody(ctx context.Context, r sourceadapter.Runner, path string) (string, error) {
+	out, err := r.Run(ctx, pluginHealthCmd)
+	if err != nil {
+		return "", fmt.Errorf("read /Plugin.Health: %w", err)
+	}
+	return out, os.WriteFile(path, []byte(out), 0o644)
+}
+
+// healthCounter is one top-level /Plugin.Health counter, such as
+// dhcpv6_auto_fallbacks (docs/reference.md field table, D3c).
+func healthCounter(body, name string) (int64, bool) {
+	var h map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &h) != nil {
+		return 0, false
+	}
+	var n int64
+	if raw, ok := h[name]; !ok || json.Unmarshal(raw, &n) != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // eui64 is prefix plus the modified EUI-64 of mac (RFC 4291 appendix A),

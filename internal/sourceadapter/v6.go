@@ -24,6 +24,11 @@ type RAParams struct {
 	Pref64              netip.Prefix
 }
 
+// ErrRAUnsupported wraps a SetRA refusal for an RA the source cannot
+// send at all (dnsmasq: PREF64, a valid lifetime 0), so a row can tell
+// it from a failed toggle (#23 D4b).
+var ErrRAUnsupported = errors.New("this source's RA cannot carry it")
+
 // BaselineRA is the M=1 A=1 single-PIO advertisement every cell starts from.
 var BaselineRA = RAParams{Managed: true, Autonomous: true}
 
@@ -281,6 +286,15 @@ func (a *DnsmasqAdapter) StopV6Server(context.Context) (func(context.Context) er
 // DnsmasqNoV6ServerStop is why dnsmasq does not declare CapV6ServerStop.
 const DnsmasqNoV6ServerStop = "one dnsmasq process sends the RA and answers DHCPv6, so the RA cannot ask for DHCPv6 while the server is silent"
 
+// NAReason gives D3c's N/A on dnsmasq its reason (DESIGN-23d row D3,
+// INFERRED there, #23).
+func (a *DnsmasqAdapter) NAReason(c Capability) (string, bool) {
+	if c == CapV6ServerStop {
+		return DnsmasqNoV6ServerStop, true
+	}
+	return "", false
+}
+
 var (
 	dnsmasqEnableRARE = regexp.MustCompile(`(?m)^enable-ra$`)
 	dnsmasqSlaacRE    = regexp.MustCompile(`(?m)^(dhcp-range=[^,\n]+,[^,\n]+,)slaac,`)
@@ -294,10 +308,10 @@ var (
 // are refused (#23).
 func renderDnsmasqRA(orig string, p RAParams) (string, error) {
 	if p.Pref64.IsValid() {
-		return "", errors.New("dnsmasq: its RA carries no PREF64 option (RFC 8781)")
+		return "", fmt.Errorf("dnsmasq: its RA carries no PREF64 option (RFC 8781): %w", ErrRAUnsupported)
 	}
 	if p.SecondExpired {
-		return "", errors.New("dnsmasq: no knob advertises a PIO with valid lifetime 0")
+		return "", fmt.Errorf("dnsmasq: no knob advertises a PIO with valid lifetime 0: %w", ErrRAUnsupported)
 	}
 	if p.Second.IsValid() && !p.Autonomous {
 		return "", errors.New("dnsmasq: a second prefix is advertised ra-only, which sets A=1")
