@@ -136,19 +136,106 @@ func cmdResolve(args []string) {
 		}
 		sourceImage = &si
 	}
+	relayImage, relayCfg, err := resolveRelay(cell)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl resolve:", err)
+		os.Exit(1)
+	}
 	out := struct {
 		Management      labyaml.Management `json:"management"`
 		ULAPrefix       string             `json:"ula_prefix"`
 		Cell            *labyaml.Cell      `json:"cell"`
 		DockerHostImage labyaml.BaseImage  `json:"docker_host_image"`
 		SourceImage     *labyaml.BaseImage `json:"source_image"`
-	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage}
+		RelayImage      *labyaml.BaseImage `json:"relay_image"`
+		RelayFiles      *relayFiles        `json:"relay_files"`
+	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "labctl resolve: encode:", err)
 		os.Exit(1)
 	}
+}
+
+// relayFiles are the relay VM's two config files, rendered by the same
+// Go code its Ready check compares against (#11), so up-relay.sh never
+// keeps a second copy.
+type relayFiles struct {
+	Defaults string `json:"defaults"`
+	Nft      string `json:"nft"`
+}
+
+func resolveRelay(cell *labyaml.Cell) (*labyaml.BaseImage, *relayFiles, error) {
+	if cell.Relay == nil {
+		return nil, nil, nil
+	}
+	img, err := labyaml.LookupBaseImage(cell.Relay.BaseImage)
+	if err != nil {
+		return nil, nil, err
+	}
+	defaults, err := sourceadapter.RenderRelayDefaults(relayParams(cell))
+	if err != nil {
+		return nil, nil, err
+	}
+	return &img, &relayFiles{Defaults: defaults, Nft: sourceadapter.RelayNftRuleset}, nil
+}
+
+// relayParams maps a relay cell's lab.yaml addresses onto WithRelay (#11).
+func relayParams(cell *labyaml.Cell) sourceadapter.RelayParams {
+	return sourceadapter.RelayParams{
+		ClientAddr:   cell.Relay.ClientAddress,
+		ServerAddr:   cell.Relay.ServerAddress,
+		SourceAddr:   hostPart(cell.Source.SegAddress),
+		ClientSubnet: cell.Segment.Subnet,
+		PoolStart:    cell.Source.PoolStart,
+		AgentOptions: cell.Relay.AgentOptions,
+	}
+}
+
+func hostPart(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
+
+// cellEnv builds the cell half of a run's Env: the source adapter, wrapped
+// with the relay's Ready checks and Recover in a relay cell, and the router,
+// source, relay and second-capture fields (#11). dial opens a runner on a
+// management address; cmdRun fills the shape half.
+func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
+	// One runner per host, so the adapter and the relay's source probes
+	// share the primary's retry state.
+	sourceHost := hostPart(cell.Source.MgmtAddress)
+	sourceRunner := dial(sourceHost)
+	source, err := newCellSourceAdapter(cell.Source, func(mgmt string) sourceadapter.Runner {
+		if hostPart(mgmt) == sourceHost {
+			return sourceRunner
+		}
+		return dial(hostPart(mgmt))
+	})
+	if err != nil {
+		return scenario.Env{}, err
+	}
+	env := scenario.Env{
+		Cell:      cellName,
+		RepoRoot:  repoRoot,
+		WorkDir:   workDir,
+		SegSubnet: cell.Segment.Subnet,
+		PoolStart: cell.Source.PoolStart,
+		PoolEnd:   cell.Source.PoolEnd,
+		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
+	}
+	env.SegGateway, env.SourceAddr = segAddresses(cell)
+	if cell.Relay != nil {
+		relayRunner := dial(hostPart(cell.Relay.MgmtAddress))
+		p := relayParams(cell)
+		p.Source = sourceRunner
+		source = sourceadapter.WithRelay(source, relayRunner, p)
+		if env.RelayClientMAC, env.RelayServerMAC, err = sourceadapter.RelayMACs(ctx, relayRunner); err != nil {
+			return scenario.Env{}, err
+		}
+		env.ServerPCAP = filepath.Join(workDir, "srv", "observer.pcap")
+		env.ServerCapture = scenario.ObserverCapture{Cell: cellName + "-srv", RepoRoot: repoRoot}
+	}
+	env.Source = source
+	return env, nil
 }
 
 // newSourceAdapter is the one place that maps a lab.yaml source.type to
@@ -355,14 +442,15 @@ func cmdRun(args []string) int {
 	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
 	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
-	source, err := newCellSourceAdapter(cell.Source, func(mgmt string) sourceadapter.Runner {
+	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
 		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
-			Inner: sourceadapter.SSHRunner{Host: strings.SplitN(mgmt, "/", 2)[0], User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
 		return 1
 	}
+	source := env.Source
 
 	gitSHA, err := gitRevParseHEAD(repoRoot)
 	if err != nil {
@@ -492,28 +580,15 @@ func cmdRun(args []string) int {
 	}
 	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
 
-	segGateway, sourceAddr := segAddresses(cell.Source)
-	env := scenario.Env{
-		Host:              hostRunner,
-		Source:            source,
-		Cell:              cellName,
-		Shape:             shape,
-		Network:           net,
-		PCAP:              pcap,
-		RepoRoot:          repoRoot,
-		WorkDir:           workDir,
-		EvidenceDir:       evidenceDir,
-		PluginTag:         cell.DockerHost.PluginTag,
-		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
-		GitSHA:            gitSHA,
-		SegGateway:        segGateway,
-		SourceAddr:        sourceAddr,
-		SegSubnet:         cell.Segment.Subnet,
-		PoolStart:         cell.Source.PoolStart,
-		PoolEnd:           cell.Source.PoolEnd,
-		HostInfo:          hi,
-		Capture:           scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
-	}
+	env.Host = hostRunner
+	env.Shape = shape
+	env.Network = net
+	env.PCAP = pcap
+	env.EvidenceDir = evidenceDir
+	env.PluginTag = cell.DockerHost.PluginTag
+	env.PreviousPluginTag = cell.DockerHost.PreviousPluginTag
+	env.GitSHA = gitSHA
+	env.HostInfo = hi
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a
 	// minute and hand it to whichever container starts next on the same
@@ -629,8 +704,12 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 }
 
 // segAddresses is the router and the source address a cell's Env carries;
-// without a relay both are seg_address stripped of its CIDR suffix (#11).
-func segAddresses(src *labyaml.Source) (segGateway, sourceAddr string) {
-	a := strings.SplitN(src.SegAddress, "/", 2)[0]
-	return a, a
+// without a relay both are seg_address stripped of its CIDR suffix, behind
+// a relay the router is the relay's client leg (#11).
+func segAddresses(cell *labyaml.Cell) (segGateway, sourceAddr string) {
+	sourceAddr = hostPart(cell.Source.SegAddress)
+	if cell.Relay != nil {
+		return hostPart(cell.Relay.ClientAddress), sourceAddr
+	}
+	return sourceAddr, sourceAddr
 }

@@ -146,7 +146,7 @@ done
 # time, and another run may define its domain meanwhile.
 host_conflict() {
 	local cell=$1 d
-	for d in "lab-${cell}-dockerhost" "lab-${cell}-source" "lab-${cell}-partner"; do
+	for d in "lab-${cell}-dockerhost" "lab-${cell}-source" "lab-${cell}-partner" "lab-${cell}-relay"; do
 		if sudo -n virsh dominfo "$d" >/dev/null 2>&1; then
 			echo "domain $d already exists on this host (run down-cell.sh for that cell first)"
 			return 0

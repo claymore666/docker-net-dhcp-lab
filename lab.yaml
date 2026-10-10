@@ -281,3 +281,46 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: kea-relay
+    description: >
+      Kea on its own server segment behind isc-dhcp-relay, so the Docker
+      host's segment is served by giaddr. Issue #11.
+    segment:
+      bridge: lab-br-kea-rly
+      subnet: 10.200.10.0/24
+      subnet6: "fd42:200:0:a00::/64"
+    relay:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.112/24
+      client_address: 10.200.10.1/24
+      server_address: 10.200.11.1/24
+      server_segment:
+        bridge: lab-br-kea-rsv
+        subnet: 10.200.11.0/24
+      agent_options: true
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.111/24
+      seg_address: 10.200.11.2/24
+      pool_start: 10.200.10.100
+      pool_end: 10.200.10.200
+      seg_address6: "fd42:200:0:a00::2/64"
+      pool6_start: "fd42:200:0:a00::100"
+      pool6_end: "fd42:200:0:a00::1ff"
+      temp6_pool: "fd42:200:0:a00::200/120"
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.110/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

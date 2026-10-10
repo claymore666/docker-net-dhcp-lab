@@ -235,6 +235,15 @@ func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
 	}
 }
 
+// lab-seg-firewall.sh forwards bridged traffic only on lab-br+ (#11): a
+// bridge outside that prefix would bring up a cell whose DHCP is dropped.
+func TestRejectsBridgeOutsideTheFirewallPrefix(t *testing.T) {
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: br-ref-only", 1)
+	if _, err := Load(write(t, bad)); err == nil || !strings.Contains(err.Error(), "does not start with lab-br-") {
+		t.Fatalf("a bridge outside lab-br- was accepted: %v", err)
+	}
+}
+
 // One character over the limit is the boundary the kernel actually
 // draws (IFNAMSIZ-1 = 15): the 39-character case above only proves
 // "too long" is caught, not that the limit itself is 15 and not 16.
@@ -380,6 +389,102 @@ func TestRejectsBadV6Values(t *testing.T) {
 	}
 }
 
+const withRelay = goodMin + `
+  - name: kea-relay
+    segment:
+      bridge: lab-br-kea-rly
+      subnet: 10.200.10.0/24
+    relay:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.112/24
+      client_address: 10.200.10.1/24
+      server_address: 10.200.11.1/24
+      server_segment:
+        bridge: lab-br-kea-rsv
+        subnet: 10.200.11.0/24
+      agent_options: true
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.111/24
+      seg_address: 10.200.11.2/24
+      pool_start: 10.200.10.100
+      pool_end: 10.200.10.200
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.110/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+`
+
+func TestLoadWithRelay(t *testing.T) {
+	c, err := Load(write(t, withRelay))
+	if err != nil {
+		t.Fatalf("valid relay cell rejected: %v", err)
+	}
+	cell, err := c.CellByName("kea-relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.Relay == nil || cell.Relay.ServerSegment.Bridge != "lab-br-kea-rsv" || !cell.Relay.AgentOptions {
+		t.Fatalf("relay block lost in parsing: %+v", cell.Relay)
+	}
+	ref, _ := c.CellByName("ref-only")
+	if ref.Relay != nil {
+		t.Fatal("a cell without a relay block parsed with one")
+	}
+}
+
+// One row per validator rule (defeat 9 of the relay design, #11): each
+// edit breaks exactly one rule of an otherwise valid relay file.
+func TestRelayValidatorRules(t *testing.T) {
+	cases := []struct {
+		name, old, new, want string
+	}{
+		{"relay without a source", "    source:\n      type: kea\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111/24\n      seg_address: 10.200.11.2/24\n      pool_start: 10.200.10.100\n      pool_end: 10.200.10.200\n", "", "needs a source"},
+		{"non-kea source", "      type: kea\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111", "      type: dnsmasq\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111", "only built for a kea source"},
+		{"missing base image", "    relay:\n      base_image: debian-13-generic-amd64\n", "    relay:\n", "relay.base_image is required"},
+		{"unregistered base image", "    relay:\n      base_image: debian-13-generic-amd64\n", "    relay:\n      base_image: no-such-image\n", "relay.base_image:"},
+		{"missing server bridge", "        bridge: lab-br-kea-rsv\n", "", "server_segment.bridge is required"},
+		{"server bridge over 15", "lab-br-kea-rsv", "lab-br-kea-rsv-xx", "interface name limit"},
+		{"server bridge equals client bridge", "lab-br-kea-rsv", "lab-br-kea-rly", "reused by another segment"},
+		{"server bridge outside lab-br-", "lab-br-kea-rsv", "br-kea-rsv", "server_segment.bridge \"br-kea-rsv\" does not start with lab-br-"},
+		{"server bridge equals another cell's", "lab-br-kea-rsv", "lab-br-ref-only", "reused by another segment"},
+		{"server subnet outside lab range", "        subnet: 10.200.11.0/24", "        subnet: 10.55.11.0/24", "outside the lab's published range"},
+		{"server subnet overlaps management", "        subnet: 10.200.11.0/24", "        subnet: 10.200.254.0/23", "overlaps the management subnet"},
+		{"server subnet overlaps client segment", "        subnet: 10.200.11.0/24", "        subnet: 10.200.10.0/23", "overlaps segment subnet 10.200.10.0/24"},
+		{"server subnet overlaps another cell", "        subnet: 10.200.11.0/24", "        subnet: 10.200.0.128/25", "overlaps segment subnet 10.200.0.0/24"},
+		{"mgmt address outside management", "mgmt_address: 10.200.255.112/24", "mgmt_address: 10.200.12.112/24", "relay.mgmt_address is not inside"},
+		{"mgmt address reused", "mgmt_address: 10.200.255.112/24", "mgmt_address: 10.200.255.10/24", "relay.mgmt_address 10.200.255.10 reused"},
+		{"client address outside client segment", "client_address: 10.200.10.1/24", "client_address: 10.200.11.9/24", "client_address: 10.200.11.9 is not inside"},
+		{"client address in pool", "client_address: 10.200.10.1/24", "client_address: 10.200.10.150/24", "inside the source pool"},
+		{"client address at the DNS option octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.253/24", "group B, C or F reserves"},
+		{"client address at the user-class octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.203/24", "group B, C or F reserves"},
+		{"client address at the rogue server octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.240/24", "group B, C or F reserves"},
+		{"client address at the narrowed pool octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.201/24", "group B, C or F reserves"},
+		{"client address prefix length", "client_address: 10.200.10.1/24", "client_address: 10.200.10.1/25", "prefix length /25"},
+		{"client address is the network address", "client_address: 10.200.10.1/24", "client_address: 10.200.10.0/24", "client_address: 10.200.10.0 is the network or broadcast address of 10.200.10.0/24"},
+		{"server address is the broadcast address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.255/24", "server_address: 10.200.11.255 is the network or broadcast address of 10.200.11.0/24"},
+		{"server address outside server segment", "server_address: 10.200.11.1/24", "server_address: 10.200.10.2/24", "server_address: 10.200.10.2 is not inside"},
+		{"server address equals source seg_address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.2/24", "is also source.seg_address"},
+		{"seg_address on the client segment", "seg_address: 10.200.11.2/24", "seg_address: 10.200.10.2/24", "source.seg_address is not inside relay.server_segment.subnet"},
+		{"pool on the server segment", "pool_start: 10.200.10.100\n      pool_end: 10.200.10.200", "pool_start: 10.200.11.100\n      pool_end: 10.200.11.200", "source pool is not inside segment.subnet"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(withRelay, tc.old) {
+				t.Fatalf("fixture lacks %q", tc.old)
+			}
+			_, err := Load(write(t, strings.Replace(withRelay, tc.old, tc.new, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
 // A source with v6 fields on a cell without segment.subnet6 is refused,
 // and a cell without any v6 field still loads (goodMin, withSource).
 func TestRejectsV6SourceFieldsWithoutSubnet6(t *testing.T) {
@@ -399,6 +504,24 @@ func TestRealLabYAMLSourcesHaveV6(t *testing.T) {
 	for _, cell := range c.Cells {
 		if cell.Segment.Subnet6 == "" {
 			t.Errorf("cell %s has no segment.subnet6", cell.Name)
+		}
+	}
+}
+
+// The exact-match subnet check let a wider prefix swallow a sibling cell's
+// /24 (#11); a duplicate subnet must stay refused too.
+func TestRejectsOverlappingCellSubnets(t *testing.T) {
+	cases := []struct{ subnet, seg, start, end string }{
+		{"10.200.0.0/24", "10.200.0.2/24", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.0/23", "10.200.0.2/23", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.64/26", "10.200.0.66/26", "10.200.0.70", "10.200.0.80"},
+	}
+	for _, tc := range cases {
+		r := strings.NewReplacer("      subnet: 10.200.1.0/24", "      subnet: "+tc.subnet,
+			"10.200.1.2/24", tc.seg, "10.200.1.100", tc.start, "10.200.1.200", tc.end)
+		_, err := Load(write(t, r.Replace(withSource)))
+		if err == nil || !strings.Contains(err.Error(), "overlaps segment subnet 10.200.0.0/24") {
+			t.Fatalf("%s beside 10.200.0.0/24: want an overlap error, got %v", tc.subnet, err)
 		}
 	}
 }

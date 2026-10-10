@@ -13,7 +13,7 @@ set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
-templates=(cloud-init/network-config.tmpl.yaml cloud-init/source-network-config.tmpl.yaml)
+templates=(cloud-init/network-config.tmpl.yaml cloud-init/source-network-config.tmpl.yaml cloud-init/relay-network-config.tmpl.yaml)
 
 fail=0
 for t in "${templates[@]}"; do
@@ -51,6 +51,7 @@ fi
 bad_mac="52:54:00:31:55:26"
 for t in "${templates[@]}"; do
 	rendered=$(sed -e "s#__MGMT_MAC__#$bad_mac#" -e "s#__SEG_MAC__#$bad_mac#" \
+		-e "s#__CLI_MAC__#$bad_mac#" -e "s#__SRV_MAC__#$bad_mac#" \
 		-e "s#__MGMT_ADDR__#10.200.255.50/24#" -e "s#__MGMT_GW__#10.200.255.1#g" \
 		-e "s#__SEG_ADDR__#10.200.100.5/24#" "$t")
 	python3 -c "

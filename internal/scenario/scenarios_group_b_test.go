@@ -582,6 +582,18 @@ func TestRunB3PassesWhenTheSourceAnswersWithTheLeasedAddress(t *testing.T) {
 	needCleanup(t, h, "b3", containerName(e, NameB3))
 }
 
+// Behind a relay (#11) the router is the relay, not the source: B3 must
+// still ask the source.
+func TestRunB3AsksTheSourceNotTheRouter(t *testing.T) {
+	h, _, e := b3Fixture(t, ShapeBridge)
+	h.nslookup = nslookupOK
+	e.SegGateway = "10.200.1.9"
+	needResult(t, runB3Tuned(context.Background(), e, 2, time.Millisecond), PASS)
+	if !h.has("nslookup labb3-dnsmasq-bridge 10.200.1.1") || h.has("10.200.1.9") {
+		t.Errorf("the query does not name the source alone: %v", h.cmds)
+	}
+}
+
 func TestRunB3FailsWhenTheAnswerIsAnotherAddress(t *testing.T) {
 	h, _, e := b3Fixture(t, ShapeBridge)
 	h.nslookup = strings.Replace(nslookupOK, "10.200.1.101", "10.200.1.77", 1)
@@ -597,7 +609,7 @@ func TestRunB3FailsWhenTheHostnameDoesNotResolve(t *testing.T) {
 
 func TestRunB3FailsWithoutASourceAddress(t *testing.T) {
 	h, _, e := b3Fixture(t, ShapeBridge)
-	e.SegGateway = ""
+	e.SourceAddr = ""
 	needResult(t, runB3Tuned(context.Background(), e, 1, time.Millisecond), FAIL)
 	if h.has("nslookup") {
 		t.Error("queried with no server address")

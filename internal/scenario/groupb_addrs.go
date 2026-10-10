@@ -63,7 +63,7 @@ func groupBAddr(e Env, host int) (string, error) {
 		return "", fmt.Errorf("%s lies inside the main pool %s-%s, where the source may hand it to any client", addr, start, end)
 	}
 	if addr.String() == e.SegGateway {
-		return "", fmt.Errorf("%s is the source's own segment address", addr)
+		return "", fmt.Errorf("%s is the segment gateway address", addr)
 	}
 	return addr.String(), nil
 }

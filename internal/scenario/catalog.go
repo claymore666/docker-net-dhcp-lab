@@ -32,9 +32,9 @@ type Env struct {
 	PreviousPluginTag string
 	GitSHA            string
 	// SegGateway is the address the segment's DHCP server hands out as
-	// the router option, cell.source.seg_address stripped of its CIDR
-	// suffix (issue #3, A13 redesign): A13 checks the container's own
-	// default route against this, not against a hardcoded address.
+	// the router option (issue #3, A13 redesign): the source's
+	// seg_address, or the relay's client_address in a relay cell (#11).
+	// A13 checks the container's default route against it.
 	SegGateway string
 	// SourceAddr is the source's own segment address; it equals SegGateway
 	// on every cell without a relay (#11, #23).
@@ -54,6 +54,14 @@ type Env struct {
 	// Capture reads the live observer capture (group C, #23); nil
 	// leaves a group C scenario BLOCKED, never judged without it.
 	Capture CaptureReader
+	// ServerPCAP and ServerCapture are the relay cell's second observer,
+	// on the source's server segment; RelayClientMAC and RelayServerMAC
+	// are the relay's two leg MACs, read once at run start (#11). All
+	// empty or nil in a cell without a relay.
+	ServerPCAP     string
+	ServerCapture  CaptureReader
+	RelayClientMAC string
+	RelayServerMAC string
 }
 
 // Scenario is one entry in the catalog. Run returns the finished

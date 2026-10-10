@@ -190,7 +190,7 @@ func TestRemainingScenarioNamesAllDoneReturnsEmpty(t *testing.T) {
 	}
 }
 
-// Every lab.yaml cell has no relay yet, so its router and its source are
+// Every lab.yaml cell without a relay has its router and its source on
 // the same seg_address without the CIDR suffix (#11, #23).
 func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
 	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
@@ -199,11 +199,11 @@ func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
 	}
 	seen := 0
 	for name, c := range cfg.Cells {
-		if c.Source == nil {
+		if c.Source == nil || c.Relay != nil {
 			continue
 		}
 		seen++
-		gw, src := segAddresses(c.Source)
+		gw, src := segAddresses(&c)
 		p, err := netip.ParsePrefix(c.Source.SegAddress)
 		if err != nil || gw != p.Addr().String() || gw != src {
 			t.Errorf("%v: router %q, source %q from seg_address %q", name, gw, src, c.Source.SegAddress)

@@ -200,8 +200,8 @@ func runB3(ctx context.Context, e Env) Verdict {
 }
 
 func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdict {
-	if _, err := netip.ParseAddr(e.SegGateway); err != nil {
-		return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("no source segment address to query (%q): %v", e.SegGateway, err), nil, e.GitSHA)
+	if _, err := netip.ParseAddr(e.SourceAddr); err != nil {
+		return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("no source segment address to query (%q): %v", e.SourceAddr, err), nil, e.GitSHA)
 	}
 	net, down, err := bNetwork(ctx, e, 3, []string{"register_dns=true"})
 	defer down()
@@ -225,7 +225,7 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 	if !ok {
 		return fail(NameB3, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
-	query := fmt.Sprintf("sudo docker exec %s nslookup %s %s", name, host, e.SegGateway)
+	query := fmt.Sprintf("sudo docker exec %s nslookup %s %s", name, host, e.SourceAddr)
 	var out string
 	var answers []string
 	for i := 0; i < tries; i++ {
@@ -243,10 +243,10 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 	}
 	for _, a := range answers {
 		if a == addr {
-			return pass(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answers %s with the leased address %s", e.SegGateway, host, addr), ev, e.GitSHA)
+			return pass(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answers %s with the leased address %s", e.SourceAddr, host, addr), ev, e.GitSHA)
 		}
 	}
-	return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answered %s with %v, want the leased address %s", e.SegGateway, host, answers, addr), ev, e.GitSHA)
+	return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answered %s with %v, want the leased address %s", e.SourceAddr, host, answers, addr), ev, e.GitSHA)
 }
 
 // runB4 -- requested address kept: a fixed-MAC container is removed (the
