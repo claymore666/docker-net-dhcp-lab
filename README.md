@@ -160,7 +160,7 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 | C2 | source down past T1 | the source stops after the bind and returns between T1 and T2; the client tried to renew while it was down and keeps its address |
 | C3 | source down past expiry | the source stays down past the lease's expiry; within 120 s of its return the container carries an address the source's table shows for it |
 | C4 | restart without lease file | the source restarts with an empty lease file; 135 s after the bind it holds exactly one lease for the container, on the address the container carries |
-| C5 | failover, granting peer stopped | on the `kea-ha` cell: the peer that granted the lease stops 10 s after the bind; the client's renewals to it go unanswered, its rebind after T2 is answered by the other peer, and the container keeps its address throughout (T1 and T2 from the lease time the ACK itself carries) |
+| C5 | failover, granting peer stopped | on the `kea-ha` and `isc-failover` cells: the peer that granted the lease stops 10 s after the bind; the client's renewals to it go unanswered, its rebind after T2 is answered by the other peer, and the container keeps its address throughout (T1 and T2 from the lease time the ACK itself carries) |
 | C5b | failover, primary down at create | with the primary stopped and the partner taken over, a new container is leased by the partner within C1's bound, and the partner's table holds it |
 | C5c | failover, primary returns | C5b's container is kept while the primary returns; the primary's table holds the outage lease, the container keeps its address through its next renewal, and a new container is leased |
 | C5d | failover, no address given twice | 18 containers (10 with both peers up, 4 with the primary down, 4 after its return) carry 18 distinct addresses; no peer's table and no pair of ACKs gives one address to two clients at once |
@@ -296,7 +296,7 @@ source's table on its own, through the same adapter.
 The `kea-ha` cell is a failover pair: two Kea VMs on one segment in
 hot-standby, with `max-unacked-clients 0`, so the partner takes over at
 once when the primary stops (issue #12). `up-cell.sh` builds both
-peers and `down-cell.sh` removes both. C5 to C5d run only there. On
+peers and `down-cell.sh` removes both. C5 to C5d run only on pair cells. On
 that cell C1 to C4 stop or reset both peers together, C8 narrows both
 pools, and C6 and C7 act from the primary's VM. Only the primary
 serves DHCPv6 and router advertisements: the partner stops both, since
@@ -308,6 +308,28 @@ delay on one peer is split brain, and the pair is not a relay. Each
 PASS or FAIL lists both peers' failover state before and after the
 scenario, recorded but not judged. A BLOCKED verdict lists no evidence,
 so its two state files sit in the cell's evidence directory unlisted.
+
+The `isc-failover` cell is the same shape with ISC dhcpd 4.4 failover
+(issue #12): primary and secondary, load balanced with `split 128`,
+`mclt 60` on the primary and `load balance max seconds 3`, so both peers
+answer while the pair is normal and C5d needs both server identifiers.
+A stopped peer leaves the other in `communications-interrupted`, which
+serves new clients from its own half of the pool. The lease time a
+client is granted differs from the cell's 120 s: in a local run the
+first grant carried 60 s and a renewal answered by the surviving peer
+after the primary stopped carried 600 s. C5 therefore takes T1, T2 and
+the expiry from the ACK's option 51. C5b requires
+the new container's address to come from the half the primary holds as
+`backup` and is BLOCKED otherwise. C5c accepts the renewal of the kept
+address from either peer, because the client renews with the server that
+granted the lease and a load-balanced peer answers it. The state of each
+peer is the last block of its `dhcpd.leases`; a file with no state block
+asks `omshell`, and so does every wait for `normal` after a start, because
+a restarted peer's file keeps its old `normal` block (the template opens
+`omapi-port 7911` on both VMs, with no key, on the lab's isolated
+networks). The partner serves no DHCPv6 and no
+router advertisements, as on `kea-ha`. The resource-bound line below
+applies to it as well.
 
 ## Run every scenario on a cell
 
@@ -324,9 +346,9 @@ under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
 `/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
 `(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1. That
-bound assumes 3 vCPUs and 3 GiB per cell; a `kea-ha` cell has a third VM
-and takes 4 and 4 GiB, so the default can overcommit by one vCPU and 1 GiB
-per `kea-ha` cell in the run. A
+bound assumes 3 vCPUs and 3 GiB per cell; a `kea-ha` or `isc-failover`
+cell has a third VM and takes 4 and 4 GiB, so the default can overcommit by
+one vCPU and 1 GiB per pair cell in the run. A
 larger `-j` is accepted and reported as an overcommit: six cells are 18
 guest vCPUs, and on a 16-vCPU host with three of them rebooting at once
 their guests stopped accepting new ssh connections for about four minutes

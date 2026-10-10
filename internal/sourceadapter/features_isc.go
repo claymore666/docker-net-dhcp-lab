@@ -44,7 +44,11 @@ func (a *ISCDHCPAdapter) EnableFeature(ctx context.Context, f Feature, p Feature
 	case FeatureUserClassPool:
 		already = `class "f1"`
 		class := fmt.Sprintf("${1}class \"f1\" {\n${1}  match if substring(option user-class, 1, %d) = \"%s\";\n${1}}\n${1}${2}", len(v.class), v.class)
-		pool := fmt.Sprintf("${1}pool {\n${1}  allow members of \"f1\";\n${1}  range %s %s;\n${1}}\n${1}${2}", v.start, v.end)
+		failover := ""
+		if a.Failover {
+			failover = "${1}  failover peer \"" + iscFailoverPeerName + "\";\n"
+		}
+		pool := fmt.Sprintf("${1}pool {\n%s${1}  allow members of \"f1\";\n${1}  range %s %s;\n${1}}\n${1}${2}", failover, v.start, v.end)
 		edits = []configEdit{
 			{iscSubnetRE, class, "the subnet block"},
 			{iscMainPoolDenyRE, "${1}${2}\n${1}deny members of \"f1\";", "the main pool's deny line"},

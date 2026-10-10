@@ -158,6 +158,13 @@ seed_cloud_init() {
 		;;
 	esac
 	tmpl="$REPO_ROOT/cloud-init/${tmpl_name}-user-data.tmpl.yaml"
+	# ISC failover (lab #12): dhcpd.conf(5) names the roles primary and
+	# secondary, and mclt/split are valid on the primary only.
+	if [ "$PEER" = partner ]; then
+		fo_role=secondary fo_peer=${primary_seg%%/*} fo_primary_only='# '
+	else
+		fo_role=primary fo_peer=${partner_seg%%/*} fo_primary_only=
+	fi
 	if [ "$PEER" = partner ]; then seed_dir="$WORK/seed-partner"; else seed_dir="$WORK/seed-source"; fi
 	if [ "$PEER" = partner ]; then host_name="lab-${source_type}-partner"; else host_name="lab-${source_type}-source"; fi
 	mkdir -p "$seed_dir"
@@ -171,6 +178,8 @@ seed_cloud_init() {
 		-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
 		-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
 		-e "s#__HA_PRIMARY_SEG__#${primary_seg%%/*}#g" -e "s#__HA_PARTNER_SEG__#${partner_seg%%/*}#g" \
+		-e "s#__FO_ROLE__#$fo_role#g" -e "s#__FO_OWN_SEG__#${seg_addr%%/*}#g" -e "s#__FO_PEER_SEG__#$fo_peer#g" \
+		-e "s|__FO_PRIMARY_ONLY__|$fo_primary_only|g" \
 		"$tmpl" >"$seed_dir/user-data"
 	# A v4-only cell has no __SEG_ADDR6__ item to fill: drop it from the
 	# template the renderer reads, and hand it a placeholder it never uses.

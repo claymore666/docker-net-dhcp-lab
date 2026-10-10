@@ -76,6 +76,36 @@ elif [ -e "$w4/seed-source" ] || ! grep -qx 'local-hostname: lab-kea-partner' "$
 	fail=1
 fi
 
+# Case 4b: the isc-failover pair (#12). The partner renders the secondary
+# role with mclt and split commented out (dhcpd.conf(5) refuses them there)
+# and the primary keeps both, each peer pointing at the other.
+w4b="$tmp/w4b"
+for peer in primary partner; do
+	arg=
+	[ "$peer" != partner ] || arg=partner
+	if ! out=$(UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh isc-failover "$w4b" $arg 2>&1); then
+		echo "up-source-test: isc-failover $peer refused: $out" >&2
+		fail=1
+		continue
+	fi
+	[ "$peer" = partner ] && ud="$w4b/seed-partner/user-data" || ud="$w4b/seed-source/user-data"
+	if grep -q '__FO_\|__HA_' "$ud"; then
+		echo "up-source-test: isc-failover $peer keeps a placeholder" >&2
+		fail=1
+	fi
+	if [ "$peer" = partner ]; then
+		for want in 'secondary;' 'address 10.200.9.3;' 'peer address 10.200.9.2;' '# mclt 60;' '# split 128;'; do
+			grep -qF "$want" "$ud" || { echo "up-source-test: isc-failover partner lacks $want" >&2; fail=1; }
+		done
+		grep -qE '^ +mclt 60;|^ +split 128;' "$ud" && { echo "up-source-test: isc-failover partner keeps mclt or split" >&2; fail=1; }
+	else
+		for want in ' primary;' 'address 10.200.9.2;' 'peer address 10.200.9.3;' ' mclt 60;' ' split 128;'; do
+			grep -qF "$want" "$ud" || { echo "up-source-test: isc-failover primary lacks $want" >&2; fail=1; }
+		done
+		grep -qE '# (mclt|split)' "$ud" && { echo "up-source-test: isc-failover primary comments mclt or split out" >&2; fail=1; }
+	fi
+done
+
 # Case 5: the chr cell (#9) renders its three RouterOS scripts and the key
 # with every placeholder filled, and the seed script disables the stock
 # admin and sets the identity ready_qga waits for as its last line.

@@ -91,6 +91,26 @@ for type in kea isc-dhcp dnsmasq udhcpd pihole; do
 		fail=1
 	fi
 done
+# The ISC failover pair (lab #12): the isc-dhcp cell plus a partner renders
+# the failover template for each peer. New goldens only; isc-dhcp.golden
+# above stays the plain cell, byte for byte.
+jq '.cell.source.partner = {seg_address: "10.200.2.3/24", mgmt_address: "10.200.255.32/24", seg_address6: "fd42:200:0:200::3/64"}' \
+	"$tmp/resolved-isc-dhcp.json" >"$tmp/resolved-isc-failover.json"
+for peer in primary partner; do
+	arg=
+	[ "$peer" != partner ] || arg=partner
+	set +e
+	render isc-dhcp "$tmp/resolved-isc-failover.json" "$tmp/got-isc-failover-$peer" "$arg"
+	set -e
+	if [ "${LAB_GOLDEN_WRITE:-}" = 1 ]; then
+		cp "$tmp/got-isc-failover-$peer" "$FIX/isc-failover-$peer.golden"
+	fi
+	if ! diff -u "$FIX/isc-failover-$peer.golden" "$tmp/got-isc-failover-$peer" >"$tmp/diff-isc-failover-$peer"; then
+		echo "up-source-golden-test: isc-failover $peer differs from $FIX/isc-failover-$peer.golden:" >&2
+		head -40 "$tmp/diff-isc-failover-$peer" >&2
+		fail=1
+	fi
+done
 # Dispatch on BaseImage.Kind and .Seed (#9): the kind and checksum URL
 # reach fetch-base-image.sh, a stub seed kind refuses before any seed or
 # VM, an unknown one before the fetch.

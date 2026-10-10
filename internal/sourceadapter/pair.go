@@ -14,6 +14,9 @@ type PairPeer struct {
 	Adapter  Adapter
 	ServerID string
 	State    func(ctx context.Context) (HAState, error)
+	// Live, when set, reads the daemon's own state and is what waitNormal
+	// trusts: State may be a lease file that outlives the daemon (lab #12).
+	Live func(ctx context.Context) (HAState, error)
 }
 
 // PairAdapter drives a failover pair as one source: every mutating call
@@ -26,6 +29,7 @@ type PairAdapter struct {
 	// runs (Kea hot-standby, measured locally, lab #12).
 	Survivor      string
 	StandbySilent bool
+	SplitPool     bool
 	// NormalWait bounds the wait for Normal after a start; measured
 	// locally at 4.8 s for Kea from a cold start (lab #12).
 	NormalWait time.Duration
@@ -48,6 +52,17 @@ type PairControl interface {
 type PairProfile struct {
 	Normal, Survivor string
 	StandbySilent    bool
+	// SplitPool says each peer leases from its own half of the pool
+	// while its partner is down (ISC split 128): C5b then checks the
+	// outage address against the primary's backup half (lab #12).
+	SplitPool bool
+}
+
+// PoolSplitReader is what a SplitPool pair offers C5b: the addresses
+// one peer's table marks as the partner's half, read before the stop
+// (RFC 3074 split pool, lab #12).
+type PoolSplitReader interface {
+	PeerBackupAddrs(ctx context.Context, name string) ([]string, error)
 }
 
 // NAExplainer lets an adapter say why it leaves a capability out, so the
@@ -57,10 +72,31 @@ type NAExplainer interface {
 }
 
 var (
-	_ Adapter     = (*PairAdapter)(nil)
-	_ PairControl = (*PairAdapter)(nil)
-	_ NAExplainer = (*PairAdapter)(nil)
+	_ Adapter         = (*PairAdapter)(nil)
+	_ PairControl     = (*PairAdapter)(nil)
+	_ PoolSplitReader = (*PairAdapter)(nil)
+	_ NAExplainer     = (*PairAdapter)(nil)
 )
+
+// NewISCPair builds the isc-failover cell's adapter (lab #12). Both
+// peers serve while normal (load balance), so StandbySilent is false;
+// a stopped peer leaves the survivor communications-interrupted, and
+// NormalWait is 60 s against 0.3 to 5.3 s measured from empty files.
+func NewISCPair(primary, partner Runner, primaryID, partnerID string) *PairAdapter {
+	peer := func(name string, r Runner, id string) PairPeer {
+		return PairPeer{Name: name, Adapter: &ISCDHCPAdapter{Runner: r, V4Only: name != "primary", Failover: true}, ServerID: id,
+			State: func(ctx context.Context) (HAState, error) { return ISCHAState(ctx, r) },
+			Live:  func(ctx context.Context) (HAState, error) { return ISCLiveState(ctx, r) }}
+	}
+	return &PairAdapter{
+		Peers:      [2]PairPeer{peer("primary", primary, primaryID), peer("partner", partner, partnerID)},
+		Normal:     ISCNormal,
+		Survivor:   ISCCommunicationsInterrupted,
+		SplitPool:  true,
+		NormalWait: 60 * time.Second,
+		NormalPoll: time.Second,
+	}
+}
 
 // NewKeaPair builds the kea-ha cell's adapter from one runner per peer.
 func NewKeaPair(primary, partner Runner, primaryID, partnerID string) *PairAdapter {
@@ -378,7 +414,11 @@ func (p *PairAdapter) waitNormal(ctx context.Context) error {
 		var last []string
 		normal := 0
 		for _, peer := range p.Peers {
-			st, err := peer.State(ctx)
+			read := peer.State
+			if peer.Live != nil {
+				read = peer.Live
+			}
+			st, err := read(ctx)
 			switch {
 			case err != nil:
 				last = append(last, fmt.Sprintf("%s: %v", peer.Name, err))
@@ -446,8 +486,25 @@ func (p *PairAdapter) PeerState(ctx context.Context, name string) (HAState, erro
 	return peer.State(ctx)
 }
 
+// PeerBackupAddrs asks one peer's adapter for the addresses its table
+// marks backup; a peer kind without the reader is an error (lab #12,
+// RFC 3074 split pool).
+func (p *PairAdapter) PeerBackupAddrs(ctx context.Context, name string) ([]string, error) {
+	peer, err := p.peer(name)
+	if err != nil {
+		return nil, err
+	}
+	r, ok := peer.Adapter.(interface {
+		BackupAddrs(context.Context) ([]string, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("pair: peer %s keeps no backup half to read", name)
+	}
+	return r.BackupAddrs(ctx)
+}
+
 func (p *PairAdapter) Profile() PairProfile {
-	return PairProfile{Normal: p.Normal, Survivor: p.Survivor, StandbySilent: p.StandbySilent}
+	return PairProfile{Normal: p.Normal, Survivor: p.Survivor, StandbySilent: p.StandbySilent, SplitPool: p.SplitPool}
 }
 
 // v6Capabilities and v6Features belong to the primary alone: on a pair

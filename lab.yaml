@@ -432,3 +432,38 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: isc-failover
+    description: >
+      ISC dhcpd 4.4 failover pair: the isc-dhcp cell's server twice, load
+      balanced (split 128), primary and secondary on the segment. Issue #12.
+    segment:
+      bridge: lab-br-isc-fo
+      subnet: 10.200.9.0/24
+      subnet6: "fd42:200:0:900::/64"
+    source:
+      type: isc-dhcp
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.101/24
+      seg_address: 10.200.9.2/24
+      pool_start: 10.200.9.100
+      pool_end: 10.200.9.200
+      seg_address6: "fd42:200:0:900::2/64"
+      pool6_start: "fd42:200:0:900::100"
+      pool6_end: "fd42:200:0:900::1ff"
+      temp6_pool: "fd42:200:0:900::200/120"
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+      partner:
+        mgmt_address: 10.200.255.102/24
+        seg_address: 10.200.9.3/24
+        seg_address6: "fd42:200:0:900::3/64"
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.100/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

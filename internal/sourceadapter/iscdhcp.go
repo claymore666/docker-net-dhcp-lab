@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,10 +17,21 @@ import (
 // start are implemented but not yet exercised against a live instance.
 type ISCDHCPAdapter struct {
 	Runner Runner
-	base   baseline
+	// V4Only is a failover partner: its VM runs no DHCPv6 or radvd, so
+	// v6 is neither declared nor held by Ready. Failover makes a pool
+	// the adapter adds carry "failover peer" (lab #12).
+	V4Only, Failover bool
+	base             baseline
 }
 
 func (a *ISCDHCPAdapter) Capabilities() []Capability {
+	if a.V4Only {
+		return slices.DeleteFunc(a.allCapabilities(), func(c Capability) bool { return v6Capabilities[c] })
+	}
+	return a.allCapabilities()
+}
+
+func (a *ISCDHCPAdapter) allCapabilities() []Capability {
 	return []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6}
 }
 

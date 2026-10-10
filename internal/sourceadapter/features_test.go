@@ -38,6 +38,7 @@ func baselineConfig(t *testing.T, tmpl, path string) string {
 		"__SEG_SUBNET6__": "fd42:200:0:100::/64", "__POOL6_START__": "fd42:200:0:100::100",
 		"__POOL6_END__": "fd42:200:0:100::1ff", "__TEMP6_POOL__": "fd42:200:0:100::200/120",
 		"__HA_THIS__": "primary", "__HA_PRIMARY_SEG__": "10.200.1.2", "__HA_PARTNER_SEG__": "10.200.1.3",
+		"__FO_ROLE__": "primary", "__FO_OWN_SEG__": "10.200.1.2", "__FO_PEER_SEG__": "10.200.1.3", "__FO_PRIMARY_ONLY__": "",
 	} {
 		cfg = strings.ReplaceAll(cfg, k, v)
 	}
@@ -95,7 +96,11 @@ func featureAdapter(name string, r Runner) Adapter {
 }
 
 func baselineRunner(t *testing.T, name string) *cfgRunner {
-	b := baselines[name]
+	b, ok := baselines[name]
+	if !ok && name == "isc-failover" {
+		// not in baselines: tests that range over it need a groupB adapter
+		b.tmpl, b.path = "isc-dhcp-failover-user-data.tmpl.yaml", "/etc/dhcp/dhcpd.conf"
+	}
 	return &cfgRunner{cfg: baselineConfig(t, b.tmpl, b.path)}
 }
 
