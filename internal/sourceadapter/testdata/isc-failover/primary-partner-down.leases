@@ -1,5 +1,5 @@
 # HAND-MADE (INFERRED, lab #12): the operator-set partner-down state was not measured;
-# the block grammar is the measured one. Appended to the measured normal file.
+# the block grammar is the measured one. primary-normal.leases (itself a splice) plus one appended block.
 # The format of this file is documented in the dhcpd.leases(5) manual page.
 # This lease file was written by isc-dhcp-4.4.3-P1
 

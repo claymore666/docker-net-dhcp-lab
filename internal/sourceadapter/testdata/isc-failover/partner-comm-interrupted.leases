@@ -1,3 +1,4 @@
+# HAND-MADE splice (lab #12): lines 1-47, 373-413 and 726-764 of partner-leases-ci2.txt, the partner after its peer stopped. Each state block is verbatim; the joins are not contiguous in the transcript.
 # The format of this file is documented in the dhcpd.leases(5) manual page.
 # This lease file was written by isc-dhcp-4.4.3-P1
 

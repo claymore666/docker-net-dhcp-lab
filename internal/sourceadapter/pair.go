@@ -14,6 +14,9 @@ type PairPeer struct {
 	Adapter  Adapter
 	ServerID string
 	State    func(ctx context.Context) (HAState, error)
+	// Live, when set, reads the daemon's own state and is what waitNormal
+	// trusts: State may be a lease file that outlives the daemon (lab #12).
+	Live func(ctx context.Context) (HAState, error)
 }
 
 // PairAdapter drives a failover pair as one source: every mutating call
@@ -56,7 +59,8 @@ type PairProfile struct {
 }
 
 // PoolSplitReader is what a SplitPool pair offers C5b: the addresses
-// one peer's table marks as the partner's half, read before the stop.
+// one peer's table marks as the partner's half, read before the stop
+// (RFC 3074 split pool, lab #12).
 type PoolSplitReader interface {
 	PeerBackupAddrs(ctx context.Context, name string) ([]string, error)
 }
@@ -81,7 +85,8 @@ var (
 func NewISCPair(primary, partner Runner, primaryID, partnerID string) *PairAdapter {
 	peer := func(name string, r Runner, id string) PairPeer {
 		return PairPeer{Name: name, Adapter: &ISCDHCPAdapter{Runner: r, V4Only: name != "primary", Failover: true}, ServerID: id,
-			State: func(ctx context.Context) (HAState, error) { return ISCHAState(ctx, r) }}
+			State: func(ctx context.Context) (HAState, error) { return ISCHAState(ctx, r) },
+			Live:  func(ctx context.Context) (HAState, error) { return ISCLiveState(ctx, r) }}
 	}
 	return &PairAdapter{
 		Peers:      [2]PairPeer{peer("primary", primary, primaryID), peer("partner", partner, partnerID)},
@@ -409,7 +414,11 @@ func (p *PairAdapter) waitNormal(ctx context.Context) error {
 		var last []string
 		normal := 0
 		for _, peer := range p.Peers {
-			st, err := peer.State(ctx)
+			read := peer.State
+			if peer.Live != nil {
+				read = peer.Live
+			}
+			st, err := read(ctx)
 			switch {
 			case err != nil:
 				last = append(last, fmt.Sprintf("%s: %v", peer.Name, err))
@@ -478,7 +487,8 @@ func (p *PairAdapter) PeerState(ctx context.Context, name string) (HAState, erro
 }
 
 // PeerBackupAddrs asks one peer's adapter for the addresses its table
-// marks backup; a peer kind without the reader is an error.
+// marks backup; a peer kind without the reader is an error (lab #12,
+// RFC 3074 split pool).
 func (p *PairAdapter) PeerBackupAddrs(ctx context.Context, name string) ([]string, error) {
 	peer, err := p.peer(name)
 	if err != nil {

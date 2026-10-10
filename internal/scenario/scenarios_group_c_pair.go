@@ -397,6 +397,10 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 			case m.YIAddr != o.addr:
 			case m.Server == o.primaryID:
 				renewed = m
+			case m.Server == o.partnerID && !prof.StandbySilent:
+				// Load-balanced pair: the RENEW goes to the granting peer and that
+				// peer answers (RFC 2131 4.4.5; DESIGN-12 C5c ISC row, #12).
+				renewed = m
 			case m.Server == o.partnerID && prof.StandbySilent:
 				return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the standby %s ACKed at %s while the primary runs: the source broke the premise, the rebind path was not exercised", o.partnerID, m.At.UTC().Format("15:04:05.000")), e.GitSHA)
 			}
@@ -405,7 +409,11 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 			break
 		}
 		if time.Now().After(deadline) {
-			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("no ACK of %s from the returned primary %s by the lease's expiry (%s)", o.addr, o.primaryID, deadline.UTC().Format("15:04:05")), o.ev, e.GitSHA)
+			from := "the returned primary " + o.primaryID
+			if !prof.StandbySilent {
+				from = "either peer (" + o.primaryID + ", " + o.partnerID + ")"
+			}
+			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("no ACK of %s from %s by the lease's expiry (%s)", o.addr, from, deadline.UTC().Format("15:04:05")), o.ev, e.GitSHA)
 		}
 		if err := sleepCtx(ctx, t.poll); err != nil {
 			return blocked(NameC5c, e.Cell, e.Shape, err.Error(), e.GitSHA)
@@ -460,8 +468,12 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if prof.StandbySilent {
 		path = fmt.Sprintf("%d renewal(s) unicast to the standby %s went unanswered; ", renewals, o.partnerID)
 	}
-	return pass(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's table holds %s for %s; %sthe container kept it and the primary ACKed it at %s (secs %d); a new container was leased %s by %s",
-		o.addr, o.ident, path, renewed.At.UTC().Format("15:04:05"), renewed.Secs, addr, ack.Server), o.ev, e.GitSHA)
+	who := "the primary"
+	if renewed.Server == o.partnerID {
+		who = "the partner"
+	}
+	return pass(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's table holds %s for %s; %sthe container kept it and %s ACKed it at %s (secs %d); a new container was leased %s by %s",
+		o.addr, o.ident, path, who, renewed.At.UTC().Format("15:04:05"), renewed.Secs, addr, ack.Server), o.ev, e.GitSHA)
 }
 
 // c5dIdent is an ACK's client identity: option 61, else chaddr.

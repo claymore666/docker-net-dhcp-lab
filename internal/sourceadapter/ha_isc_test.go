@@ -265,3 +265,39 @@ func TestISCPairPeerBackupAddrs(t *testing.T) {
 		t.Error("a kea peer answered a backup-half read")
 	}
 }
+
+// A restarted peer's lease file still ends in its pre-stop normal block
+// (lab #12): Restart must not pass on the file alone, only on
+// the daemon's own answer.
+func TestISCPairRestartIgnoresAStaleNormalBlock(t *testing.T) {
+	mk := func(file, om string) *scriptRunner {
+		return &scriptRunner{replies: map[string]string{"sudo cat": isc(t, file), "printf": isc(t, om)}}
+	}
+	pr, pa := mk("primary-normal.leases", "omshell-recover.txt"), mk("partner-normal.leases", "omshell-normal.txt")
+	p := NewISCPair(pr, pa, "a", "b")
+	p.NormalWait, p.NormalPoll = 20*time.Millisecond, time.Millisecond
+	for i, r := range []*scriptRunner{pr, pa} {
+		if st, err := ISCHAState(context.Background(), r); err != nil || st.State != ISCNormal {
+			t.Fatalf("peer %d: the fixture's file must read normal, got %q %v", i, st.State, err)
+		}
+	}
+	err := p.Restart(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "primary: startup") {
+		t.Fatalf("a primary the daemon reports in startup passed on its stale file: %v", err)
+	}
+	pr.replies["printf"] = isc(t, "omshell-normal.txt")
+	if err := p.Restart(context.Background()); err != nil {
+		t.Errorf("both daemons normal: %v", err)
+	}
+}
+
+func TestISCLiveStateNeedsARunningDaemon(t *testing.T) {
+	r := &scriptRunner{replies: map[string]string{"printf": "can't connect to OMAPI server\n"}}
+	if st, err := ISCLiveState(context.Background(), r); err == nil {
+		t.Errorf("no daemon answered, got %q", st.State)
+	}
+	r = &scriptRunner{fail: map[string]bool{"printf": true}}
+	if _, err := ISCLiveState(context.Background(), r); err == nil {
+		t.Error("a failed omshell passed")
+	}
+}

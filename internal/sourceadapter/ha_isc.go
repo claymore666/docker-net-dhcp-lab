@@ -19,7 +19,8 @@ const (
 )
 
 // iscFailoverPeerName is the peer name every pool names in "failover
-// peer" in cloud-init/isc-dhcp-failover-user-data.tmpl.yaml.
+// peer" in cloud-init/isc-dhcp-failover-user-data.tmpl.yaml; the state
+// reader matches only this name (lab #12).
 const iscFailoverPeerName = "lab"
 
 var (
@@ -70,7 +71,19 @@ func ISCHAState(ctx context.Context, r Runner) (HAState, error) {
 	return parseISCOmshell(om)
 }
 
-// parseISCHAState returns the last state block's own state. Fewer
+// ISCLiveState asks the running dhcpd for its failover state over OMAPI.
+// A restarted peer's lease file keeps its pre-stop "normal" block and
+// gets no new one (m8-primary-back.txt, lab #12), so only the daemon's
+// own answer proves it is normal again; no daemon is an error.
+func ISCLiveState(ctx context.Context, r Runner) (HAState, error) {
+	om, err := r.Run(ctx, iscOmshellCmd)
+	if err != nil {
+		return HAState{}, fmt.Errorf("isc-dhcp: omshell: %w", err)
+	}
+	return parseISCOmshell(om)
+}
+
+// parseISCHAState returns the last state block's own state (lab #12). Fewer
 // closed blocks than opened means the file was cut mid-write: an error,
 // never the previous block's stale state.
 func parseISCHAState(raw string) (HAState, error) {
@@ -127,7 +140,9 @@ func parseISCBackupAddrs(raw string) ([]string, error) {
 	return out, nil
 }
 
-// BackupAddrs reads this peer's lease file for its backup addresses.
+// BackupAddrs reads this peer's lease file for its backup addresses: on
+// the primary, the partner's half of the pool under split 128, which
+// C5b checks the outage address against (RFC 3074 load balancing, lab #12).
 func (a *ISCDHCPAdapter) BackupAddrs(ctx context.Context) ([]string, error) {
 	out, err := a.Runner.Run(ctx, "sudo cat "+iscLeaseFile)
 	if err != nil {

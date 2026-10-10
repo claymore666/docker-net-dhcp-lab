@@ -314,13 +314,20 @@ The `isc-failover` cell is the same shape with ISC dhcpd 4.4 failover
 `mclt 60` on the primary and `load balance max seconds 3`, so both peers
 answer while the pair is normal and C5d needs both server identifiers.
 A stopped peer leaves the other in `communications-interrupted`, which
-serves new clients from its own half of the pool; its leases run 60 s (the MCLT), not the cell's 120 s, so
-C5 takes T1, T2 and the expiry from the ACK's option 51. C5b therefore
-requires the new container's address to come from the half the primary
-holds as `backup` and BLOCKED otherwise. The state of each peer is the
-last block of its `dhcpd.leases`; only a file with no state block asks
-`omshell` (the template opens `omapi-port 7911` on both VMs, with no key,
-on the lab's isolated networks). The partner serves no DHCPv6 and no
+serves new clients from its own half of the pool. The lease time a
+client is granted differs from the cell's 120 s: in a local run the
+first grant carried 60 s and a renewal answered by the surviving peer
+after the primary stopped carried 600 s. C5 therefore takes T1, T2 and
+the expiry from the ACK's option 51. C5b requires
+the new container's address to come from the half the primary holds as
+`backup` and is BLOCKED otherwise. C5c accepts the renewal of the kept
+address from either peer, because the client renews with the server that
+granted the lease and a load-balanced peer answers it. The state of each
+peer is the last block of its `dhcpd.leases`; a file with no state block
+asks `omshell`, and so does every wait for `normal` after a start, because
+a restarted peer's file keeps its old `normal` block (the template opens
+`omapi-port 7911` on both VMs, with no key, on the lab's isolated
+networks). The partner serves no DHCPv6 and no
 router advertisements, as on `kea-ha`. The resource-bound line below
 applies to it as well.
 

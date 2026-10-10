@@ -1,3 +1,4 @@
+# VERBATIM SLICE of the local measurement transcript omshell-recover.txt, lines 1-25, the whole file (dhcpd 4.4.3-P1, lab #12).
 > > > obj: <null>
 > obj: failover-state
 > obj: failover-state

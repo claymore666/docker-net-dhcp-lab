@@ -488,6 +488,39 @@ func TestRunC5cKeepsTheLoadBalancedPartnerAllowedToAnswer(t *testing.T) {
 	needResult(t, runC5cTuned(context.Background(), r.e, cFast), PASS)
 }
 
+// The ISC pair answers a RENEW from the addressed peer (RFC 2131 4.4.5), so
+// the granting partner's ACK alone keeps the address (DESIGN-12 C5c, #12).
+func TestRunC5cISCAcceptsTheGrantingPartnersACKAlone(t *testing.T) {
+	r := newC5bRig(t, NameC5c)
+	r.p.prof.StandbySilent = false
+	r.standbyACK, r.noPrimaryACK, r.noRebind = true, true, true
+	v := runC5cTuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+	needReason(t, v, "the partner ACKed it")
+}
+
+func TestRunC5cISCFailsWhenNeitherPeerACKsTheKeptAddress(t *testing.T) {
+	r := newC5bRig(t, NameC5c)
+	r.p.prof.StandbySilent = false
+	r.noPrimaryACK, r.noRebind = true, true
+	v := runC5cTuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "from either peer")
+}
+
+// The same probe on the Kea profile (hot standby, silent): the standby's
+// ACK breaks the premise, the primary's silence is a FAIL, never a PASS.
+func TestRunC5cKeaStillRequiresThePrimarysACK(t *testing.T) {
+	r := newC5bRig(t, NameC5c)
+	r.standbyACK, r.noPrimaryACK = true, true
+	needResult(t, runC5cTuned(context.Background(), r.e, cFast), BLOCKED)
+	r = newC5bRig(t, NameC5c)
+	r.noPrimaryACK = true
+	v := runC5cTuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "from the returned primary")
+}
+
 // ---- C5d --------------------------------------------------------------
 
 // c5dRig: each container is ACKed at its run by whichever peer is up,

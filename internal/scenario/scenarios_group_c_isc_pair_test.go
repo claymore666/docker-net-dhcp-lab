@@ -167,3 +167,23 @@ func TestWaitPeerStatesOnTheMeasuredFiles(t *testing.T) {
 		t.Errorf("a normal primary passed as a survivor: %v", err)
 	}
 }
+
+// Defeat 3 (lab #12): runC5Tuned times T1, T2 and the expiry from the
+// bound ACK's option 51 (800 ms here), never from the cell's lease time
+// (cFast.lease, 120 s). Timing from the cell lease waits out T2 at 105 s,
+// so the bounded context turns that into a BLOCKED in seconds, not a hang.
+func TestRunC5TimesFromOption51NotTheCellLease(t *testing.T) {
+	r := newC5Rig(t, ShapeMacvlan, "primary")
+	if cFast.lease <= 100 || r.lease >= time.Second {
+		t.Fatalf("premise: cell lease %d s must dwarf option 51 %s", cFast.lease, r.lease)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	v := runC5Tuned(ctx, r.e, cFast)
+	needResult(t, v, PASS)
+	needReason(t, v, "for "+r.lease.String())
+	if d := time.Since(start); d > 4*time.Second {
+		t.Errorf("took %s: the windows came from the cell's lease", d)
+	}
+}

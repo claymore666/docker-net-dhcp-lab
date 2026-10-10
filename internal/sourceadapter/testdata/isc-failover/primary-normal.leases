@@ -1,3 +1,4 @@
+# HAND-MADE splice (lab #12): lines 1-42, 365-368, 373-399 and 763-766 of primary-leases-normal.txt. Each state block is verbatim; the joins are not contiguous in the transcript.
 # The format of this file is documented in the dhcpd.leases(5) manual page.
 # This lease file was written by isc-dhcp-4.4.3-P1
 
