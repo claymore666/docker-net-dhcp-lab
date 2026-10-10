@@ -569,8 +569,9 @@ var f7Settle = 15 * time.Second
 
 // runF7 -- PREF64 (v2.4.0): the container starts on the baseline RA and
 // its routes and resolv.conf are read; then kea and isc add the cell's
-// /96 to the RA, dnsmasq's RA cannot carry it and is the negative case
-// (DESIGN-23d row F7-pref64).
+// /96 to the RA, dnsmasq's RA cannot carry it and is the negative case,
+// and a second container binds with PREF64 on the wire (DESIGN-23d row
+// F7-pref64).
 func runF7(ctx context.Context, e Env) (v Verdict) {
 	if v, stop := d2Gate(e, NameF7, fSince4, "nat64_prefixes arrived in plugin v2.4.0"); stop {
 		return v
@@ -621,7 +622,19 @@ func runF7(ctx context.Context, e Env) (v Verdict) {
 		}
 	}
 	ll, _ := linkLocal(r.start.Addrs)
-	ras, err := f7Read(ctx, e, name, r, v6Ident(r.mac, ll), tSet, serverP, &rd, ev)
+	if err := f7Read(ctx, e, name, r, v6Ident(r.mac, ll), tSet, serverP, &rd, ev); err != nil {
+		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	bind := containerName(e, NameF7+"-bind")
+	defer removeContainer(bCleanupCtx(ctx), e.Host, bind)
+	startErr, err = f7Bind(ctx, e, net, bind, serverP, &rd, ev)
+	if err != nil {
+		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	if startErr != nil {
+		return fail(NameF7, e.Cell, e.Shape, fmt.Sprintf("the second container did not start (%s): %v", opt, startErr), nil, e.GitSHA)
+	}
+	ras, err := f7Wire(ctx, e, v6Ident(r.mac, ll), tSet, ev)
 	if err != nil {
 		return blocked(NameF7, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
@@ -629,38 +642,86 @@ func runF7(ctx context.Context, e Env) (v Verdict) {
 }
 
 // f7Read waits for an RA after tSet (one carrying PREF64 when the source
-// was set to send it), lets the plugin act on it, then reads the
-// container and /Plugin.Health; it returns the RAs since tSet (#23 row F7-pref64).
-func f7Read(ctx context.Context, e Env, name string, r dRead, ident string, tSet time.Time, serverP bool, rd *f7Reads, ev map[string]string) ([]RAMsg, error) {
+// was set to send it), waits f7Settle, then reads the first
+// container and /Plugin.Health (#23 row F7-pref64).
+func f7Read(ctx context.Context, e Env, name string, r dRead, ident string, tSet time.Time, serverP bool, rd *f7Reads, ev map[string]string) error {
 	ready := func(_ []DHCP6Msg, ras []RAMsg) bool {
 		return slices.ContainsFunc(ras, func(ra RAMsg) bool { return !serverP || len(ra.Pref64) > 0 })
 	}
 	if _, _, err := dCapture(ctx, e, NameF7, "capture-v6-pref64-wait", ident, tSet, ready, ev); err != nil {
-		return nil, fmt.Errorf("could not read the capture: %w", err)
+		return fmt.Errorf("could not read the capture: %w", err)
 	}
 	if err := sleepCtx(ctx, f7Settle); err != nil {
-		return nil, err
+		return err
 	}
 	after, err := readAddrs(ctx, e, NameF7, "addrs-after", name, "-", ev)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	rd.Addrs = after.Addrs
 	if rd.Routes, err = containerText(ctx, e, NameF7, "routes-v6-after", name, "ip -6 route show", ev); err != nil {
-		return nil, err
+		return err
 	}
 	if rd.Resolv, err = containerText(ctx, e, NameF7, "resolv-conf-after", name, "cat /etc/resolv.conf", ev); err != nil {
-		return nil, err
+		return err
 	}
 	hp := evidencePath(e, NameF7, "plugin-health")
 	if rd.Health, rd.Found, err = pluginHealth(ctx, e.Host, r.endpointID, hp); err != nil {
-		return nil, err
+		return err
 	}
 	ev["plugin-health"] = hp
+	return nil
+}
+
+// f7Wire is every RA on the first container's link since tSet (#23 row F7-pref64).
+func f7Wire(ctx context.Context, e Env, ident string, tSet time.Time, ev map[string]string) ([]RAMsg, error) {
 	all := func([]DHCP6Msg, []RAMsg) bool { return true }
 	_, ras, err := dCapture(ctx, e, NameF7, "capture-v6-pref64", ident, tSet, all, ev)
 	if err != nil {
 		return nil, fmt.Errorf("could not read the capture: %w", err)
 	}
 	return ras, nil
+}
+
+// f7Bind starts a second container once PREF64 is on the wire: its bind
+// is a lease event, which plugin docs/reference.md:2027-2028 names as
+// what refreshes nat64_prefixes, while a PREF64-only RA is not one
+// (:2030-2031, #1028). It reads the container after f7Settle (#23 row F7-pref64).
+func f7Bind(ctx context.Context, e Env, net, name string, serverP bool, rd *f7Reads, ev map[string]string) (startErr, err error) {
+	tBind := time.Now()
+	mac, _, endpointID, startErr := runContainer(ctx, e.Host, e.Shape, net, name)
+	if startErr != nil {
+		return startErr, nil
+	}
+	start, err := readAddrs(ctx, e, NameF7, "addrs-bind-start", name, "-", ev)
+	if err != nil {
+		return nil, err
+	}
+	ll, _ := linkLocal(start.Addrs)
+	ready := func(_ []DHCP6Msg, ras []RAMsg) bool {
+		return slices.ContainsFunc(ras, func(ra RAMsg) bool { return !serverP || len(ra.Pref64) > 0 })
+	}
+	if _, _, err := dCapture(ctx, e, NameF7, "capture-v6-bind", v6Ident(mac, ll), tBind, ready, ev); err != nil {
+		return nil, fmt.Errorf("could not read the capture: %w", err)
+	}
+	if err := sleepCtx(ctx, f7Settle); err != nil {
+		return nil, err
+	}
+	after, err := readAddrs(ctx, e, NameF7, "addrs-bind", name, "-", ev)
+	if err != nil {
+		return nil, err
+	}
+	rd.BindAddrs = after.Addrs
+	if rd.BindRoutes, err = containerText(ctx, e, NameF7, "routes-v6-bind", name, "ip -6 route show", ev); err != nil {
+		return nil, err
+	}
+	if rd.BindResolv, err = containerText(ctx, e, NameF7, "resolv-conf-bind", name, "cat /etc/resolv.conf", ev); err != nil {
+		return nil, err
+	}
+	hp := evidencePath(e, NameF7, "plugin-health-bind")
+	if rd.BindHealth, rd.BindFound, err = pluginHealth(ctx, e.Host, endpointID, hp); err != nil {
+		return nil, err
+	}
+	ev["plugin-health-bind"] = hp
+	return nil, nil
 }

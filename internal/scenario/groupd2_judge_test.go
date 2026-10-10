@@ -3,6 +3,7 @@ package scenario
 import (
 	"errors"
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
@@ -267,42 +268,65 @@ func TestJudgeF6(t *testing.T) {
 	needF(t, judgeF6(o3, false, pool, "", h, true), FAIL, "delegated_prefixes")
 }
 
+// f7Good is a PASS read: the first endpoint's nat64_prefixes still absent
+// (a PREF64-only RA is no lease event, plugin docs/reference.md:2030-2031),
+// the endpoint bound after PREF64 showing it (#23 row F7-pref64).
+func f7Good(routes, resolv string) f7Reads {
+	return f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: routes, Routes: routes, BaseResolv: resolv, Resolv: resolv, Found: true,
+		BindAddrs: []addr6{d6LL}, BindRoutes: routes, BindResolv: resolv, BindHealth: healthEndpoint{NAT64Prefixes: []string{"fd42:200:0:164::/96"}}, BindFound: true}
+}
+
 func TestJudgeF7(t *testing.T) {
 	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
 	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
 	ras[0].Pref64 = []netip.Prefix{p64}
 	base := "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1790sec\n"
-	good := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: base, Routes: "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1775sec\n",
-		BaseResolv: "nameserver 10.200.1.1\n", Resolv: "nameserver 10.200.1.1\n", Health: healthEndpoint{NAT64Prefixes: []string{"fd42:200:0:164::/96"}}, Found: true}
+	good := f7Good(base, "nameserver 10.200.1.1\n")
+	good.Routes = "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\ndefault via fe80::1 dev eth0 proto ra metric 1024 expires 1775sec\n"
 	needF(t, judgeF7(ras, true, good), PASS, "equals the RA's PREF64")
 	r := good
-	r.Health.NAT64Prefixes = nil
-	needF(t, judgeF7(ras, true, r), FAIL, "nat64_prefixes")
+	r.Health.NAT64Prefixes = []string{"fd42:200:0:164::/96"}
+	needF(t, judgeF7(ras, true, r), PASS, "equals the RA's PREF64")
+	r.Health.NAT64Prefixes = []string{"fd42:200:0:165::/96"}
+	needF(t, judgeF7(ras, true, r), FAIL, "first endpoint")
 	r = good
-	r.Addrs = append(r.Addrs, addr6{Addr: netip.MustParseAddr("fd42:200:0:164::1"), Bits: 128, Scope: "global"})
-	needF(t, judgeF7(ras, true, r), FAIL, "inside PREF64")
+	r.BindHealth.NAT64Prefixes = nil
+	needF(t, judgeF7(ras, true, r), FAIL, "bound after PREF64")
+	r = good
+	r.Addrs = append(slices.Clone(r.Addrs), addr6{Addr: netip.MustParseAddr("fd42:200:0:164::1"), Bits: 128, Scope: "global"})
+	needF(t, judgeF7(ras, true, r), FAIL, "first container's link")
+	r = good
+	r.BindAddrs = append(slices.Clone(r.BindAddrs), addr6{Addr: netip.MustParseAddr("fd42:200:0:164::1"), Bits: 128, Scope: "global"})
+	needF(t, judgeF7(ras, true, r), FAIL, "second container's link")
 	r = good
 	r.Resolv = "nameserver fd42:200:0:164::35\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "resolv.conf")
 	r = good
+	r.BindResolv = "nameserver 10.200.1.53\n"
+	needF(t, judgeF7(ras, true, r), FAIL, "second container's resolv.conf differs")
+	r = good
 	r.Routes = "default via fe80::1 dev eth0\n"
-	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
+	needF(t, judgeF7(ras, true, r), FAIL, "first container's IPv6 routes changed")
+	r = good
+	r.BindRoutes = base + "fd42:200:0:99::/64 via fe80::1 dev eth0\n"
+	needF(t, judgeF7(ras, true, r), FAIL, "second container's IPv6 routes changed")
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, true, good), BLOCKED, "no RA carrying it")
 	needF(t, judgeF7(nil, false, good), BLOCKED, "no RA after the baseline read")
 	needF(t, judgeF7(ras, false, good), BLOCKED, "out of date")
 	r = good
-	r.Found = false
+	r.BindFound = false
 	needF(t, judgeF7(ras, true, r), FAIL, "no entry")
+	r = good
+	r.Found = false
+	needF(t, judgeF7(ras, true, r), PASS, "equals the RA's PREF64")
 	neg := good
-	neg.Health = healthEndpoint{}
+	neg.BindHealth = healthEndpoint{}
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, neg), PASS, "carries no PREF64")
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, good), FAIL, "nat64_prefixes")
-	neg.Found = false
+	neg.BindFound = false
 	needF(t, judgeF7([]RAMsg{raWith(-5, true, pio(d4P1, true))}, false, neg), BLOCKED, "proves nothing")
 }
 
-// A route inside PREF64 fails whatever its ip-route(8) type, a /128
-// printed as a bare address included, even when it was there before.
 func TestJudgeF7FailsATypedRouteInsidePref64(t *testing.T) {
 	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
 	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
@@ -316,19 +340,20 @@ func TestJudgeF7FailsATypedRouteInsidePref64(t *testing.T) {
 		"unreachable fd42:200:0:164::1 dev lo metric 1024",
 		"fd42:200:0:164::5 via fe80::1 dev eth0 metric 1024",
 	} {
-		r := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: line + "\n", Routes: line + "\n", Health: healthEndpoint{NAT64Prefixes: []string{p64.String()}}, Found: true}
-		needF(t, judgeF7(ras, true, r), FAIL, "inside PREF64")
+		r := f7Good(line+"\n", "")
+		needF(t, judgeF7(ras, true, r), FAIL, "first container has the route")
+		r = f7Good("", "")
+		r.BindRoutes = line + "\n"
+		needF(t, judgeF7(ras, true, r), FAIL, "second container has the route")
 	}
 }
 
-// The routes after PREF64 are held to the read before it, type and
-// destination: a route that only changed its type is a change.
 func TestJudgeF7HoldsTheRoutesToTheReadBeforePref64(t *testing.T) {
 	p64 := netip.MustParsePrefix("fd42:200:0:164::/96")
 	ras := []RAMsg{raWith(-5, true, pio(d4P1, true))}
 	ras[0].Pref64 = []netip.Prefix{p64}
-	r := f7Reads{Addrs: []addr6{d6LL}, BaseRoutes: "fd42:200:0:1ff::/64 dev eth0 metric 1024\n", Routes: "unreachable fd42:200:0:1ff::/64 dev lo metric 1024\n",
-		Health: healthEndpoint{NAT64Prefixes: []string{p64.String()}}, Found: true}
+	r := f7Good("fd42:200:0:1ff::/64 dev eth0 metric 1024\n", "")
+	r.Routes = "unreachable fd42:200:0:1ff::/64 dev lo metric 1024\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
 	r.Routes = r.BaseRoutes + "fd42:200:0:1fe::/64 dev eth0 metric 1024\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")

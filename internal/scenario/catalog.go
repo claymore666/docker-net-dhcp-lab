@@ -230,7 +230,7 @@ const (
 // (the C5 family's 22 count only on a failover pair, lab #12), and
 // aborts the cell as a lab error, never as a scenario FAIL.
 // TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 116
+const MinPoolAddresses = 117
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -248,7 +248,7 @@ var poolDemand = map[string]int{
 	NameD3a: 1, NameD3b: 1, NameD3c: 3, NameD3d: 1, NameD4: 1, NameD4m: 1,
 	NameD4b: 1,
 	NameF1:  1, NameF2a: 1, NameF2b: 2, NameF3: 1,
-	NameF4: 1, NameF5: 1, NameF6: 1, NameF7: 1, NameF8: 2,
+	NameF4: 1, NameF5: 1, NameF6: 1, NameF7: 2, NameF8: 2,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)

@@ -393,14 +393,20 @@ func judgeF6(o d1Obs, serverPD bool, pool netip.Prefix, routes string, h healthE
 	return fOK("%s; IA_PD %s delegated from %s, in the source's table, routed as %q, in delegated_prefixes", d1.Reason, pd, pool, line)
 }
 
-// f7Reads is what the PREF64 row reads inside the container and from the
-// plugin: Base* before the source advertises PREF64, the rest after (#23 row F7-pref64).
+// f7Reads is what the PREF64 row reads: Base* in the first container
+// before the source advertises PREF64, the rest after it, and Bind* in a
+// second container started once PREF64 is on the wire (#23 row F7-pref64).
 type f7Reads struct {
 	Addrs              []addr6
 	BaseRoutes, Routes string
 	BaseResolv, Resolv string
 	Health             healthEndpoint
 	Found              bool
+	BindAddrs          []addr6
+	BindRoutes         string
+	BindResolv         string
+	BindHealth         healthEndpoint
+	BindFound          bool
 }
 
 // pref64s is the union of the PREF64 prefixes on the wire (RFC 8781 section 4).
@@ -417,11 +423,14 @@ func pref64s(ras []RAMsg) []netip.Prefix {
 	return out
 }
 
-// judgeF7 -- PREF64 (plugin docs/reference.md, NAT64 prefix):
-// nat64_prefixes in CIDR form, "absent when the router advertises none",
-// equal to what the RA carried; "Nothing is installed in the container",
-// proven against routes and resolv.conf read before PREF64 was on the
-// wire (RFC 8781 section 4, DESIGN-23d row F7-pref64).
+// judgeF7 -- PREF64 against plugin docs/reference.md:2020-2033 (#1028):
+// nat64_prefixes is "absent when the router advertises none", refreshed
+// "on each lease event of the endpoint: a bind, ...", and "An
+// advertisement whose only news is a PREF64 option is not an event of its
+// own". So the second container's bind must show the wire's PREF64, the
+// first container's field may still lag, and "Nothing is installed in the
+// container" holds in both against the first one's pre-PREF64 reads
+// (RFC 8781 section 4, DESIGN-23d row F7-pref64).
 func judgeF7(ras []RAMsg, serverPref64 bool, r f7Reads) fOutcome {
 	if len(ras) == 0 {
 		return fBlocked("the capture shows no RA after the baseline read, so nothing the RA carried is proven")
@@ -433,53 +442,77 @@ func judgeF7(ras []RAMsg, serverPref64 bool, r f7Reads) fOutcome {
 	if !serverPref64 && len(wire) > 0 {
 		return fBlocked("the RA carries PREF64 %v though the lab declares none for this source; the capability table is out of date", wire)
 	}
-	if !r.Found {
+	if !r.BindFound {
 		if len(wire) > 0 {
-			return fFail("/Plugin.Health lists no entry for the endpoint")
+			return fFail("/Plugin.Health lists no entry for the endpoint bound after PREF64 was advertised")
 		}
-		return fBlocked("/Plugin.Health lists no entry for the endpoint, so an absent nat64_prefixes proves nothing")
+		return fBlocked("/Plugin.Health lists no entry for the endpoint bound after the RA, so an absent nat64_prefixes proves nothing")
 	}
-	var health []netip.Prefix
-	for _, s := range r.Health.NAT64Prefixes {
-		p, err := netip.ParsePrefix(s)
+	bound, err := nat64Set(r.BindHealth)
+	if err != nil {
+		return fFail("%v", err)
+	}
+	if !slices.Equal(bound, wire) {
+		return fFail("/Plugin.Health shows nat64_prefixes %v for the endpoint bound after PREF64 was advertised, the RA carried %v; a bind is a lease event (docs/reference.md:2027-2028)", bound, wire)
+	}
+	if r.Found {
+		first, err := nat64Set(r.Health)
 		if err != nil {
-			return fFail("/Plugin.Health nat64_prefixes holds %q, not a CIDR", s)
+			return fFail("%v", err)
 		}
-		if !slices.Contains(health, p.Masked()) {
-			health = append(health, p.Masked())
+		if len(first) > 0 && !slices.Equal(first, wire) {
+			return fFail("/Plugin.Health shows nat64_prefixes %v for the first endpoint, the RA carried %v", first, wire)
 		}
 	}
-	slices.SortFunc(health, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
-	if !slices.Equal(health, wire) {
-		return fFail("/Plugin.Health shows nat64_prefixes %v, the RA carried %v", health, wire)
-	}
-	for _, p := range wire {
-		for _, a := range r.Addrs {
-			if p.Contains(a.Addr) {
-				return fFail("the container's link carries %s, inside PREF64 %s; the docs install nothing", a.Addr, p)
+	for _, c := range []struct {
+		who            string
+		addrs          []addr6
+		routes, resolv string
+	}{{"first", r.Addrs, r.Routes, r.Resolv}, {"second", r.BindAddrs, r.BindRoutes, r.BindResolv}} {
+		for _, p := range wire {
+			for _, a := range c.addrs {
+				if p.Contains(a.Addr) {
+					return fFail("the %s container's link carries %s, inside PREF64 %s; the docs install nothing", c.who, a.Addr, p)
+				}
+			}
+			for _, line := range strings.Split(c.routes, "\n") {
+				if q, ok := routeDst(line); ok && q.Overlaps(p) {
+					return fFail("the %s container has the route %q, inside PREF64 %s", c.who, strings.TrimSpace(line), p)
+				}
+			}
+			for _, f := range strings.Fields(c.resolv) {
+				if a, err := netip.ParseAddr(f); err == nil && p.Contains(a) {
+					return fFail("the %s container's resolv.conf names %s, inside PREF64 %s; propagate_dns does not change that (docs)", c.who, a, p)
+				}
 			}
 		}
-		for _, line := range strings.Split(r.Routes, "\n") {
-			if q, ok := routeDst(line); ok && q.Overlaps(p) {
-				return fFail("the container has the route %q, inside PREF64 %s", strings.TrimSpace(line), p)
-			}
+		if c.resolv != r.BaseResolv {
+			return fFail("the %s container's resolv.conf differs from the first one's before PREF64 was advertised; the docs install nothing", c.who)
 		}
-		for _, f := range strings.Fields(r.Resolv) {
-			if a, err := netip.ParseAddr(f); err == nil && p.Contains(a) {
-				return fFail("resolv.conf names %s, inside PREF64 %s; propagate_dns does not change that (docs)", a, p)
-			}
+		if !slices.Equal(routeKeys(r.BaseRoutes), routeKeys(c.routes)) {
+			return fFail("the %s container's IPv6 routes changed against the first one's before PREF64 was advertised (%v, then %v)", c.who, routeKeys(r.BaseRoutes), routeKeys(c.routes))
 		}
-	}
-	if r.Resolv != r.BaseResolv {
-		return fFail("resolv.conf changed after the PREF64 RAs arrived; the docs install nothing")
-	}
-	if !slices.Equal(routeKeys(r.BaseRoutes), routeKeys(r.Routes)) {
-		return fFail("the container's IPv6 routes changed after the PREF64 RAs arrived (%v, then %v)", routeKeys(r.BaseRoutes), routeKeys(r.Routes))
 	}
 	if len(wire) == 0 {
-		return fOK("the RA carries no PREF64; the endpoint's nat64_prefixes absent, nothing installed")
+		return fOK("the RA carries no PREF64; the bound endpoint's nat64_prefixes absent, nothing installed")
 	}
-	return fOK("nat64_prefixes %v equals the RA's PREF64; no address, route or resolver inside it, routes and resolv.conf as before PREF64 was advertised", wire)
+	return fOK("nat64_prefixes %v on the endpoint bound after PREF64 was advertised equals the RA's PREF64; no address, route or resolver inside it in either container, routes and resolv.conf as before PREF64 was advertised", wire)
+}
+
+// nat64Set is h's nat64_prefixes, masked, deduplicated and sorted (#23 row F7-pref64).
+func nat64Set(h healthEndpoint) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, s := range h.NAT64Prefixes {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, fmt.Errorf("/Plugin.Health nat64_prefixes holds %q, not a CIDR", s)
+		}
+		if !slices.Contains(out, p.Masked()) {
+			out = append(out, p.Masked())
+		}
+	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
+	return out, nil
 }
 
 // routeKeys is the type and destination of each `ip -6 route show`
