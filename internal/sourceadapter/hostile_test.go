@@ -36,7 +36,7 @@ func (s *segRunner) Run(ctx context.Context, cmd string) (string, error) {
 		}
 	}
 	switch {
-	case cmd == segAddrCmd:
+	case cmd == debianHost("").segAddrCmd():
 		return strings.Join(s.addrs, "\n") + "\n", nil
 	case strings.HasPrefix(cmd, "sudo ip -4 addr flush dev eth1"):
 		s.addrCalls++

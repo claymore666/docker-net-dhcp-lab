@@ -94,15 +94,15 @@ func parseDnsmasqLeases(raw string) ([]Lease, error) {
 // handful of directives but not a new dhcp-host line. key and ip are
 // validated by the callers (issue #2, #23).
 func (a *DnsmasqAdapter) dnsmasqReserve(ctx context.Context, key, ip string) error {
-	return reserveViaDhcpHost(ctx, a.Runner, key, ip, "dnsmasq")
+	return reserveViaDhcpHost(ctx, a.Runner, key, ip, a.host().svc())
 }
 
 // reserveViaDhcpHost is the body of dnsmasqReserve for any server that
-// reads /etc/dnsmasq.d/*.conf; service names the unit to restart (#10).
-func reserveViaDhcpHost(ctx context.Context, r Runner, key, ip, service string) error {
-	cmd := fmt.Sprintf(`sudo sed -i '/^dhcp-host=%s,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart %s`, key, key, ip, service)
+// reads /etc/dnsmasq.d/*.conf; svc is the unit to restart (#10).
+func reserveViaDhcpHost(ctx context.Context, r Runner, key, ip string, svc service) error {
+	cmd := fmt.Sprintf(`sudo sed -i '/^dhcp-host=%s,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=%s,%s' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && %s`, key, key, ip, svc.restart)
 	if _, err := r.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("%s: reserve %s -> %s: %w", service, key, ip, err)
+		return fmt.Errorf("%s: reserve %s -> %s: %w", svc.name, key, ip, err)
 	}
 	return nil
 }
@@ -135,9 +135,15 @@ func (a *DnsmasqAdapter) ReserveClientID(ctx context.Context, clientID, addr str
 	return a.dnsmasqReserve(ctx, "id:"+id, ip)
 }
 
-func (a *DnsmasqAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
-func (a *DnsmasqAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
-func (a *DnsmasqAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
+func (a *DnsmasqAdapter) Restart(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "restart", "dnsmasq")
+}
+func (a *DnsmasqAdapter) Stop(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "stop", "dnsmasq")
+}
+func (a *DnsmasqAdapter) Start(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "start", "dnsmasq")
+}
 
 func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
@@ -146,15 +152,11 @@ func (a *DnsmasqAdapter) Reachable(ctx context.Context, addr string) error {
 // ResetLeases stops dnsmasq, truncates dnsmasqLeaseFile, and starts it
 // again (issue #3 part 2).
 func (a *DnsmasqAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, dnsmasqLeaseFile, nil, "dnsmasq", "dnsmasq")
+	return resetLeasesViaTruncate(ctx, a.Runner, dnsmasqLeaseFile, nil, a.host().svc(), "dnsmasq")
 }
 
-func (a *DnsmasqAdapter) systemctl(ctx context.Context, action string) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" dnsmasq"); err != nil {
-		return fmt.Errorf("dnsmasq: systemctl %s: %w", action, err)
-	}
-	return nil
-}
+// host is this source's userland: systemd, eth1 and /usr/sbin/tc (#9).
+func (a *DnsmasqAdapter) host() host { return debianHost("dnsmasq") }
 
 // ShortenLeaseTime rewrites the RUNNING config's dhcp-range lease-time
 // field (its third, unitless field is already seconds -- dnsmasq(8)) and
@@ -193,13 +195,13 @@ func (a *DnsmasqAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *DnsmasqAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *DnsmasqAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
+	return a.host().sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *DnsmasqAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
-	return impair(ctx, a.Runner, delay, lossPct)
+	return a.host().impair(ctx, a.Runner, delay, lossPct)
 }

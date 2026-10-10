@@ -68,13 +68,17 @@ func (a *UdhcpdAdapter) NAShapeReason(shape, scenario string) string {
 // packets and each fresh OFFER blocks about 2.1 s in its ARP probe (M1), so
 // 400 tries of 50 ms (20 s) outlast nine of them back to back.
 const udhcpdLeasesCmd = `m0=$(sudo stat -c %%.9Y %[1]s 2>/dev/null || echo 0); ` +
-	`sudo systemctl kill -s USR1 udhcpd && ` +
+	`%[2]s && ` +
 	`for i in $(seq 1 400); do m1=$(sudo stat -c %%.9Y %[1]s 2>/dev/null || echo 0); [ "$m1" != "$m0" ] && break; sleep 0.05; done; ` +
 	`[ "$m1" != "$m0" ] || { echo "udhcpd did not rewrite %[1]s after USR1" >&2; exit 1; }; ` +
 	`sudo env TZ=UTC busybox dumpleases -a -f %[1]s`
 
 func (a *UdhcpdAdapter) Leases(ctx context.Context) ([]Lease, error) {
-	out, err := a.Runner.Run(ctx, fmt.Sprintf(udhcpdLeasesCmd, udhcpdLeaseFile))
+	usr1, err := a.host().svc().kill("USR1")
+	if err != nil {
+		return nil, fmt.Errorf("udhcpd: read leases: %w", err)
+	}
+	out, err := a.Runner.Run(ctx, fmt.Sprintf(udhcpdLeasesCmd, udhcpdLeaseFile, usr1))
 	if err != nil {
 		return nil, fmt.Errorf("udhcpd: read leases (USR1 then dumpleases): %w", err)
 	}
@@ -144,7 +148,7 @@ func (a *UdhcpdAdapter) ReserveMAC(ctx context.Context, mac, addr string) error 
 	if err != nil {
 		return err
 	}
-	cmd := fmt.Sprintf(`sudo sed -i '/^static_lease[[:space:]]\+%s[[:space:]]/Id' %s && echo 'static_lease %s %s' | sudo tee -a %s >/dev/null && sudo systemctl restart udhcpd`, hw, udhcpdConf, hw, ip, udhcpdConf)
+	cmd := fmt.Sprintf(`sudo sed -i '/^static_lease[[:space:]]\+%s[[:space:]]/Id' %s && echo 'static_lease %s %s' | sudo tee -a %s >/dev/null && %s`, hw, udhcpdConf, hw, ip, udhcpdConf, a.host().svc().restart)
 	if _, err := a.Runner.Run(ctx, cmd); err != nil {
 		return fmt.Errorf("udhcpd: reserve %s -> %s: %w", hw, ip, err)
 	}
@@ -194,16 +198,19 @@ func (a *UdhcpdAdapter) SendForceRenew(ctx context.Context, script []byte, p For
 	return "", errors.New("udhcpd: " + udhcpdNAReasons[CapForceRenewNonce])
 }
 
-func (a *UdhcpdAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
-func (a *UdhcpdAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
-func (a *UdhcpdAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
-
-func (a *UdhcpdAdapter) systemctl(ctx context.Context, action string) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" udhcpd"); err != nil {
-		return fmt.Errorf("udhcpd: systemctl %s: %w", action, err)
-	}
-	return nil
+func (a *UdhcpdAdapter) Restart(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "restart", "udhcpd")
 }
+func (a *UdhcpdAdapter) Stop(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "stop", "udhcpd")
+}
+func (a *UdhcpdAdapter) Start(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "start", "udhcpd")
+}
+
+// host is this source's userland: Debian with systemd, eth1 and
+// /usr/sbin/tc; busybox udhcpd runs as the udhcpd unit (#9, #10).
+func (a *UdhcpdAdapter) host() host { return debianHost("udhcpd") }
 
 func (a *UdhcpdAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
@@ -212,7 +219,7 @@ func (a *UdhcpdAdapter) Reachable(ctx context.Context, addr string) error {
 // ResetLeases stops udhcpd (SIGTERM writes the file), truncates it and
 // starts again; a 0-byte file starts cleanly (M1, lab #10).
 func (a *UdhcpdAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, udhcpdLeaseFile, nil, "udhcpd", "udhcpd")
+	return resetLeasesViaTruncate(ctx, a.Runner, udhcpdLeaseFile, nil, a.host().svc(), "udhcpd")
 }
 
 var (
@@ -282,7 +289,7 @@ func (a *UdhcpdAdapter) Renumber(ctx context.Context, subnet, addr, first, last 
 	if err != nil {
 		return nil, err
 	}
-	return renumberVia(ctx, a.Runner, udhcpdConf, p, renderUdhcpdRenumbered,
+	return a.host().renumberVia(ctx, a.Runner, udhcpdConf, p, renderUdhcpdRenumbered,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "udhcpd")
 }
 
@@ -309,15 +316,15 @@ func renderUdhcpdRenumbered(orig string, p renumberPlan) (string, error) {
 }
 
 func (a *UdhcpdAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
-	return squat(ctx, a.Runner, addr, announce)
+	return a.host().squat(ctx, a.Runner, addr, announce)
 }
 
 func (a *UdhcpdAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
-	return startRogue(ctx, a.Runner, serverAddr, first, last)
+	return a.host().startRogue(ctx, a.Runner, serverAddr, first, last)
 }
 
 func (a *UdhcpdAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
-	return rogueLeases(ctx, a.Runner)
+	return a.host().rogueLeases(ctx, a.Runner)
 }
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
@@ -326,15 +333,15 @@ func (a *UdhcpdAdapter) units() sourceUnits {
 }
 
 func (a *UdhcpdAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *UdhcpdAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
+	return a.host().sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *UdhcpdAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
-	return impair(ctx, a.Runner, delay, lossPct)
+	return a.host().impair(ctx, a.Runner, delay, lossPct)
 }
 
 var _ Adapter = (*UdhcpdAdapter)(nil)

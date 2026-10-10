@@ -84,7 +84,7 @@ func (a *PiholeAdapter) ReserveMAC(ctx context.Context, mac, addr string) error 
 	if err != nil {
 		return err
 	}
-	return reserveViaDhcpHost(ctx, a.Runner, hw, ip, piholeService)
+	return reserveViaDhcpHost(ctx, a.Runner, hw, ip, a.host().svc())
 }
 
 func (a *PiholeAdapter) ReserveClientID(ctx context.Context, clientID, addr string) error {
@@ -96,26 +96,29 @@ func (a *PiholeAdapter) ReserveClientID(ctx context.Context, clientID, addr stri
 	if err != nil {
 		return err
 	}
-	return reserveViaDhcpHost(ctx, a.Runner, "id:"+id, ip, piholeService)
+	return reserveViaDhcpHost(ctx, a.Runner, "id:"+id, ip, a.host().svc())
 }
 
-func (a *PiholeAdapter) Restart(ctx context.Context) error { return a.systemctl(ctx, "restart") }
-func (a *PiholeAdapter) Stop(ctx context.Context) error    { return a.systemctl(ctx, "stop") }
-func (a *PiholeAdapter) Start(ctx context.Context) error   { return a.systemctl(ctx, "start") }
-
-func (a *PiholeAdapter) systemctl(ctx context.Context, action string) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl "+action+" "+piholeService); err != nil {
-		return fmt.Errorf("pihole: systemctl %s: %w", action, err)
-	}
-	return nil
+func (a *PiholeAdapter) Restart(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "restart", "pihole")
 }
+func (a *PiholeAdapter) Stop(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "stop", "pihole")
+}
+func (a *PiholeAdapter) Start(ctx context.Context) error {
+	return a.host().svc().do(ctx, a.Runner, "start", "pihole")
+}
+
+// host is this source's userland: Debian with systemd, eth1 and
+// /usr/sbin/tc; FTL runs as the pihole-FTL unit (#9, #10).
+func (a *PiholeAdapter) host() host { return debianHost(piholeService) }
 
 func (a *PiholeAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)
 }
 
 func (a *PiholeAdapter) ResetLeases(ctx context.Context) error {
-	return resetLeasesViaTruncate(ctx, a.Runner, piholeLeaseFile, nil, piholeService, "pihole")
+	return resetLeasesViaTruncate(ctx, a.Runner, piholeLeaseFile, nil, a.host().svc(), "pihole")
 }
 
 // SetDNSOption adds dhcp-option=6 to piholeLabConf, which FTL's generated
@@ -178,29 +181,29 @@ func (a *PiholeAdapter) units() sourceUnits {
 }
 
 func (a *PiholeAdapter) Ready(ctx context.Context) error {
-	return sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
 }
 
 func (a *PiholeAdapter) Recover(ctx context.Context) error {
-	return sourceRecover(ctx, a.Runner, a.units(), &a.base)
+	return a.host().sourceRecover(ctx, a.Runner, a.units(), &a.base)
 }
 
 func (a *PiholeAdapter) Impair(ctx context.Context, delay time.Duration, lossPct int) (func(context.Context) error, error) {
-	return impair(ctx, a.Runner, delay, lossPct)
+	return a.host().impair(ctx, a.Runner, delay, lossPct)
 }
 
 func (a *PiholeAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
-	return squat(ctx, a.Runner, addr, announce)
+	return a.host().squat(ctx, a.Runner, addr, announce)
 }
 
 func (a *PiholeAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
-	return startRogue(ctx, a.Runner, serverAddr, first, last)
+	return a.host().startRogue(ctx, a.Runner, serverAddr, first, last)
 }
 
 func (a *PiholeAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
-	return rogueLeases(ctx, a.Runner)
+	return a.host().rogueLeases(ctx, a.Runner)
 }
 
 func (a *PiholeAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
-	return sendForceRenew(ctx, a.Runner, script, p)
+	return a.host().sendForceRenew(ctx, a.Runner, script, p)
 }

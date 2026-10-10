@@ -31,7 +31,10 @@ var neighMACRE = regexp.MustCompile(`\blladdr ([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b
 // to the MAC the source's own neighbour table holds for Addr after a
 // ping, which on ipvlan is the parent's (lab #21); every argument passes
 // a parser before it reaches the shell.
-func sendForceRenew(ctx context.Context, r Runner, script []byte, p ForceRenewParams) (string, error) {
+func (h host) sendForceRenew(ctx context.Context, r Runner, script []byte, p ForceRenewParams) (string, error) {
+	if err := h.needPortable("forcerenew"); err != nil {
+		return "", err
+	}
 	switch p.Mode {
 	case "unsigned", "badkey", "signed":
 	default:
@@ -49,7 +52,7 @@ func sendForceRenew(ctx context.Context, r Runner, script []byte, p ForceRenewPa
 	if err != nil {
 		return "", err
 	}
-	args := fmt.Sprintf("--iface %s --dst-ip %s --src-ip %s --chaddr %s --mode %s", segmentNIC, addr, server, chaddr, p.Mode)
+	args := fmt.Sprintf("--iface %s --dst-ip %s --src-ip %s --chaddr %s --mode %s", h.nic, addr, server, chaddr, p.Mode)
 	if p.ClientID != "" {
 		id, err := validateClientID(p.ClientID)
 		if err != nil {
@@ -70,13 +73,13 @@ func sendForceRenew(ctx context.Context, r Runner, script []byte, p ForceRenewPa
 	if err := reachable(ctx, r, addr); err != nil {
 		return "", fmt.Errorf("forcerenew: %w", err)
 	}
-	neigh, err := r.Run(ctx, fmt.Sprintf("ip neigh show %s dev %s", addr, segmentNIC))
+	neigh, err := r.Run(ctx, fmt.Sprintf("ip neigh show %s dev %s", addr, h.nic))
 	if err != nil {
 		return "", fmt.Errorf("forcerenew: read the neighbour entry for %s: %w", addr, err)
 	}
 	m := neighMACRE.FindStringSubmatch(strings.ToLower(neigh))
 	if m == nil {
-		return "", fmt.Errorf("forcerenew: no neighbour MAC for %s on %s: %q", addr, segmentNIC, strings.TrimSpace(neigh))
+		return "", fmt.Errorf("forcerenew: no neighbour MAC for %s on %s: %q", addr, h.nic, strings.TrimSpace(neigh))
 	}
 	if _, err := r.Run(ctx, fmt.Sprintf("sudo mkdir -p /run/lab && sudo tee %s >/dev/null <<'LABEOF'\n%sLABEOF\n", forceRenewScriptPath, body)); err != nil {
 		return "", fmt.Errorf("forcerenew: write the sender to %s: %w", forceRenewScriptPath, err)
@@ -89,13 +92,13 @@ func sendForceRenew(ctx context.Context, r Runner, script []byte, p ForceRenewPa
 }
 
 func (a *DnsmasqAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
-	return sendForceRenew(ctx, a.Runner, script, p)
+	return a.host().sendForceRenew(ctx, a.Runner, script, p)
 }
 
 func (a *KeaAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
-	return sendForceRenew(ctx, a.Runner, script, p)
+	return a.host().sendForceRenew(ctx, a.Runner, script, p)
 }
 
 func (a *ISCDHCPAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
-	return sendForceRenew(ctx, a.Runner, script, p)
+	return a.host().sendForceRenew(ctx, a.Runner, script, p)
 }

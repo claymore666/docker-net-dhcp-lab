@@ -64,7 +64,7 @@ var goldenLeaseCmds = map[string]string{
 	"kea":      keaLeaseCmd,
 	"isc-dhcp": "sudo cat " + iscLeaseFile,
 	"dnsmasq":  "sudo cat " + dnsmasqLeaseFile,
-	"udhcpd":   fmt.Sprintf(udhcpdLeasesCmd, udhcpdLeaseFile),
+	"udhcpd":   fmt.Sprintf(udhcpdLeasesCmd, udhcpdLeaseFile, "sudo systemctl kill -s USR1 udhcpd"),
 	"pihole":   "sudo cat " + piholeLeaseFile,
 }
 
@@ -248,5 +248,22 @@ func TestDebianAdapterCommandsMatchTheGolden(t *testing.T) {
 			}
 		}
 		t.Fatalf("output has %d lines, %s has %d", len(gl), goldenPath, len(wl))
+	}
+}
+
+// WithRelay has no host of its own: behind a healthy relay the kea
+// source sends, step for step, the commands it sends bare (#9, #11).
+func TestKeaBehindTheRelaySendsTheBareCommands(t *testing.T) {
+	for _, s := range goldenSteps {
+		bare, gb := goldenAdapter(t, "kea")
+		inner, gw := goldenAdapter(t, "kea")
+		relay, source := healthyRelay(t)
+		p := testRelayParams
+		p.Source = source
+		_, _ = s.run(context.Background(), bare, gb)
+		_, _ = s.run(context.Background(), WithRelay(inner, relay, p), gw)
+		if strings.Join(gw.calls, "\n") != strings.Join(gb.calls, "\n") {
+			t.Errorf("%s: behind the relay kea sent\n%q\nbare\n%q", s.name, gw.calls, gb.calls)
+		}
 	}
 }

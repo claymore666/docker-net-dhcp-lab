@@ -76,7 +76,7 @@ func (a *KeaAdapter) Renumber(ctx context.Context, subnet, addr, first, last str
 	if err != nil {
 		return nil, err
 	}
-	return renumberVia(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf", p, renderKeaRenumbered,
+	return a.host().renumberVia(ctx, a.Runner, "/etc/kea/kea-dhcp4.conf", p, renderKeaRenumbered,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "kea")
 }
 
@@ -85,7 +85,7 @@ func (a *ISCDHCPAdapter) Renumber(ctx context.Context, subnet, addr, first, last
 	if err != nil {
 		return nil, err
 	}
-	return renumberVia(ctx, a.Runner, "/etc/dhcp/dhcpd.conf", p, renderISCRenumbered,
+	return a.host().renumberVia(ctx, a.Runner, "/etc/dhcp/dhcpd.conf", p, renderISCRenumbered,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
 }
 
@@ -94,7 +94,7 @@ func (a *DnsmasqAdapter) Renumber(ctx context.Context, subnet, addr, first, last
 	if err != nil {
 		return nil, err
 	}
-	return renumberVia(ctx, a.Runner, "/etc/dnsmasq.conf", p, renderDnsmasqRenumbered,
+	return a.host().renumberVia(ctx, a.Runner, "/etc/dnsmasq.conf", p, renderDnsmasqRenumbered,
 		func(ctx context.Context) error { return a.Restart(ctx) }, "dnsmasq")
 }
 
@@ -165,31 +165,31 @@ func renderDnsmasqRenumbered(orig string, p renumberPlan) (string, error) {
 }
 
 func (a *KeaAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
-	return squat(ctx, a.Runner, addr, announce)
+	return a.host().squat(ctx, a.Runner, addr, announce)
 }
 func (a *ISCDHCPAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
-	return squat(ctx, a.Runner, addr, announce)
+	return a.host().squat(ctx, a.Runner, addr, announce)
 }
 func (a *DnsmasqAdapter) Squat(ctx context.Context, addr string, announce bool) (func(context.Context) error, error) {
-	return squat(ctx, a.Runner, addr, announce)
+	return a.host().squat(ctx, a.Runner, addr, announce)
 }
 
 func (a *KeaAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
-	return startRogue(ctx, a.Runner, serverAddr, first, last)
+	return a.host().startRogue(ctx, a.Runner, serverAddr, first, last)
 }
 func (a *ISCDHCPAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
-	return startRogue(ctx, a.Runner, serverAddr, first, last)
+	return a.host().startRogue(ctx, a.Runner, serverAddr, first, last)
 }
 func (a *DnsmasqAdapter) StartRogue(ctx context.Context, serverAddr, first, last string) (func(context.Context) error, error) {
-	return startRogue(ctx, a.Runner, serverAddr, first, last)
+	return a.host().startRogue(ctx, a.Runner, serverAddr, first, last)
 }
 
 func (a *KeaAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
-	return rogueLeases(ctx, a.Runner)
+	return a.host().rogueLeases(ctx, a.Runner)
 }
 func (a *ISCDHCPAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
-	return rogueLeases(ctx, a.Runner)
+	return a.host().rogueLeases(ctx, a.Runner)
 }
 func (a *DnsmasqAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
-	return rogueLeases(ctx, a.Runner)
+	return a.host().rogueLeases(ctx, a.Runner)
 }

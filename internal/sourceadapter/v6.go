@@ -23,19 +23,15 @@ func validateRA(p RAParams) error {
 }
 
 // setRAViaRadvd stops radvd; the restore starts it again.
-func setRAViaRadvd(ctx context.Context, r Runner, p RAParams, label string) (func(context.Context) error, error) {
+func (h host) setRAViaRadvd(ctx context.Context, r Runner, p RAParams, label string) (func(context.Context) error, error) {
 	if err := validateRA(p); err != nil {
 		return nil, err
 	}
-	if _, err := r.Run(ctx, "sudo systemctl stop radvd"); err != nil {
-		return nil, fmt.Errorf("%s: stop radvd: %w", label, err)
+	radvd := h.unit("radvd")
+	if err := radvd.do(ctx, r, "stop", label); err != nil {
+		return nil, err
 	}
-	return func(ctx context.Context) error {
-		if _, err := r.Run(ctx, "sudo systemctl start radvd"); err != nil {
-			return fmt.Errorf("%s: start radvd: %w", label, err)
-		}
-		return nil
-	}, nil
+	return func(ctx context.Context) error { return radvd.do(ctx, r, "start", label) }, nil
 }
 
 const (
@@ -54,15 +50,12 @@ func (a *KeaAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
 }
 
 func (a *KeaAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Context) error, error) {
-	return setRAViaRadvd(ctx, a.Runner, p, "kea")
+	return a.host().setRAViaRadvd(ctx, a.Runner, p, "kea")
 }
 
 // restart6 restarts the DHCPv6 daemon, which Kea runs as its own unit.
 func (a *KeaAdapter) restart6(ctx context.Context) error {
-	if _, err := a.Runner.Run(ctx, "sudo systemctl restart kea-dhcp6-server"); err != nil {
-		return fmt.Errorf("kea: systemctl restart kea-dhcp6-server: %w", err)
-	}
-	return nil
+	return a.host().unit("kea-dhcp6-server").do(ctx, a.Runner, "restart", "kea")
 }
 
 func (a *ISCDHCPAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
@@ -74,7 +67,7 @@ func (a *ISCDHCPAdapter) Leases6(ctx context.Context) ([]Lease6, error) {
 }
 
 func (a *ISCDHCPAdapter) SetRA(ctx context.Context, p RAParams) (func(context.Context) error, error) {
-	return setRAViaRadvd(ctx, a.Runner, p, "isc-dhcp")
+	return a.host().setRAViaRadvd(ctx, a.Runner, p, "isc-dhcp")
 }
 
 func (a *DnsmasqAdapter) Leases6(ctx context.Context) ([]Lease6, error) {

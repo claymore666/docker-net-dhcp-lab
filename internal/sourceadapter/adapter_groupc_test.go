@@ -63,7 +63,7 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 			out += "cfg6:" + m[1] + ":" + enc + "\n"
 		}
 		return out + "cfg:\n" + h.cfg, nil
-	case cmd == segAddrCmd:
+	case cmd == debianHost("").segAddrCmd():
 		return strings.ReplaceAll(strings.TrimSpace(h.addrs), " ", "\n") + "\n", nil
 	case strings.HasPrefix(cmd, "sudo ip -4 addr flush dev eth1"):
 		var a []string
@@ -165,7 +165,7 @@ func TestReadyFailsWhenTheV6LeaseTableIsUnreadable(t *testing.T) {
 // The baseline holds permanent v6 addresses only: an RA-formed address
 // on the source would move it between two readiness checks (#23 group D).
 func TestStateCmdReadsOnlyPermanentV6Addresses(t *testing.T) {
-	cmd := stateCmd(sourceUnits{cfgPath: "/etc/x"})
+	cmd := debianHost("x").stateCmd(sourceUnits{cfgPath: "/etc/x"})
 	if !strings.Contains(cmd, "ip -6 -o addr show dev "+segmentNIC+" scope global permanent |") {
 		t.Fatalf("stateCmd reads v6 addresses without the permanent filter: %s", cmd)
 	}
@@ -256,11 +256,11 @@ func TestParseStateRefusesAnIncompleteRead(t *testing.T) {
 		full + "cfg6:" + dnsmasqLabV6Conf + ":!\ncfg:\n",
 		full + "cfg6:/etc/other.conf:eA==\ncfg:\n",
 		full + "cfg6:" + dnsmasqLabV6Conf + ":eA==\ncfg6:" + dnsmasqLabV6Conf + ":eA==\ncfg:\n"} {
-		if _, err := parseState(out, u); err == nil {
+		if _, err := parseState(out, u, true); err == nil {
 			t.Errorf("parseState(%q) accepted", out)
 		}
 	}
-	st, err := parseState(full+"cfg6:"+dnsmasqLabV6Conf+":eA==\ncfg:\ny", u)
+	st, err := parseState(full+"cfg6:"+dnsmasqLabV6Conf+":eA==\ncfg:\ny", u, true)
 	if err != nil || st.extra[dnsmasqLabV6Conf] != "x" || st.addrs6 != "b" || st.cfg != "y" {
 		t.Fatalf("parseState of a full read = %+v, %v", st, err)
 	}
