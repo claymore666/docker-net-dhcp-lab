@@ -228,6 +228,65 @@ rc=0
 (dhcp6_message_log "$DATA/does-not-exist.pcap" '*' >/dev/null 2>&1) || rc=$?
 [ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- v6 a missing capture read as no messages" >&2; fail=1; }
 
+# dhcp_relay_log (lab #11): the v4 fields plus giaddr flags ethsrc ethdst
+# o82, against hand-built frames (gen-dhcp-fixtures.py) and real
+# dhcrelay/Kea captures (testdata/relay/real-*.pcap).
+expect_rlog() {
+	local name=$1 pcap=$2 ident=$3 want=$4 got
+	got=$(dhcp_relay_log "$pcap" "$ident" | cut -d' ' -f2-)
+	if [ "$got" != "$want" ]; then
+		printf 'dhcp-exchange-check-test: FAIL -- relay %s:\n got: %s\nwant: %s\n' "$name" "$got" "$want" >&2
+		fail=1
+	fi
+}
+expect_rfield() {
+	local name=$1 pcap=$2 ident=$3 row=$4 col=$5 want=$6 got
+	got=$(dhcp_relay_log "$pcap" "$ident" | awk -v r="$row" -v c="$col" 'NR == r {print $c}')
+	if [ "$got" != "$want" ]; then
+		echo "dhcp-exchange-check-test: FAIL -- relay $name: row $row field $col = \"$got\", want \"$want\"" >&2
+		fail=1
+	fi
+}
+RMAC=02:11:00:00:00:10
+O82=0x0104657468310203726c79 # circuit-id "eth1", remote-id "rly"
+expect_rlog "relayed DISCOVER and OFFER (option 82 echoed, giaddr, MACs)" "$DATA/dhcp-relay-server-leg.pcap" "$RMAC" \
+	"DISCOVER 5a5a0001 $RMAC - - - - - 10.200.11.1 10.200.11.2 0 10.200.10.1 0x0000 02:11:00:00:00:02 02:11:00:00:00:20 $O82
+OFFER 5a5a0001 $RMAC - 10.200.11.2 - - 10.200.10.100 10.200.11.2 10.200.10.1 0 10.200.10.1 0x0000 02:11:00:00:00:20 02:11:00:00:00:02 $O82"
+expect_rfield "relayed DISCOVER without -a prints a dash" "$DATA/dhcp-relay-no82.pcap" "$RMAC" 1 17 -
+expect_rlog "delivery by broadcast (flag set) and by unicast to chaddr (flag clear)" "$DATA/dhcp-relay-deliver.pcap" "$RMAC" \
+	"OFFER 5a5a0001 $RMAC - 10.200.11.2 - - 10.200.10.100 10.200.10.1 255.255.255.255 0 - 0x8000 02:11:00:00:00:01 ff:ff:ff:ff:ff:ff -
+OFFER 5a5a0002 $RMAC - 10.200.11.2 - - 10.200.10.100 10.200.10.1 10.200.10.100 0 - 0x0000 02:11:00:00:00:01 $RMAC -"
+expect_rlog "T1 renewal then T2 rebind (secs 3, broadcast)" "$DATA/dhcp-relay-rebind.pcap" "$RMAC" \
+	"REQUEST 5a5a0003 $RMAC - - - 10.200.10.100 - 10.200.10.100 10.200.11.2 0 - 0x0000 $RMAC 02:11:00:00:00:01 -
+REQUEST 5a5a0004 $RMAC - - - 10.200.10.100 - 10.200.10.100 255.255.255.255 3 - 0x0000 $RMAC ff:ff:ff:ff:ff:ff -"
+expect_rlog "unicast renewal, its routed copy and the relayed copy; another client's same xid is not ours" "$DATA/dhcp-relay-renewal.pcap" "$RMAC" \
+	"REQUEST 5a5a0005 $RMAC - - - 10.200.10.100 - 10.200.10.100 10.200.11.2 0 - 0x0000 $RMAC 02:11:00:00:00:01 -
+REQUEST 5a5a0005 $RMAC - - - 10.200.10.100 - 10.200.10.100 10.200.11.2 0 - 0x0000 02:11:00:00:00:02 02:11:00:00:00:20 -
+REQUEST 5a5a0005 $RMAC - - - 10.200.10.100 - 10.200.11.1 10.200.11.2 0 10.200.10.1 0x0000 02:11:00:00:00:02 02:11:00:00:00:20 $O82"
+expect_rlog "an identity that is not in the capture" "$DATA/dhcp-relay-renewal.pcap" 02:11:00:00:00:99 ""
+expect_rfield "client-id ident" "$DATA/relay/real-bs-kea-b.pcap" 01:02:11:00:00:00:10 1 3 bc26c51c
+# Real captures: a relayed exchange with the broadcast flag set, one with
+# it clear, and the unicast renewal that dhcrelay also relays a copy of.
+RD=$DATA/relay
+expect_rfield "real server leg, giaddr" "$RD/real-bs-kea-b.pcap" "$RMAC" 1 13 10.200.10.1
+expect_rfield "real server leg, flag set" "$RD/real-bs-kea-b.pcap" "$RMAC" 1 14 0x8000
+expect_rfield "real server leg, option 82 circuit-id eth1" "$RD/real-bs-kea-b.pcap" "$RMAC" 1 17 0x010465746831
+expect_rfield "real server leg, OFFER echoes option 82" "$RD/real-bs-kea-b.pcap" "$RMAC" 2 17 0x010465746831
+expect_rfield "real client leg, flag set, delivered by broadcast" "$RD/real-bc-kea-b.pcap" "$RMAC" 2 16 ff:ff:ff:ff:ff:ff
+expect_rfield "real client leg, flag set" "$RD/real-bc-kea-b.pcap" "$RMAC" 2 14 0x8000
+expect_rfield "real client leg, flag clear" "$RD/real-bc-kea-nob.pcap" "$RMAC" 2 14 0x0000
+expect_rfield "real client leg, flag clear, delivered unicast to chaddr" "$RD/real-bc-kea-nob.pcap" "$RMAC" 2 16 "$RMAC"
+expect_rfield "real client leg, OFFER from the relay MAC" "$RD/real-bc-kea-nob.pcap" "$RMAC" 2 15 02:11:00:00:00:01
+expect_rfield "real client leg, no option 82 after the relay" "$RD/real-bc-kea-nob.pcap" "$RMAC" 2 17 -
+expect_rfield "real renewal, ciaddr" "$RD/real-bc-kea-renew.pcap" "$RMAC" 5 8 10.200.10.100
+expect_rfield "real renewal, eth dst is the relay client leg" "$RD/real-bc-kea-renew.pcap" "$RMAC" 5 16 02:11:00:00:00:01
+expect_rfield "real renewal, routed copy giaddr 0" "$RD/real-bs-kea-renew.pcap" "$RMAC" 5 13 -
+expect_rfield "real renewal, relayed copy giaddr set" "$RD/real-bs-kea-renew.pcap" "$RMAC" 6 13 10.200.10.1
+expect_rfield "real renewal, relayed copy carries option 82" "$RD/real-bs-kea-renew.pcap" "$RMAC" 6 17 0x010465746831
+rc=0
+(dhcp_relay_log "$DATA/does-not-exist.pcap" "$RMAC" >/dev/null 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || { echo "dhcp-exchange-check-test: FAIL -- relay: a missing capture read as an empty log" >&2; fail=1; }
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
