@@ -97,7 +97,7 @@ func TestISCRegexesAnchorOnTheFailoverConfig(t *testing.T) {
 	}
 }
 
-// The edits keep the failover block, and the F1 pool a Failover
+// The edits keep the failover block, and the user-class pool a Failover
 // adapter adds is a failover pool too: a pool without the line would
 // leave the class pool unreplicated and double-served.
 func TestISCFailoverEditsKeepTheBlockAndPoolLine(t *testing.T) {
@@ -109,10 +109,10 @@ func TestISCFailoverEditsKeepTheBlockAndPoolLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := strings.Count(r.cfg, "failover peer \"lab\";"); n != 3 {
-		t.Errorf("%d failover pool lines after F1, want 3\n%s", n, r.cfg)
+		t.Errorf("%d failover pool lines after the user-class pool, want 3\n%s", n, r.cfg)
 	}
 	if !strings.Contains(r.cfg, `failover peer "lab" {`) {
-		t.Error("F1 lost the failover block")
+		t.Error("the user-class pool lost the failover block")
 	}
 	pool := r.cfg[strings.Index(r.cfg, `allow members of "f1"`)-80:]
 	if !strings.Contains(pool[:strings.Index(pool, `range 10.200.1.203`)], `failover peer "lab";`) {
