@@ -23,9 +23,10 @@ declare -A want_pairs=(
 	[udhcpd]='udhcpd.conf.stock:/etc/udhcpd.conf'
 	[pihole]='pihole.toml.stock:/etc/pihole/pihole.toml'
 	[openwrt]='network.stock:/etc/config/network dhcp.stock:/etc/config/dhcp dnsmasq.conf.stock:/etc/dnsmasq.conf'
+	[fritzbox]='probe-hosts.stock:/etc/hosts'
 )
-declare -A want_mask=([kea]=0 [isc-dhcp]=0 [dnsmasq]=0 [udhcpd]=1 [pihole]=0 [openwrt]=1)
-for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt; do
+declare -A want_mask=([kea]=0 [isc-dhcp]=0 [dnsmasq]=0 [udhcpd]=1 [pihole]=0 [openwrt]=1 [fritzbox]=0)
+for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt fritzbox; do
 	want_version=$'kernel\tuname -r'
 	[ "$t" != openwrt ] || want_version=$'openwrt\t'"$openwrt_version"
 	[ "$(source_version_cmd "$t")" = "$want_version" ] || bad "$t: version $(source_version_cmd "$t")"
@@ -62,7 +63,7 @@ echo "${!#}" >>"$SSH_LOG"
 echo "option=1"
 STUB
 chmod +x "$tmp/bin/ssh"
-for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt; do
+for t in kea isc-dhcp dnsmasq udhcpd pihole openwrt fritzbox; do
 	: >"$tmp/ssh.log"
 	want=""
 	for p in ${want_pairs[$t]}; do

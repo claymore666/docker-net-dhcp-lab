@@ -11,7 +11,7 @@
 openwrt_version='. /etc/openwrt_release && printf "%s, " "$DISTRIB_DESCRIPTION" && /usr/sbin/dnsmasq --version | head -n1'
 source_version_cmd() {
 	case "$1" in
-	kea | isc-dhcp | dnsmasq | udhcpd | pihole) printf 'kernel\tuname -r\n' ;;
+	kea | isc-dhcp | dnsmasq | udhcpd | pihole | fritzbox) printf 'kernel\tuname -r\n' ;;
 	routeros) printf 'routeros\t:put [/system resource get version]\n' ;;
 	openwrt) printf '%s\t%s\n' openwrt "$openwrt_version" ;;
 	*) source_type_unknown "$1" ;;
@@ -29,6 +29,9 @@ source_config_pairs() {
 	pihole) printf '%s\n' pihole.toml.stock:/etc/pihole/pihole.toml ;;
 	routeros) printf '%s\n' lab-stock.rsc:/export ;;
 	openwrt) printf '%s\n' network.stock:/etc/config/network dhcp.stock:/etc/config/dhcp dnsmasq.conf.stock:/etc/dnsmasq.conf ;;
+	# the box has no shell; the probe VM's hosts file stands in until the
+	# probe seed decides what to capture (lab #13 PR 4)
+	fritzbox) printf '%s\n' probe-hosts.stock:/etc/hosts ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -40,7 +43,7 @@ source_config_pairs() {
 source_stock_mask() {
 	case "$1" in
 	udhcpd) echo 1 ;;
-	kea | isc-dhcp | dnsmasq | pihole | routeros) echo 0 ;;
+	kea | isc-dhcp | dnsmasq | pihole | routeros | fritzbox) echo 0 ;;
 	openwrt) echo 1 ;;
 	*) source_type_unknown "$1" ;;
 	esac
@@ -52,14 +55,14 @@ source_stock_mask() {
 # side the command /export itself.
 source_stock_cmd() {
 	case "$1" in
-	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt) printf 'sudo cat /root/lab-stock-config/%s\n' "$2" ;;
+	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat /root/lab-stock-config/%s\n' "$2" ;;
 	routeros) printf ':put [/file get %s contents]\n' "$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
 source_live_cmd() {
 	case "$1" in
-	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt) printf 'sudo cat %s\n' "$2" ;;
+	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat %s\n' "$2" ;;
 	routeros) printf '%s\n' "$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
