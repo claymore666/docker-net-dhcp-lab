@@ -382,6 +382,48 @@ func TestRunC6bPassesWhenTheClientMovesOffTheSquattedAddress(t *testing.T) {
 	}
 }
 
+// Lab #70 row 2: the client DECLINEs while Squat is still returning, 10 s
+// before it did in the recorded capture (scaled to 40 ms here).
+func TestRunC6bCountsADeclineSentBeforeSquatReturns(t *testing.T) {
+	r := c6bRig(t, ShapeMacvlan)
+	name := containerName(r.e, NameC6b)
+	var declineAt time.Time
+	r.src.onSquat = func() {
+		declineAt = time.Now()
+		time.Sleep(40 * time.Millisecond)
+		r.h.setAddrs(name, "10.200.1.150")
+	}
+	r.cap.fn = func(ident string) []DHCPMsg {
+		if declineAt.IsZero() {
+			return nil
+		}
+		d := dmsg(declineAt, "DECLINE", "a", ident, "", "")
+		d.Requested = "10.200.1.101"
+		return []DHCPMsg{d}
+	}
+	r.src.fn = func(int) []sourceadapter.Lease {
+		l, _ := r.leaseOf(name, "10.200.1.150")
+		return []sourceadapter.Lease{l}
+	}
+	v := runC6bTuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+	needReason(t, v, "DECLINEd 10.200.1.101")
+}
+
+// A DECLINE from before the scenario started is not this run's.
+func TestRunC6bIgnoresADeclineFromBeforeTheScenario(t *testing.T) {
+	r := c6bRig(t, ShapeMacvlan)
+	old := time.Now().Add(-time.Minute)
+	r.cap.fn = func(ident string) []DHCPMsg {
+		d := dmsg(old, "DECLINE", "a", ident, "", "")
+		d.Requested = "10.200.1.101"
+		return []DHCPMsg{d}
+	}
+	v := runC6bTuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "DECLINE of 10.200.1.101 seen: false")
+}
+
 func TestRunC6bJudges(t *testing.T) {
 	cases := []struct {
 		name   string

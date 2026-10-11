@@ -137,6 +137,7 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if v, ok := bIPAMNA(NameC6b, e); ok {
 		return v
 	}
+	startedAt := time.Now()
 	net, down, err := cNetwork(ctx, e, "c6b", []string{"conflict_check=async"})
 	defer down()
 	if err != nil {
@@ -157,6 +158,9 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		return blocked(NameC6b, e.Cell, e.Shape, fmt.Sprintf("could not put a squatter on %s: %v", x, err), e.GitSHA)
 	}
 	defer func() { _ = stop(bCleanupCtx(ctx)) }()
+	// A client may DECLINE as soon as the squatter's announcement is on
+	// the wire, before Squat returns (lab #70 row 2: 10 s before), so the
+	// DECLINE filter starts with the scenario; the window starts here.
 	squatAt := time.Now()
 	ev := map[string]string{}
 	snap := evidencePath(e, NameC6b, "leases-after")
@@ -176,7 +180,7 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		}
 		ev["leases-after"] = snap
 		mine := active(leasesForIdent(leases, ident), time.Now())
-		declined := declinedFor(messagesAfter(msgs, squatAt), x)
+		declined := declinedFor(messagesAfter(msgs, startedAt), x)
 		if declined && !containsAddr(own, x) && !leasedOn(mine, x) {
 			for _, l := range mine {
 				if containsAddr(own, l.Address) {

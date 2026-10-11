@@ -19,18 +19,19 @@ import (
 // every command, answers docker run/inspect from a small container
 // table, and replays canned nslookup and resolv.conf output.
 type bRunner struct {
-	cmds       []string
-	containers map[string]*bIdent
-	n          int
-	addrFn     func(name, mac string) string
-	forceMAC   string
-	netErr     error
-	nslookup   string
-	resolv     []string
-	resolvN    int
-	runErr     error
-	own        map[string][]string // ip addr inside a container, else its address (#21)
-	ownErr     error
+	cmds        []string
+	containers  map[string]*bIdent
+	n           int
+	addrFn      func(name, mac string) string
+	forceMAC    string
+	netErr      error
+	nslookup    string
+	nslookupErr error
+	resolv      []string
+	resolvN     int
+	runErr      error
+	own         map[string][]string // ip addr inside a container, else its address (#21)
+	ownErr      error
 }
 
 type bIdent struct{ mac, addr, endpointID string }
@@ -105,7 +106,7 @@ func (f *bRunner) Run(_ context.Context, cmd string) (string, error) {
 		}
 		return b.String(), f.ownErr
 	case strings.Contains(cmd, "nslookup"):
-		return f.nslookup, nil
+		return f.nslookup, f.nslookupErr
 	case strings.Contains(cmd, "cat /etc/resolv.conf"):
 		if len(f.resolv) == 0 {
 			return "", nil
@@ -605,6 +606,28 @@ func TestRunB3FailsWhenTheHostnameDoesNotResolve(t *testing.T) {
 	h.nslookup = "Server: 10.200.1.1\nAddress: 10.200.1.1:53\n\n** server can't find labb3: NXDOMAIN\n"
 	needResult(t, runB3Tuned(context.Background(), e, 2, time.Millisecond), FAIL)
 	needCleanup(t, h, "b3", containerName(e, NameB3))
+}
+
+// Lab #70 row 7: a failing lookup is a recorded cause, not an empty answer.
+func TestRunB3NamesTheExecErrorInTheVerdictAndTheEvidence(t *testing.T) {
+	h, _, e := b3Fixture(t, ShapeBridge)
+	h.nslookup = ""
+	h.nslookupErr = errors.New("ssh: connection reset by peer")
+	v := runB3Tuned(context.Background(), e, 2, time.Millisecond)
+	needResult(t, v, FAIL)
+	needReason(t, v, "the lookup failed: ssh: connection reset by peer")
+	b, err := os.ReadFile(evidencePath(e, NameB3, "dns-answer"))
+	if err != nil || !strings.Contains(string(b), "exec error: ssh: connection reset by peer") {
+		t.Errorf("dns-answer evidence %q (%v)", b, err)
+	}
+}
+
+// A non-zero exit that still printed an answer keeps the answer.
+func TestRunB3KeepsTheAnswerOfALookupThatExitedNonZero(t *testing.T) {
+	h, _, e := b3Fixture(t, ShapeBridge)
+	h.nslookup = nslookupOK
+	h.nslookupErr = errors.New("exit status 1")
+	needResult(t, runB3Tuned(context.Background(), e, 2, time.Millisecond), PASS)
 }
 
 func TestRunB3FailsWithoutASourceAddress(t *testing.T) {

@@ -138,7 +138,7 @@ type d4Obs struct {
 // prefix is read from the capture by d4First (DESIGN-23d row D4).
 func judgeD4(o d4Obs) fOutcome {
 	for _, m := range o.Msgs {
-		if isClient6(m.Type) {
+		if asksForAddress6(m.Type) {
 			return fFail("the container sent a DHCPv6 %s although ipv6_mode=slaac sends no Solicit", m.Type)
 		}
 	}

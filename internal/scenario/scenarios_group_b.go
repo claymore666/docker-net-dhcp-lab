@@ -228,8 +228,9 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 	query := fmt.Sprintf("sudo docker exec %s nslookup %s %s", name, host, e.SourceAddr)
 	var out string
 	var answers []string
+	var runErr error
 	for i := 0; i < tries; i++ {
-		out, _ = e.Host.Run(ctx, query)
+		out, runErr = e.Host.Run(ctx, query)
 		if answers = dnsAnswerAddrs(out); len(answers) > 0 {
 			break
 		}
@@ -238,7 +239,11 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 		}
 	}
 	dnsPath := evidencePath(e, NameB3, "dns-answer")
-	if err := os.WriteFile(dnsPath, []byte("# "+query+"\n"+out), 0o644); err == nil {
+	text := "# " + query + "\n" + out
+	if runErr != nil && len(answers) == 0 {
+		text += "\n# exec error: " + runErr.Error() + "\n"
+	}
+	if err := os.WriteFile(dnsPath, []byte(text), 0o644); err == nil {
 		ev["dns-answer"] = dnsPath
 	}
 	for _, a := range answers {
@@ -246,7 +251,11 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 			return pass(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answers %s with the leased address %s", e.SourceAddr, host, addr), ev, e.GitSHA)
 		}
 	}
-	return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answered %s with %v, want the leased address %s", e.SourceAddr, host, answers, addr), ev, e.GitSHA)
+	cause := ""
+	if runErr != nil && len(answers) == 0 {
+		cause = fmt.Sprintf(" (the lookup failed: %v)", runErr)
+	}
+	return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answered %s with %v, want the leased address %s%s", e.SourceAddr, host, answers, addr, cause), ev, e.GitSHA)
 }
 
 // runB4 -- requested address kept: a fixed-MAC container is removed (the
