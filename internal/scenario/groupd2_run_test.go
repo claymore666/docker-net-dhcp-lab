@@ -189,3 +189,16 @@ func TestRunF7JudgesTheBindAfterPref64(t *testing.T) {
 		}
 	}
 }
+
+// Every ipvlan refusal row is written, not only judged (#69).
+func TestIpvlanRefusalRowsWriteTheirVerdicts(t *testing.T) {
+	for name, run := range map[string]func(context.Context, Env) Verdict{NameF6: runF6, NameD3a: runD3a, NameD3c: runD3c} {
+		f := newD6Fix(t, ShapeIpvlan, "", sourceadapter.CapPD, sourceadapter.CapV6ServerStop)
+		f.h.netErr = errors.New("not supported in ipvlan mode")
+		v := run(context.Background(), f.e)
+		needResult(t, v, PASS)
+		if err := Write(f.e.EvidenceDir, v); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

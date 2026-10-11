@@ -74,7 +74,22 @@ func ipvlanSlaacNA(name string, e Env) (Verdict, bool) {
 func judgeIpvlanRefusal(ctx context.Context, e Env, name, suffix string, opts []string) Verdict {
 	_, down, err := cNetwork(ctx, e, suffix, opts)
 	down()
-	return fFinish(name, e, judgeRefused(strings.Join(opts, " "), err), "", map[string]string{})
+	ev := map[string]string{}
+	refusalEvidence(e, name, err, ev)
+	return fFinish(name, e, judgeRefused(strings.Join(opts, " "), err), "", ev)
+}
+
+// refusalEvidence keeps the create error as the evidence of a refusal row;
+// Write refuses a PASS without a file (#69).
+func refusalEvidence(e Env, scenario string, createErr error, ev map[string]string) {
+	line := "docker network create succeeded; no refusal"
+	if createErr != nil {
+		line = "docker network create refused: " + createErr.Error()
+	}
+	p := evidencePath(e, scenario, "create-refusal")
+	if os.WriteFile(p, []byte(line+"\n"), 0o644) == nil {
+		ev["create-refusal"] = p
+	}
 }
 
 // once makes a restore safe to call early and again from the defer (#23).

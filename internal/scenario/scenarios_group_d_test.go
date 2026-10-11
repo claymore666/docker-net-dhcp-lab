@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -333,4 +335,70 @@ func TestRunF5JudgesTheGrantedTAAndTheKeaFallback(t *testing.T) {
 	f.cap.msgs = keaF5().Msgs
 	f.h.health = "not json"
 	needResult(t, runF5(context.Background(), f.e), BLOCKED)
+}
+
+// A verdict is judged and then written (#69): the empty capture of a
+// segment with no RA must still leave a non-empty evidence file.
+func TestRunD2bWritesItsVerdictWhenTheV6CaptureIsEmpty(t *testing.T) {
+	f := newD6Fix(t, ShapeBridge, "")
+	f.cap.msgs, f.cap.ras = nil, nil
+	f.h.runErr = errors.New("exit 125")
+	v := runD2b(context.Background(), f.e)
+	needResult(t, v, PASS)
+	if err := Write(f.e.EvidenceDir, v); err != nil {
+		t.Fatalf("the verdict was judged but not written: %v", err)
+	}
+	b, err := os.ReadFile(v.Evidence["capture-v6"])
+	if err != nil || !strings.Contains(string(b), "no DHCPv6 message or router advertisement") {
+		t.Errorf("capture-v6 %q (%v)", b, err)
+	}
+}
+
+func TestWriteMessageLog6LeavesANonEmptyLogAsItWas(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "log.txt")
+	ras := []RAMsg{{Src: d6Router, RouterLifetime: 1800}}
+	if err := writeMessageLog6(p, nil, ras); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if strings.Contains(string(b), "no DHCPv6 message") || !strings.Contains(string(b), " RA ") {
+		t.Errorf("RA-only log %q", b)
+	}
+	if err := writeMessageLog6(p, goodD1().Msgs, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = os.ReadFile(p)
+	if strings.Contains(string(b), "no DHCPv6 message") || !strings.Contains(string(b), "SOLICIT") {
+		t.Errorf("message-only log %q", b)
+	}
+}
+
+func TestRunD2OnIpvlanWritesTheRefusalAsEvidence(t *testing.T) {
+	const refusal = "ipv6_mode=slaac is not supported in ipvlan mode"
+	f := newD6Fix(t, ShapeIpvlan, "")
+	f.h.netErr = errors.New(refusal)
+	v := runD2(context.Background(), f.e)
+	needResult(t, v, PASS)
+	if err := Write(f.e.EvidenceDir, v); err != nil {
+		t.Fatalf("the refusal was judged but not written: %v", err)
+	}
+	var found bool
+	for _, p := range v.Evidence {
+		b, err := os.ReadFile(p)
+		found = found || (err == nil && strings.Contains(string(b), refusal))
+	}
+	if !found {
+		t.Errorf("no evidence file carries the create error: %v", v.Evidence)
+	}
+	f = newD6Fix(t, ShapeIpvlan, "")
+	v = runD2(context.Background(), f.e)
+	needResult(t, v, FAIL)
+	var said bool
+	for _, p := range v.Evidence {
+		b, err := os.ReadFile(p)
+		said = said || (err == nil && strings.Contains(string(b), "create succeeded"))
+	}
+	if !said {
+		t.Errorf("no evidence file says the create succeeded: %v", v.Evidence)
+	}
 }

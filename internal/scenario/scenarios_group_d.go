@@ -286,6 +286,7 @@ func runD2(ctx context.Context, e Env) (v Verdict) {
 	net, down, err := dNetwork(ctx, e, NameD2, "d2", []string{opt})
 	defer down(&v)
 	if e.Shape == ShapeIpvlan {
+		refusalEvidence(e, NameD2, err, ev)
 		return fFinish(NameD2, e, judgeRefused(opt, err), "", ev)
 	}
 	if err != nil {
