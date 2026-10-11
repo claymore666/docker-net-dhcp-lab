@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
@@ -371,4 +372,31 @@ func TestJudgeD4InformationRequestIsNotASolicit(t *testing.T) {
 	needF(t, judgeD4(o), PASS, "first advertised")
 	o.Msgs = append(o.Msgs, d6Msg(1, "SOLICIT", false, nil, nil))
 	needF(t, judgeD4(o), FAIL, "DHCPv6 SOLICIT")
+}
+
+// Lab #70 row 6: D4 keeps counting RAs up to the settled read's start,
+// so one that lands while a slow settled read is running is not one the
+// row may rely on.
+func TestJudgeD4RACutoffIsTheSettledReadStartNotItsEnd(t *testing.T) {
+	o := d4Good(t, raWith(-5, false, pio(d4P1, true)), raWith(30, false, pio(d4P2, true)))
+	o.Settled.Got = d6At(40)
+	needF(t, judgeD4(o), BLOCKED, "1 autonomous prefixes before the settled read")
+}
+
+// The edges of the tolerance: stated 7200, 21 s elapsed, slack lftSlack.
+func TestLftWithinEdges(t *testing.T) {
+	const stated, elapsed = 7200, 21 * time.Second
+	lo := int64(stated) - 21 - lftSlack
+	cases := []struct {
+		got  int64
+		want bool
+	}{
+		{lo, true}, {lo - 1, false}, {lo - lftSlack, false},
+		{stated, true}, {stated + 1, false}, {0, false}, {-1, false},
+	}
+	for _, c := range cases {
+		if got := lftWithin(c.got, stated, elapsed); got != c.want {
+			t.Errorf("lftWithin(%d, %d, %s) = %v, want %v", c.got, stated, elapsed, got, c.want)
+		}
+	}
 }
