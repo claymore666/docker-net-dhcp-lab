@@ -7,3 +7,8 @@ files named by scenario ID, listed in the [README](../README.md#scenario-groups)
 A plugin release run on an existing lab release gets its own page, named
 `<lab tag>-plugin-<plugin tag>.md`, with its evidence tarball attached to
 that lab release.
+
+Pages:
+
+- [v0.1.0](v0.1.0.md), and the same lab run against [plugin v2.5.0](v0.1.0-plugin-v2.5.0.md).
+- [v0.2.0, plugin v2.6.0-rc1](v0.2.0-plugin-v2.6.0-rc1.md).

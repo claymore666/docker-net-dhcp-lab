@@ -78,10 +78,10 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 
 At v0.1.0 the servers were the Debian 13 packages: Kea 2.6.3, ISC dhcpd
 4.4.3-P1, dnsmasq 2.91. The udhcpd cell (issue #10) uses the Debian 13
-package `udhcpd` 1:1.37.0-6, BusyBox 1.37; its host run is pending, host not
-cleared. The Pi-hole cell installs Pi-hole 6 with its own installer (FTL 6.7.1
-when first built), which is not pinned; its host run is pending, host not
-cleared. The Debian, Ubuntu and Docker marks belong to their owners; their files and
+package `udhcpd` 1:1.37.0-6, BusyBox 1.37; its host run is on the v0.2.0 results page.
+The Pi-hole cell installs Pi-hole 6 with its own installer (FTL 6.7.1
+when first built), which is not pinned; its host run is on the v0.2.0 results page.
+The Debian, Ubuntu and Docker marks belong to their owners; their files and
 licences are listed in [`docs/logos/`](docs/logos/README.md). No project
 named here endorses this lab.
 
@@ -267,10 +267,10 @@ scripts/down-cell.sh kea <work-dir>
 | Source | Cell | Host run |
 |---|---|---|
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
-| udhcpd | `udhcpd` | pending, host not cleared |
-| Pi-hole | `pihole` | pending, host not cleared |
-| MikroTik CHR | `chr` | pending, host not cleared |
-| OpenWrt 25.12 | `openwrt` | pending, host not cleared |
+| udhcpd | `udhcpd` | v0.2.0 results page |
+| Pi-hole | `pihole` | v0.2.0 results page |
+| MikroTik CHR | `chr` | run on 2026-10-11, no verdicts (base image refused), see the v0.2.0 results page |
+| OpenWrt 25.12 | `openwrt` | run on 2026-10-11, no verdicts (base image missing), see the v0.2.0 results page |
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
