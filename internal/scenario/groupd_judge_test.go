@@ -245,6 +245,15 @@ func TestJudgeD2(t *testing.T) {
 			}
 		}, BLOCKED, "no RA with an autonomous prefix"},
 		"a Solicit": {func(o *d2Obs) { o.Msgs = []DHCP6Msg{d6Msg(0, "SOLICIT", false, nil, nil)} }, FAIL, "sends no Solicit"},
+		"an Information-request alone (stateless network, lab #70 row 1)": {func(o *d2Obs) {
+			o.Msgs = []DHCP6Msg{d6Msg(0, "INFORMATION-REQUEST", false, nil, nil)}
+		}, PASS, "modified EUI-64"},
+		"an Information-request then a Solicit": {func(o *d2Obs) {
+			o.Msgs = []DHCP6Msg{d6Msg(0, "INFORMATION-REQUEST", false, nil, nil), d6Msg(1, "SOLICIT", false, nil, nil)}
+		}, FAIL, "DHCPv6 SOLICIT"},
+		"a Request": {func(o *d2Obs) { o.Msgs = []DHCP6Msg{d6Msg(0, "REQUEST", false, nil, nil)} }, FAIL, "DHCPv6 REQUEST"},
+		"a Decline": {func(o *d2Obs) { o.Msgs = []DHCP6Msg{d6Msg(0, "DECLINE", false, nil, nil)} }, FAIL, "DHCPv6 DECLINE"},
+		"a Release": {func(o *d2Obs) { o.Msgs = []DHCP6Msg{d6Msg(0, "RELEASE", false, nil, nil)} }, FAIL, "DHCPv6 RELEASE"},
 		"leftover address only": {func(o *d2Obs) {
 			other := addr6{Addr: netip.MustParseAddr("fd42:200:0:100::77"), Bits: 128, Scope: "global", Valid: 7000, Pref: 3000}
 			o.Start.Addrs = []addr6{d6LL, other}
@@ -394,4 +403,64 @@ func TestV6IdentSkipsWhatIsMissing(t *testing.T) {
 			t.Errorf("v6Ident(%q, %v) = %q, want %q", c.mac, c.ll, got, c.want)
 		}
 	}
+}
+
+// The Information-request stays a message from the container for the
+// exchange reading and the DUID collection (lab #70 row 1): only the
+// slaac judges stop counting it as a request for an address.
+func TestInformationRequestStaysAClientMessageForTheExchange(t *testing.T) {
+	if !isClient6("INFORMATION-REQUEST") || asksForAddress6("INFORMATION-REQUEST") {
+		t.Fatal("isClient6 must count it, asksForAddress6 must not")
+	}
+	for _, typ := range []string{"SOLICIT", "REQUEST", "CONFIRM", "RENEW", "REBIND", "RELEASE", "DECLINE"} {
+		if !asksForAddress6(typ) {
+			t.Errorf("%s no longer counts as asking for an address", typ)
+		}
+	}
+	msgs := []DHCP6Msg{d6Msg(0, "INFORMATION-REQUEST", false, nil, nil), d6Msg(1, "REPLY", false, d6IA(d6NA), nil)}
+	x, _, ok := exchange6(msgs)
+	if !ok || x.DUID != d6DUID {
+		t.Errorf("exchange6 lost the DUID of an Information-request: %+v %v", x, ok)
+	}
+}
+
+// Row 6: the lifetimes are read when the read returns; Start.At and
+// Settled.At stay the cut-off for "existed before the read".
+func TestD1bElapsedCountsASlowRead(t *testing.T) {
+	stated := goodD1()
+	stated.Settled.Addrs[1].Valid, stated.Settled.Addrs[1].Pref = 7124, 3524
+	stated.Settled.At = d6At(21)
+	stated.Settled.Got = d6At(76)
+	if out, _ := judgeD1(stated); out.Result != PASS {
+		t.Errorf("a 76 s read judged against 76 s: %s %q", out.Result, out.Reason)
+	}
+	stated.Settled.Got = time.Time{}
+	if out, _ := judgeD1(stated); out.Result != FAIL {
+		t.Errorf("a countdown of 76 s judged against 21 s must fail: %s %q", out.Result, out.Reason)
+	}
+}
+
+func TestD1bSlowReadDoesNotRaiseTheCeilingOrAcceptAShortCountdown(t *testing.T) {
+	o := goodD1()
+	o.Settled.Got = d6At(76)
+	o.Settled.Addrs[1].Valid = 7300
+	if out, _ := judgeD1(o); out.Result != FAIL {
+		t.Errorf("a lifetime above the stated one passed: %s", out.Reason)
+	}
+	o = goodD1()
+	o.Settled.Got = d6At(76)
+	o.Settled.Addrs[1].Valid, o.Settled.Addrs[1].Pref = 7000, 3400
+	if out, _ := judgeD1(o); out.Result != FAIL {
+		t.Errorf("a lifetime 200 s short of the count-down passed: %s", out.Reason)
+	}
+}
+
+// A slow start read must not turn an RA that arrived during it into one
+// that came before it (design defeat 5, lab #70 row 6).
+func TestD2SlowStartReadKeepsTheRACutoff(t *testing.T) {
+	o, _ := goodD2(t)
+	o.RAs[0].At = d6At(3)
+	o.Start.At = d6At(1)
+	o.Start.Got = d6At(80)
+	needF(t, judgeD2(o), FAIL, "no RA with fd42:200:0:100::/64 before it")
 }

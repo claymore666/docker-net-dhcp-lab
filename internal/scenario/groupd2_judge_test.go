@@ -361,3 +361,14 @@ func TestJudgeF7HoldsTheRoutesToTheReadBeforePref64(t *testing.T) {
 	r.Routes = r.BaseRoutes + "fd42:200:0:1fe::/64 dev eth0 metric 1024\n"
 	needF(t, judgeF7(ras, true, r), FAIL, "routes changed")
 }
+
+// Row 1 (lab #70): D4 runs under ipv6_mode=slaac too, so an
+// Information-request alone passes and a Solicit still fails.
+func TestJudgeD4InformationRequestIsNotASolicit(t *testing.T) {
+	ras := []RAMsg{raWith(-5, false, pio(d4P1, true), pio(d4P2, true)), raWith(5, false, pio(d4P1, true), pio(d4P2, true))}
+	o := d4Good(t, ras...)
+	o.Msgs = []DHCP6Msg{d6Msg(0, "INFORMATION-REQUEST", false, nil, nil)}
+	needF(t, judgeD4(o), PASS, "first advertised")
+	o.Msgs = append(o.Msgs, d6Msg(1, "SOLICIT", false, nil, nil))
+	needF(t, judgeD4(o), FAIL, "DHCPv6 SOLICIT")
+}

@@ -74,9 +74,14 @@ func firstEventAt(msgs []DHCP6Msg, ras []RAMsg, lease func([]DHCP6Msg, []RAMsg) 
 	return time.Now()
 }
 
+// labNow is the clock readAddrs stamps a finished read with; a test
+// replaces it to make a read take as long as the slow one in lab #70 row 6.
+var labNow = time.Now
+
 func readAddrs(ctx context.Context, e Env, scenario, label, name string, route string, ev map[string]string) (d6Read, error) {
-	at := time.Now()
+	at := labNow()
 	as, err := containerAddrs6(ctx, e.Host, name)
+	got := labNow()
 	if err != nil {
 		return d6Read{}, err
 	}
@@ -85,7 +90,7 @@ func readAddrs(ctx context.Context, e Env, scenario, label, name string, route s
 		return d6Read{}, err
 	}
 	ev[label] = p
-	return d6Read{At: at, Addrs: as}, nil
+	return d6Read{At: at, Got: got, Addrs: as}, nil
 }
 
 // dCollect starts the container on net and reads it at start and once

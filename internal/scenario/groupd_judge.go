@@ -21,7 +21,25 @@ const lftSlack = 15
 // d6Read is one read of the container's addresses and when it was taken.
 type d6Read struct {
 	At    time.Time
+	Got   time.Time
 	Addrs []addr6
+}
+
+// sampled is when the lifetimes were read: At is the cut-off for "existed
+// before the read", Got the moment the read returned, which a slow ssh
+// pushes tens of seconds past At (lab #70 row 6). A zero Got is At.
+func (r d6Read) sampled() time.Time {
+	if r.Got.IsZero() {
+		return r.At
+	}
+	return r.Got
+}
+
+// asksForAddress6 is isClient6 less INFORMATION-REQUEST: the plugin docs
+// allow an Information-request under slaac on a stateless network and
+// promise only "sends no Solicit" (lab #70 row 1).
+func asksForAddress6(typ string) bool {
+	return typ != "INFORMATION-REQUEST" && isClient6(typ)
 }
 
 func isClient6(typ string) bool {
@@ -191,7 +209,7 @@ func judgeD1(o d1Obs) (fOutcome, d6Exchange) {
 	if !ok {
 		return fFail("%s was gone from the link once settled", na.Addr), x
 	}
-	elapsed := o.Settled.At.Sub(x.Reply.At)
+	elapsed := o.Settled.sampled().Sub(x.Reply.At)
 	if s.Valid == forever || s.Pref == forever {
 		return fFail("%s still carries valid %d preferred %d (-1 is forever) %s after the Reply; the docs install the server's lifetimes", na.Addr, s.Valid, s.Pref, elapsed.Round(time.Second)), x
 	}
@@ -301,7 +319,7 @@ func judgeF5(o d1Obs, present, serverTA, healthFound bool, healthTA string) fOut
 	if !ok {
 		return fFail("the granted IA_TA %s is not on the container's link once settled", ta.Addr)
 	}
-	if !lftWithin(s.Valid, ta.Valid, o.Settled.At.Sub(x.Reply.At)) || !lftWithin(s.Pref, ta.Pref, o.Settled.At.Sub(x.Reply.At)) {
+	if !lftWithin(s.Valid, ta.Valid, o.Settled.sampled().Sub(x.Reply.At)) || !lftWithin(s.Pref, ta.Pref, o.Settled.sampled().Sub(x.Reply.At)) {
 		return fFail("IA_TA %s carries valid %d preferred %d, the Reply stated %d/%d", ta.Addr, s.Valid, s.Pref, ta.Valid, ta.Pref)
 	}
 	inTable := false
@@ -346,7 +364,7 @@ type d2Obs struct {
 // defeat 5).
 func judgeD2(o d2Obs) fOutcome {
 	for _, m := range o.Msgs {
-		if isClient6(m.Type) {
+		if asksForAddress6(m.Type) {
 			return fFail("the container sent a DHCPv6 %s although ipv6_mode=slaac sends no Solicit", m.Type)
 		}
 	}
@@ -395,7 +413,7 @@ func slaacFormed(o d2Obs) fOutcome {
 	if !ok {
 		return fFail("%s was gone from the link once settled", want)
 	}
-	elapsed := o.Settled.At.Sub(last.At)
+	elapsed := o.Settled.sampled().Sub(last.At)
 	if !pioLft(s.Valid, pio.Valid, maxValid, elapsed) || !pioLft(s.Pref, pio.Pref, maxPref, elapsed) {
 		return fFail("%s carries valid %d preferred %d once settled, the last RA's PIO stated %d/%d %s before", want, s.Valid, s.Pref, pio.Valid, pio.Pref, elapsed.Round(time.Second))
 	}

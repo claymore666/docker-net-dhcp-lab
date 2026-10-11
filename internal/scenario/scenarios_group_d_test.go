@@ -53,6 +53,7 @@ type d6Host struct {
 	*bRunner
 	start, settled, route, inspect, health string
 	addrReads                              int
+	onSettledRead                          func()
 }
 
 func (h *d6Host) Run(ctx context.Context, cmd string) (string, error) {
@@ -62,6 +63,9 @@ func (h *d6Host) Run(ctx context.Context, cmd string) (string, error) {
 		h.addrReads++
 		if h.addrReads == 1 {
 			return h.start, nil
+		}
+		if h.onSettledRead != nil {
+			h.onSettledRead()
 		}
 		return h.settled, nil
 	case strings.Contains(cmd, "ip -6 route show default"):
@@ -135,6 +139,21 @@ func TestRunD1PassesAndCleansUpAfterThePing(t *testing.T) {
 			t.Errorf("container left behind: %v", f.h.containers)
 		}
 	}
+}
+
+// Lab #70 row 6: the settled read took 76 s over a slow ssh and the link
+// showed valid 7124 of 7200; the judge must count those 76 s.
+func TestRunD1bCountsTheTimeTheSettledReadTook(t *testing.T) {
+	f := newD6Fix(t, ShapeMacvlan, "")
+	var skew time.Duration
+	old := labNow
+	labNow = func() time.Time { return time.Now().Add(skew) }
+	t.Cleanup(func() { labNow = old })
+	f.h.onSettledRead = func() { skew = 76 * time.Second }
+	ll := addrLine(d6LL.Addr.String(), 64, "link", "forever", "forever")
+	f.h.settled = ll + addrLine(d6NA.String(), 128, "global", "7124sec", "3524sec")
+	v := runD1b(context.Background(), f.e)
+	needResult(t, v, PASS)
 }
 
 func TestRunD1FailsWhenInspectDisagreesWithTheLink(t *testing.T) {
