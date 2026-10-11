@@ -310,6 +310,9 @@ func writeMessageLog6(path string, msgs []DHCP6Msg, ras []RAMsg) error {
 		fmt.Fprintf(&b, "%s RA %s M=%v O=%v lifetime=%d PIOs=%v PREF64=%v\n",
 			r.At.UTC().Format(time.RFC3339Nano), r.Src, r.Managed, r.Other, r.RouterLifetime, r.PIOs, r.Pref64)
 	}
+	if len(msgs) == 0 && len(ras) == 0 {
+		b.WriteString("no DHCPv6 message or router advertisement in the capture window\n")
+	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
