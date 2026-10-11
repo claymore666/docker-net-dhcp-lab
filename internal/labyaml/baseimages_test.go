@@ -1,6 +1,7 @@
 package labyaml
 
 import (
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -139,6 +140,31 @@ func TestSegmentNICSetupOnlyOnIfupdownAndSedSafe(t *testing.T) {
 		}
 		if strings.ContainsAny(line, "#&\\\n") {
 			t.Errorf("%s: SegmentNICSetup has a character the sed substitution cannot carry: %q", name, line)
+		}
+	}
+}
+
+// The Windows evaluation image is built by hand-placed ISO, never fetched,
+// and up-source.sh finds its build script from the name's first word (#14).
+func TestWindowsImageIsABuiltImageWithANamedBuildScript(t *testing.T) {
+	bi, err := LookupBaseImage("windows-2025-eval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BaseImage{Name: "windows-2025-eval", OSVariant: "win2k25", Kind: "built", Seed: "windows"}
+	if bi != want {
+		t.Errorf("windows-2025-eval = %+v, want %+v", bi, want)
+	}
+	script := "../../scripts/build-" + strings.SplitN(bi.Name, "-", 2)[0] + "-image.sh"
+	if _, err := os.Stat(script); err != nil {
+		t.Errorf("no build script for %s: %v", bi.Name, err)
+	}
+	if _, err := os.Stat("../../images/" + bi.Name + ".sha256"); err != nil {
+		t.Errorf("no ISO pin file for %s: %v", bi.Name, err)
+	}
+	for name, other := range baseImages {
+		if other.Seed == "windows" && name != "windows-2025-eval" {
+			t.Errorf("%s: seed windows belongs to the Windows image only", name)
 		}
 	}
 }

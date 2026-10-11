@@ -191,6 +191,17 @@ if [ "${#scan_files[@]}" -gt 0 ]; then
 	done
 fi
 
+# A literal password in an unattended-install answer file (lab #14): only
+# files that open a password element are read by the awk rule.
+if [ "${#scan_files[@]}" -gt 0 ]; then
+	scan "$work/pwfiles" grep -lZaE -e '<(Administrator)?Password>' -- "${scan_files[@]}"
+	while IFS= read -r -d '' f; do
+		while IFS= read -r n; do
+			[ -n "$n" ] && records+=("${fidx[$f]}:$n:2")
+		done < <(hygiene_password_literals "$f")
+	done <"$work/pwfiles"
+fi
+
 # Findings come out in file, then line order, address before process on one
 # line, as the per-line loop printed them.
 fail=0
@@ -199,6 +210,8 @@ if [ "${#records[@]}" -gt 0 ]; then
 	while IFS=: read -r i n kind; do
 		if [ "$kind" -eq 0 ]; then
 			echo "hygiene: candidate at ${files[$i]}:$n" >&2
+		elif [ "$kind" -eq 2 ]; then
+			echo "hygiene: password-literal candidate at ${files[$i]}:$n" >&2
 		else
 			echo "hygiene: process-marker candidate at ${files[$i]}:$n" >&2
 		fi

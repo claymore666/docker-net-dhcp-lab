@@ -427,6 +427,21 @@ if ! (cd "$empty_repo" && timeout 10 ./scripts/hygiene-check.sh) <&3 >/dev/null 
 fi
 exec 3<&-
 
+# An unattended-install answer file may hold a password only as a
+# __PLACEHOLDER__ the build script fills in a work directory (lab #14).
+run_case "answer file, literal administrator password" \
+	$'<AdministratorPassword><Value>hunter2</Value><PlainText>true</PlainText></AdministratorPassword>\n' fail extra/unattend.xml 'hygiene: password-literal candidate at extra/unattend.xml:1' 1 || fail=1
+run_case "answer file, literal password spread over lines" \
+	$'<Password>\n  <Value>\n  hunter2\n  </Value>\n</Password>\n' fail extra/unattend.xml 'hygiene: password-literal candidate at extra/unattend.xml:2' 1 || fail=1
+run_case "answer file, literal local account password" \
+	$'<LocalAccount>\n<Password><Value>hunter2</Value></Password>\n</LocalAccount>\n' fail extra/unattend.xml 'hygiene: password-literal candidate at extra/unattend.xml:2' 1 || fail=1
+run_case "answer file, placeholder passwords" \
+	$'<AdministratorPassword><Value>__ADMIN_PASSWORD__</Value></AdministratorPassword>\n<Password>\n<Value>__LAB_PASSWORD__</Value>\n</Password>\n' ok extra/unattend.xml '!password-literal' || fail=1
+run_case "answer file, a Value outside any password element" \
+	$'<MetaData><Key>/IMAGE/NAME</Key><Value>Windows Server</Value></MetaData>\n' ok extra/unattend.xml '!password-literal' || fail=1
+run_case "answer file, a literal after a placeholder password block" \
+	$'<Password><Value>__X__</Value></Password>\n<Value>hunter2</Value>\n' ok extra/unattend.xml '!password-literal' || fail=1
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
