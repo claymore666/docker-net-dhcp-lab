@@ -21,6 +21,7 @@ var (
 	keaControlLineRE  = regexp.MustCompile(`(?m)^[ \t]*"control-socket": [^\n]*\},$`)
 	keaLeaseDBLineRE  = regexp.MustCompile(`(?m)^[ \t]*"lease-database": [^\n]*\},$`)
 	iscMaxLeaseTimeRE = regexp.MustCompile(`(?m)^max-lease-time\s+[0-9]+;$`)
+	iscMinLeaseTimeRE = regexp.MustCompile(`(?m)^min-lease-time\s+[0-9]+;$`)
 	iscAuthRE         = regexp.MustCompile(`(?m)^authoritative;$`)
 	dnsmasqKeepRE     = regexp.MustCompile(`(?m)^(?:interface=[^\n]*|bind-interfaces|except-interface=[^\n]*|dhcp-authoritative)$`)
 	dnsmasqMainTimeRE = regexp.MustCompile(`(?m)^dhcp-range=tag:!b5,(?:tag:[^,\n]+,)*[^,\n]+,[^,\n]+,([^,\n]+)$`)
@@ -143,6 +144,11 @@ func renderISCRenumbered(orig string, p renumberPlan) (string, error) {
 	var b strings.Builder
 	b.WriteString(lt + "\n")
 	if m := iscMaxLeaseTimeRE.FindString(orig); m != "" {
+		b.WriteString(m + "\n")
+	}
+	// A shortened config carries min-lease-time; dropping it would bring
+	// back dhcpd's 300 s floor on a renumbered cell (#70).
+	if m := iscMinLeaseTimeRE.FindString(orig); m != "" {
 		b.WriteString(m + "\n")
 	}
 	if iscAuthRE.MatchString(orig) {

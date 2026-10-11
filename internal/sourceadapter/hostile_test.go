@@ -187,6 +187,8 @@ func TestRenumberMovesTheSegmentFirstAndRestoresInOrder(t *testing.T) {
 // A shortened lease time is what C9's renewal clock runs on; the
 // renumbered config keeps it.
 func TestRenumberKeepsAShortenedLeaseTime(t *testing.T) {
+	// isc-dhcp serves max(default, min-lease-time), so the renumbered
+	// config must keep the min line too (#70).
 	want := map[string]string{"kea": `"valid-lifetime": 120,`, "isc-dhcp": "default-lease-time 120;", "dnsmasq": ",120\n"}
 	for _, name := range adapterNames {
 		r := segBaseline(t, name)
@@ -199,6 +201,9 @@ func TestRenumberKeepsAShortenedLeaseTime(t *testing.T) {
 		}
 		if !strings.Contains(r.cfg, want[name]) {
 			t.Fatalf("%s: renumbered config lost the lease time %q:\n%s", name, want[name], r.cfg)
+		}
+		if name == "isc-dhcp" && !strings.Contains(r.cfg, "\nmin-lease-time 120;\n") {
+			t.Fatalf("isc-dhcp: renumbered config lost min-lease-time:\n%s", r.cfg)
 		}
 	}
 }

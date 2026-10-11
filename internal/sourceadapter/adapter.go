@@ -106,6 +106,10 @@ type Lease struct {
 	Hostname string
 	ClientID string
 	Expires  time.Time
+	// Reserved marks a row the source serves from a host reservation and
+	// does not write to its own lease table; the adapter derived it from
+	// the source's log (ISC, lab #70). Zero for every other row.
+	Reserved bool
 }
 
 // hexColon renders raw bytes as lowercase colon-hex, the shape every
@@ -303,11 +307,19 @@ func writeRemoteConfig(ctx context.Context, r Runner, path, content string) erro
 // this call survives the round trip untouched, and a re-run never drifts
 // further from the running config than one lease-time field.
 func shortenLeaseTimeViaSubstitution(ctx context.Context, r Runner, path string, re *regexp.Regexp, repl string, restart func(context.Context) error, label string) (func(context.Context) error, error) {
+	return shortenLeaseTimeViaRewrite(ctx, r, path, func(orig string) string { return re.ReplaceAllString(orig, repl) }, restart, label)
+}
+
+// shortenLeaseTimeViaRewrite is the body shortenLeaseTimeViaSubstitution
+// delegates to, for a source whose shortening needs more than one
+// substitution (ISC's min-lease-time floor, lab #70). rewrite returns
+// its input unchanged when it found nothing to shorten.
+func shortenLeaseTimeViaRewrite(ctx context.Context, r Runner, path string, rewrite func(string) string, restart func(context.Context) error, label string) (func(context.Context) error, error) {
 	orig, err := r.Run(ctx, "sudo cat "+path)
 	if err != nil {
 		return nil, fmt.Errorf("%s: read %s before shortening lease time: %w", label, path, err)
 	}
-	short := re.ReplaceAllString(orig, repl)
+	short := rewrite(orig)
 	if short == orig {
 		return nil, fmt.Errorf("%s: lease-time pattern not found in the running config at %s; refusing to shorten blindly", label, path)
 	}
