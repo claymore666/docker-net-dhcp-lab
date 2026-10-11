@@ -32,6 +32,7 @@ var piholeNAReasons = map[Capability]string{
 	CapVendorClassPool: piholeNAReason,
 	CapUserClassPool:   piholeNAReason,
 	CapV6:              piholeV6Reason,
+	CapServerEvents:    serverEventsNA,
 }
 
 // NAReason names why a capability is absent; scenario.Applicable shows it
@@ -206,6 +207,10 @@ func (a *PiholeAdapter) StartRogue(ctx context.Context, serverAddr, first, last 
 
 func (a *PiholeAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
 	return a.host().rogueLeases(ctx, a.Runner)
+}
+
+func (a *PiholeAdapter) ServerEvents(ctx context.Context, since time.Time, mac string) ([]ServerEvent, error) {
+	return serverEventsRefused("pihole")
 }
 
 func (a *PiholeAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {

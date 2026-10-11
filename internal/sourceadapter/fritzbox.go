@@ -88,3 +88,7 @@ func (*FritzboxAdapter) NarrowPool(context.Context, string, string) (func(contex
 func (*FritzboxAdapter) Renumber(context.Context, string, string, string, string) (func(context.Context) error, error) {
 	return nil, errFritzboxPending
 }
+
+func (*FritzboxAdapter) ServerEvents(context.Context, time.Time, string) ([]ServerEvent, error) {
+	return nil, errFritzboxPending
+}

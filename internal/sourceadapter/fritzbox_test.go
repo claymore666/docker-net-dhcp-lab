@@ -39,8 +39,9 @@ func TestFritzboxAdapterPlaceholderRefusesEverything(t *testing.T) {
 	_, errs["RogueLeases"] = a.RogueLeases(ctx)
 	_, errs["NarrowPool"] = a.NarrowPool(ctx, "10.200.17.100", "10.200.17.110")
 	_, errs["Renumber"] = a.Renumber(ctx, "10.200.117.0/24", "10.200.117.1/24", "10.200.117.100", "10.200.117.200")
-	if len(errs) != 23 {
-		t.Fatalf("exercised %d methods, the Adapter interface has 23 besides Capabilities", len(errs))
+	_, errs["ServerEvents"] = a.ServerEvents(ctx, time.Now(), "")
+	if len(errs) != 24 {
+		t.Fatalf("exercised %d methods, the Adapter interface has 24 besides Capabilities", len(errs))
 	}
 	for name, err := range errs {
 		if !errors.Is(err, errFritzboxPending) {

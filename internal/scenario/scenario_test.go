@@ -200,6 +200,9 @@ func (f *fakeAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, err
 func (f *fakeAdapter) NarrowPool(_ context.Context, first, last string) (func(context.Context) error, error) {
 	return fakeActor(&f.narrows, first+"-"+last, f.narrowErr, f.onNarrow, &f.narrowRestores, f.onNarrowRestore)
 }
+func (f *fakeAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
 func (f *fakeAdapter) Renumber(_ context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
 	return fakeActor(&f.renumbers, subnet+" "+addr+" "+first+"-"+last, f.renumberErr, f.onRenumber, &f.renumberRests, f.onRenumberRestore)
 }

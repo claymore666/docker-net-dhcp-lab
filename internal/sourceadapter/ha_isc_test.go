@@ -186,7 +186,7 @@ func TestNewISCPairShape(t *testing.T) {
 func TestISCPairCapabilities(t *testing.T) {
 	p := NewISCPair(&fakeRunner{}, &fakeRunner{}, "a", "b")
 	caps := p.Capabilities()
-	for _, c := range []Capability{CapImpair, CapRenumber} {
+	for _, c := range []Capability{CapImpair, CapRenumber, CapServerEvents} {
 		if slices.Contains(caps, c) {
 			t.Errorf("pair declares %s", c)
 		}
@@ -195,7 +195,7 @@ func TestISCPairCapabilities(t *testing.T) {
 		t.Error("pair lacks CapFailoverPair")
 	}
 	for _, c := range (&ISCDHCPAdapter{}).Capabilities() {
-		if c != CapImpair && c != CapRenumber && !slices.Contains(caps, c) {
+		if c != CapImpair && c != CapRenumber && c != CapServerEvents && !slices.Contains(caps, c) {
 			t.Errorf("pair lost isc-dhcp's %s", c)
 		}
 	}

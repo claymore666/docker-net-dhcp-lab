@@ -37,6 +37,7 @@ var udhcpdNAReasons = map[Capability]string{
 	CapRapidCommit4:    "udhcpd does not implement rapid commit (RFC 4039)",
 	CapForceRenewNonce: "udhcpd does not implement FORCERENEW (RFC 3203/6704)",
 	CapV6:              "udhcpd is DHCPv4 only",
+	CapServerEvents:    serverEventsNA,
 }
 
 func (a *UdhcpdAdapter) NAReason(c Capability) (string, bool) {
@@ -200,6 +201,10 @@ func (a *UdhcpdAdapter) EnableFeature(ctx context.Context, f Feature, p FeatureP
 
 func (a *UdhcpdAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
 	return "", errors.New("udhcpd: " + udhcpdNAReasons[CapForceRenewNonce])
+}
+
+func (a *UdhcpdAdapter) ServerEvents(ctx context.Context, since time.Time, mac string) ([]ServerEvent, error) {
+	return serverEventsRefused("udhcpd")
 }
 
 func (a *UdhcpdAdapter) Restart(ctx context.Context) error {
