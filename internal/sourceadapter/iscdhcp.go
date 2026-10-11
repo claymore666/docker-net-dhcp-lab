@@ -121,16 +121,22 @@ func parseISCHeld(journal string) map[string]string {
 }
 
 func mergeISCReservations(leases []Lease, hosts []iscReservation, held map[string]string) []Lease {
-	have := map[string]bool{}
-	for _, l := range leases {
-		have[l.Address] = true
+	row := map[string]int{}
+	for i, l := range leases {
+		row[l.Address] = i
 	}
 	for _, h := range hosts {
 		mac, ok := held[h.addr]
-		if !ok || have[h.addr] || (h.mac != "" && h.mac != mac) {
+		if !ok || (h.mac != "" && h.mac != mac) {
 			continue
 		}
-		have[h.addr] = true
+		// One row per address: a lease-file row for a reserved address
+		// stays the lease file's row, marked reserved (#70).
+		if i, dup := row[h.addr]; dup {
+			leases[i].Reserved = true
+			continue
+		}
+		row[h.addr] = len(leases)
 		leases = append(leases, Lease{MAC: mac, Address: h.addr, ClientID: h.clientID, Reserved: true})
 	}
 	sort.Slice(leases, func(i, j int) bool { return leases[i].Address < leases[j].Address })

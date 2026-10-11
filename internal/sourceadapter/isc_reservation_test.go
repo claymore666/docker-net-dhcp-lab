@@ -66,18 +66,38 @@ func TestISCLeasesKeepsDynamicRowsUnchanged(t *testing.T) {
 	if len(got) != 1 || got[0] != want[0] || got[0].Reserved {
 		t.Fatalf("dynamic row changed: %+v want %+v", got, want)
 	}
+	var sawInclude bool
 	for _, c := range r.calls {
 		if strings.Contains(c, "journalctl") {
 			t.Fatalf("log read without any reservation: %q", c)
 		}
+		sawInclude = sawInclude || strings.Contains(c, iscReservationFile)
+	}
+	if !sawInclude {
+		t.Fatalf("reservation include never read: %q", r.calls)
 	}
 }
 
 // 4c: a reservation nobody holds is not a lease (B1/B2 would pass on it).
 func TestISCLeasesOmitsAReservationNoClientHolds(t *testing.T) {
-	got := iscLeases(t, &iscRunner{leases: "", resv: iscResvMAC + iscResvCID, journal: "DHCPDISCOVER from 02:11:22:33:44:55 via eth1\nDHCPOFFER on 10.200.1.211 to 02:11:22:33:44:55 via eth1\n"})
+	r := &iscRunner{leases: "", resv: iscResvMAC + iscResvCID, journal: "DHCPDISCOVER from 02:11:22:33:44:55 via eth1\nDHCPOFFER on 10.200.1.211 to 02:11:22:33:44:55 via eth1\n"}
+	got := iscLeases(t, r)
 	if len(got) != 0 {
 		t.Fatalf("unheld reservation shown as a lease: %+v", got)
+	}
+	// The empty answer must come from reading the log, not from never looking.
+	if last := r.calls[len(r.calls)-1]; !strings.Contains(last, "journalctl") {
+		t.Fatalf("log never read: %q", r.calls)
+	}
+}
+
+// A reserved address that dhcpd.leases also lists is one row, the file's
+// row, marked reserved.
+func TestISCLeasesReservedAddressInTheLeaseFileIsOneRow(t *testing.T) {
+	raw := "lease 10.200.1.211 {\n  binding state active;\n  hardware ethernet 02:11:22:33:44:55;\n  ends 3 2026/10/11 12:00:00;\n}\n"
+	got := iscLeases(t, &iscRunner{leases: raw, resv: iscResvMAC, journal: iscAckMAC})
+	if len(got) != 1 || got[0].Address != "10.200.1.211" || !got[0].Reserved || got[0].Expires.IsZero() {
+		t.Fatalf("want the lease-file row once, reserved: %+v", got)
 	}
 }
 
@@ -195,5 +215,19 @@ func TestISCShortenRewritesAnExistingMinLeaseTime(t *testing.T) {
 	}
 	if shortenISCConf("authoritative;\n", 120) != "authoritative;\n" {
 		t.Fatal("a conf without default-lease-time must come back unchanged")
+	}
+}
+
+// A conf with min-lease-time but no default-lease-time is refused, not
+// reported shortened with no default set.
+func TestISCShortenRefusesAConfWithoutADefaultLeaseTime(t *testing.T) {
+	r := &fakeRunner{reply: "min-lease-time 30;\nmax-lease-time 7200;\nauthoritative;\n"}
+	if _, err := (&ISCDHCPAdapter{Runner: r}).ShortenLeaseTime(context.Background(), 120); err == nil {
+		t.Fatal("shorten reported success with no default-lease-time to set")
+	}
+	for _, c := range r.calls {
+		if strings.HasPrefix(c, "sudo tee") || strings.Contains(c, "restart") {
+			t.Fatalf("config written or service restarted: %q", c)
+		}
 	}
 }
