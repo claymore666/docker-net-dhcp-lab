@@ -1,0 +1,214 @@
+## bridge
+sudo docker network rm labrun-kea-bridge
+sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+sudo tee /etc/netplan/60-dhcp-bridge.yaml >/dev/null <<'LABEOF'
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth1:
+      dhcp4: false
+      dhcp6: false
+  bridges:
+    brl15481a73:
+      interfaces: [eth1]
+      dhcp4: true
+      parameters:
+        stp: false
+        forward-delay: 0
+LABEOF
+
+sudo chmod 600 /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+dpkg -s iptables-persistent >/dev/null 2>&1
+sudo iptables -A FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -A FORWARD -i brl15481a73 -j ACCEPT
+sudo iptables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo netfilter-persistent save
+ip link show brl15481a73
+readlink -f /sys/class/net/eth1/master | grep -q '/brl15481a73$'
+sudo iptables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o bridge=brl15481a73 labrun-kea-bridge
+sudo docker network rm labrun-kea-bridge
+sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+## bridge
+sudo docker network rm labrun-kea-bridge
+sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+sudo tee /etc/netplan/60-dhcp-bridge.yaml >/dev/null <<'LABEOF'
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth1:
+      dhcp4: false
+      dhcp6: false
+  bridges:
+    brl15481a73:
+      interfaces: [eth1]
+      dhcp4: true
+      parameters:
+        stp: false
+        forward-delay: 0
+LABEOF
+
+sudo chmod 600 /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+dpkg -s iptables-persistent >/dev/null 2>&1
+sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+sudo iptables -A FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -A FORWARD -i brl15481a73 -j ACCEPT
+sudo iptables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo netfilter-persistent save
+ip link show brl15481a73
+readlink -f /sys/class/net/eth1/master | grep -q '/brl15481a73$'
+sudo iptables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl15481a73 -j ACCEPT
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o bridge=brl15481a73 labrun-kea-bridge
+sudo docker network rm labrun-kea-bridge
+sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+## macvlan
+sudo docker network rm labrun-kea-macvlan
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o mode=macvlan -o parent=eth1 labrun-kea-macvlan
+sudo docker network rm labrun-kea-macvlan
+## macvlan
+sudo docker network rm labrun-kea-macvlan
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o mode=macvlan -o parent=eth1 labrun-kea-macvlan
+sudo docker network rm labrun-kea-macvlan
+## ipvlan
+sudo docker network rm labrun-kea-ipvlan
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o mode=ipvlan -o parent=eth1 labrun-kea-ipvlan
+sudo docker network rm labrun-kea-ipvlan
+## ipvlan
+sudo docker network rm labrun-kea-ipvlan
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o mode=ipvlan -o parent=eth1 labrun-kea-ipvlan
+sudo docker network rm labrun-kea-ipvlan
+## bridge-ipam
+sudo docker network rm labrun-kea-bridge-ipam
+sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+sudo tee /etc/netplan/60-dhcp-bridge.yaml >/dev/null <<'LABEOF'
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth1:
+      dhcp4: false
+      dhcp6: false
+  bridges:
+    brl2156b519:
+      interfaces: [eth1]
+      dhcp4: true
+      parameters:
+        stp: false
+        forward-delay: 0
+LABEOF
+
+sudo chmod 600 /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+dpkg -s iptables-persistent >/dev/null 2>&1
+sudo iptables -A FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -A FORWARD -i brl2156b519 -j ACCEPT
+sudo iptables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo netfilter-persistent save
+ip link show brl2156b519
+readlink -f /sys/class/net/eth1/master | grep -q '/brl2156b519$'
+sudo iptables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-under-test:latest -o bridge=brl2156b519 labrun-kea-bridge-ipam
+sudo docker network rm labrun-kea-bridge-ipam
+sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+## bridge-ipam
+sudo docker network rm labrun-kea-bridge-ipam
+sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+sudo tee /etc/netplan/60-dhcp-bridge.yaml >/dev/null <<'LABEOF'
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    eth1:
+      dhcp4: false
+      dhcp6: false
+  bridges:
+    brl2156b519:
+      interfaces: [eth1]
+      dhcp4: true
+      parameters:
+        stp: false
+        forward-delay: 0
+LABEOF
+
+sudo chmod 600 /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+dpkg -s iptables-persistent >/dev/null 2>&1
+sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+sudo iptables -A FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -A FORWARD -i brl2156b519 -j ACCEPT
+sudo iptables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo netfilter-persistent save
+ip link show brl2156b519
+readlink -f /sys/class/net/eth1/master | grep -q '/brl2156b519$'
+sudo iptables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -C FORWARD -i brl2156b519 -j ACCEPT
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-under-test:latest -o bridge=brl2156b519 labrun-kea-bridge-ipam
+sudo docker network rm labrun-kea-bridge-ipam
+sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
+sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
+sudo netplan apply
+sudo netfilter-persistent save
+## macvlan-ipam
+sudo docker network rm labrun-kea-macvlan-ipam
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-under-test:latest -o mode=macvlan -o parent=eth1 labrun-kea-macvlan-ipam
+sudo docker network rm labrun-kea-macvlan-ipam
+## macvlan-ipam
+sudo docker network rm labrun-kea-macvlan-ipam
+sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-under-test:latest -o mode=macvlan -o parent=eth1 labrun-kea-macvlan-ipam
+sudo docker network rm labrun-kea-macvlan-ipam

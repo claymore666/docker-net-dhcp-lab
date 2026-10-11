@@ -58,11 +58,33 @@ else
 	# a runcmd entry would run after it (cloud-init 20.4.1 cloud.cfg)
 	grep -E '^[[:space:]]*-[[:space:]]+.*archive\.debian\.org' "$f" >/dev/null && bad "debian 11: the rewrite is a runcmd entry"
 	script="$tmp/bootcmd.sh"
+	mkdir "$tmp/interfaces.d"
+	# ifup is stubbed: the script runs here, never against this box's network
+	printf 'ifup() { echo "ifup $*" >>"%s"; }\n' "$tmp/ifup.log" >"$script"
 	bootcmd_of "$f" | sed -E 's/^  - \|$//; s/^    //' |
-		sed "s#/etc/apt/sources.list#$tmp/sources.list#" >"$script"
+		sed -e "s#/etc/apt/sources.list#$tmp/sources.list#" -e "s#/etc/network/interfaces.d/#$tmp/interfaces.d/#g" >>"$script"
+	grep -q '/etc/network' "$script" && bad "debian 11: bootcmd touches /etc/network outside interfaces.d"
 	# cloud-init 20.4.1 runs bootcmd as `/bin/sh file` (cc_bootcmd.py:102), dash on Debian 11
 	sh -n "$script" || bad "debian 11: bootcmd script is not valid sh"
 	sh "$script" || bad "debian 11: bootcmd script failed under sh"
+	# lab #70: the segment NIC's stanza from the plugin's docs/bridge-mode.md
+	# spare-NIC table, as `auto` so networking.service raises it every boot
+	# (cloud-init 20.4.1 renders eth1 with no `auto` line)
+	want_nic=$(printf '%s\n' 'auto eth1' 'iface eth1 inet manual' \
+		'    pre-up sysctl -qw net.ipv6.conf.eth1.accept_ra=0' '    up ip link set eth1 up')
+	nic_files=$(ls "$tmp/interfaces.d")
+	[ "$nic_files" = "60-lab-eth1" ] || bad "debian 11: bootcmd wrote interfaces.d files: $nic_files"
+	# ifupdown's source-directory skips any other name (interfaces(5))
+	printf '%s\n' "$nic_files" | grep -qE '^[a-zA-Z0-9_-]+$' || bad "debian 11: $nic_files is skipped by source-directory"
+	[ "$(cat "$tmp/interfaces.d/60-lab-eth1" 2>/dev/null)" = "$want_nic" ] ||
+		bad "debian 11: segment NIC stanza is: $(cat "$tmp/interfaces.d/60-lab-eth1" 2>/dev/null)"
+	[ "$(cat "$tmp/ifup.log" 2>/dev/null)" = "ifup eth1" ] || bad "debian 11: first boot ifup calls: $(cat "$tmp/ifup.log" 2>/dev/null)"
+	# bootcmd runs every boot (cc_bootcmd frequency always): a reboot
+	# neither rewrites the stanza nor raises the NIC itself
+	echo 'operator edit' >>"$tmp/interfaces.d/60-lab-eth1"
+	sh "$script" || bad "debian 11: bootcmd script failed on the second boot"
+	[ "$(tail -n 1 "$tmp/interfaces.d/60-lab-eth1")" = "operator edit" ] || bad "debian 11: second boot rewrote the stanza"
+	[ "$(wc -l <"$tmp/ifup.log")" -eq 1 ] || bad "debian 11: second boot ran ifup itself"
 	want=$(printf '%s\n' \
 		'deb [check-valid-until=no] http://archive.debian.org/debian bullseye main' \
 		'deb [check-valid-until=no] http://archive.debian.org/debian bullseye-updates main' \
@@ -75,6 +97,7 @@ for cell in ref-only host-ubuntu2404; do
 	f="$tmp/$cell.yaml"
 	grep -qF 'archive.debian.org' "$f" && bad "$cell: carries the archive rewrite"
 	grep -vE '^[[:space:]]*#' "$f" | grep -qE 'sources\.list([^.]|$)' && bad "$cell: touches sources.list"
+	grep -qF '/etc/network/interfaces' "$f" && bad "$cell: writes an ifupdown stanza"
 	body=$(bootcmd_of "$f" | sed -E 's/^  - \|$//; s/^[[:space:]]+//; /^$/d')
 	[ "$body" = "true" ] || bad "$cell: bootcmd is not a no-op: $body"
 done
@@ -89,7 +112,7 @@ if not (isinstance(bc, list) and bc and all(isinstance(x, str) for x in bc)):
     sys.exit("bootcmd is not a non-empty list of strings: %r" % (bc,))
 body = "\n".join(bc)
 if sys.argv[2] == "archived":
-    for want in ("archive.debian.org/debian bullseye main", "archive.debian.org/debian-security bullseye-security main", "> /etc/apt/sources.list"):
+    for want in ("archive.debian.org/debian bullseye main", "archive.debian.org/debian-security bullseye-security main", "> /etc/apt/sources.list", "> /etc/network/interfaces.d/60-lab-eth1"):
         if want not in body:
             sys.exit("bootcmd lacks %r: %r" % (want, body))
 elif body.strip() != "true":

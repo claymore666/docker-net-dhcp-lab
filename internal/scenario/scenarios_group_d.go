@@ -420,7 +420,7 @@ func dNetwork(ctx context.Context, e Env, scenario, suffix string, opts []string
 	}
 	down = func(v *Verdict) {
 		fRestoreInto(bCleanupCtx(ctx), e, scenario, func(c context.Context) error {
-			_, err := NetworkUp(c, e.Host, e.Cell, e.Shape)
+			_, err := NetworkUp(c, e.Host, e.HostNetStack, e.Cell, e.Shape)
 			return err
 		}, v)
 	}

@@ -150,8 +150,9 @@ func cmdResolve(args []string) {
 		RelayImage      *labyaml.BaseImage `json:"relay_image"`
 		RelayFiles      *relayFiles        `json:"relay_files"`
 		SourceServesV6  bool               `json:"source_serves_v6"`
+		SegNICSetup     string             `json:"docker_host_seg_nic_setup"`
 	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg,
-		cell.Source != nil && labyaml.SourceServesV6(cell.Source.Type)}
+		cell.Source != nil && labyaml.SourceServesV6(cell.Source.Type), dockerHostImage.SegmentNICSetup()}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
@@ -225,6 +226,11 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
 	}
+	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
+	if err != nil {
+		return scenario.Env{}, err
+	}
+	env.HostNetStack = hostImage.NetStack
 	env.SegGateway, env.SourceAddr = segAddresses(cell)
 	if cell.Relay != nil {
 		relayRunner := dial(hostPart(cell.Relay.MgmtAddress))
@@ -585,12 +591,12 @@ func cmdRun(args []string) int {
 		return 0
 	}
 
-	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
+	net, err := scenario.NetworkUp(ctx, hostRunner, env.HostNetStack, cellName, shape)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)
 		return 1
 	}
-	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
+	defer scenario.NetworkDown(ctx, hostRunner, env.HostNetStack, cellName, shape)
 
 	env.Host = hostRunner
 	env.Shape = shape
@@ -628,7 +634,7 @@ func cmdRun(args []string) int {
 	isolationMethod := ""
 	for i, s := range scenariosToRun {
 		if isolateBetweenScenarios && i > 0 {
-			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, cellName, shape, nil)
+			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, env.HostNetStack, cellName, shape, nil)
 			if err != nil {
 				// A failed isolation is a lab error, never a scenario
 				// result: returning here writes no verdict at all for

@@ -20,6 +20,7 @@ users:
 bootcmd:
   - |
     __APT_SOURCES_FIX__
+    __SEG_NIC_SETUP__
     true
 package_update: true
 packages:

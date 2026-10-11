@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
@@ -65,6 +66,10 @@ type Env struct {
 	ServerCapture  CaptureReader
 	RelayClientMAC string
 	RelayServerMAC string
+
+	// HostNetStack is the docker host base image's network stack from
+	// the catalogue, never probed on the host (lab #70).
+	HostNetStack labyaml.NetStack
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -283,7 +288,7 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	// the same run (#3): a missing or broken bridge is rebuilt here, or
 	// this scenario is BLOCKED rather than left to cascade into a FAIL
 	// that reads like a plugin defect. A no-op for macvlan/ipvlan.
-	if err := ensureBridgePresent(ctx, e.Host, e.Cell, e.Shape); err != nil {
+	if err := ensureBridgePresent(ctx, e.Host, e.HostNetStack, e.Cell, e.Shape); err != nil {
 		return blocked(s.Name, e.Cell, e.Shape,
 			fmt.Sprintf("shape's bridge not in a known state before this scenario: %v", err), e.GitSHA)
 	}

@@ -36,6 +36,49 @@ type BaseImage struct {
 	// SeaBIOS: OVMF found no boot entry on the CHR 7.24.5 raw image and
 	// SeaBIOS booted it (M3, 2026-10-10, lab #9).
 	Firmware string `json:"firmware,omitempty"`
+	// NetStack is what manages the network on a docker host booted from
+	// this image; empty on an image no cell runs a docker host on.
+	NetStack NetStack `json:"net_stack,omitempty"`
+}
+
+// NetStack picks the host bridge recipe of the plugin's docs/bridge-mode.md
+// and how the segment NIC is kept up across a reboot (lab #70).
+type NetStack string
+
+const (
+	NetStackNetplan  NetStack = "netplan"
+	NetStackIfupdown NetStack = "ifupdown"
+)
+
+// DockerHostSegmentNIC is the name cloud-init/network-config.tmpl.yaml
+// gives the docker host's segment NIC.
+const DockerHostSegmentNIC = "eth1"
+
+// SegmentNICStanzaPath is where SegmentNICSetup writes the docs' ifupdown
+// stanza; source-directory skips a name outside ^[a-zA-Z0-9_-]+$
+// (interfaces(5), ifupdown 0.8.36).
+const SegmentNICStanzaPath = "/etc/network/interfaces.d/60-lab-" + DockerHostSegmentNIC
+
+// SegmentNICSetup is the docker host template's bootcmd line for this
+// image, empty when cloud-init's own network config keeps the segment NIC
+// up. cloud-init 20.4.1's eni renderer writes the address-less segment NIC
+// as `iface eth1 inet manual` with no `auto` line, so nothing raises it
+// after a reboot (lab #70, rendered from the 20.4.1 tag). The line writes
+// the plugin docs' "Debian / ifupdown" spare-NIC stanza once and raises it
+// once; bootcmd runs after networking.service, so every later boot it is
+// networking.service that raises the NIC. No '#', '&', backslash or
+// newline: the renderer substitutes it with sed.
+func (b BaseImage) SegmentNICSetup() string {
+	if b.NetStack != NetStackIfupdown {
+		return ""
+	}
+	nic := DockerHostSegmentNIC
+	return "[ -e " + SegmentNICStanzaPath + " ] || {" +
+		" { echo 'auto " + nic + "';" +
+		" echo 'iface " + nic + " inet manual';" +
+		" echo '    pre-up sysctl -qw net.ipv6.conf." + nic + ".accept_ra=0';" +
+		" echo '    up ip link set " + nic + " up'; } > " + SegmentNICStanzaPath + ";" +
+		" ifup " + nic + "; }"
 }
 
 // archiveAptSourcesFix returns the AptSourcesFix command that points a
@@ -68,6 +111,8 @@ var baseImages = map[string]BaseImage{
 		OSVariant: "debian13",
 		Kind:      "qcow2",
 		Seed:      "cloud-init",
+		// netplan.io 1.1.2 and no ifupdown on the image (lab #70).
+		NetStack: NetStackNetplan,
 	},
 	// The plugin's oldest supported engine target (issue #27): an older
 	// distro so docker-ce's own version pin below resolves against a repo
@@ -85,6 +130,8 @@ var baseImages = map[string]BaseImage{
 		AptSourcesFix: archiveAptSourcesFix("bullseye"),
 		Kind:          "qcow2",
 		Seed:          "cloud-init",
+		// ifupdown 0.8.36, no netplan, no bridge-utils (lab #70).
+		NetStack: NetStackIfupdown,
 	},
 	"ubuntu-24.04-server-cloudimg-amd64": {
 		Name:      "ubuntu-24.04-server-cloudimg-amd64",
@@ -94,6 +141,7 @@ var baseImages = map[string]BaseImage{
 		OSVariant: "ubuntu24.04",
 		Kind:      "qcow2",
 		Seed:      "cloud-init",
+		NetStack:  NetStackNetplan,
 	},
 	// MikroTik CHR, the vendor's stable 7.24.5 raw disk in a zip. No sums
 	// file is published beside it (404, DESIGN-910 3.3), so the first
