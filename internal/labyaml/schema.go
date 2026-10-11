@@ -247,8 +247,12 @@ func (c *Config) Validate() error {
 		if cell.DockerHost.BaseImage == "" {
 			return fmt.Errorf("cell %s: docker_host.base_image is required", cell.Name)
 		}
-		if _, err := LookupBaseImage(cell.DockerHost.BaseImage); err != nil {
+		dhImage, err := LookupBaseImage(cell.DockerHost.BaseImage)
+		if err != nil {
 			return fmt.Errorf("cell %s: docker_host.base_image: %w", cell.Name, err)
+		}
+		if dhImage.NetStack != NetStackNetplan && dhImage.NetStack != NetStackIfupdown {
+			return fmt.Errorf("cell %s: docker_host.base_image %s has no net_stack in internal/labyaml/baseimages.go", cell.Name, dhImage.Name)
 		}
 		if cell.DockerHost.PluginTag == "" {
 			return fmt.Errorf("cell %s: docker_host.plugin_tag is required", cell.Name)

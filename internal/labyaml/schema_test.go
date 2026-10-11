@@ -593,3 +593,13 @@ func TestSourceServesV6ByType(t *testing.T) {
 		}
 	}
 }
+
+// lab #70: a docker host image must name its network stack, or the bridge
+// shapes would have to guess the recipe.
+func TestRejectsDockerHostBaseImageWithNoNetStack(t *testing.T) {
+	bad := strings.Replace(goodMin, "base_image: debian-13-generic-amd64", "base_image: chr-7.24.5", 1)
+	_, err := Load(write(t, bad))
+	if err == nil || !strings.Contains(err.Error(), "has no net_stack") {
+		t.Fatalf("a docker host image with no net_stack: err = %v", err)
+	}
+}

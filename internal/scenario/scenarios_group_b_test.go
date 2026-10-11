@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
@@ -366,7 +367,7 @@ func TestNetworkUpExtraRefusesAnOptionOutsideTheGrammar(t *testing.T) {
 // options slice existed (preservation).
 func TestNetworkUpCommandUnchangedWithoutOptions(t *testing.T) {
 	r := &fakeShapeRunner{}
-	if _, err := NetworkUp(context.Background(), r, "net1", ShapeMacvlan); err != nil {
+	if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "net1", ShapeMacvlan); err != nil {
 		t.Fatal(err)
 	}
 	var create string

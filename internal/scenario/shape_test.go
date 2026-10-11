@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 )
 
 // fakeShapeRunner is the same no-network fakeRunner pattern
@@ -37,7 +39,7 @@ func TestNetworkUpAppliesTheDocumentedForwardRuleVerbatim(t *testing.T) {
 	net := NetworkName("dnsmasq", ShapeBridge)
 	br := hostBridgeName(net)
 
-	if _, err := NetworkUp(context.Background(), r, "dnsmasq", ShapeBridge); err != nil {
+	if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge); err != nil {
 		t.Fatalf("NetworkUp failed against a runner that accepts every command: %v", err)
 	}
 
@@ -83,7 +85,7 @@ func networkUpNamesTheMissingRule(t *testing.T, br, checkCmd, addCmd string) {
 
 	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == checkCmd }}
 
-	_, err := NetworkUp(context.Background(), r, "kea", ShapeBridge)
+	_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "kea", ShapeBridge)
 	if err == nil {
 		t.Fatal("NetworkUp succeeded although the FORWARD rule check reported it missing")
 	}
@@ -111,7 +113,7 @@ func TestNetworkUpNamesTheCommandOnAnyBridgeSetupFailure(t *testing.T) {
 	applyCmd := "sudo netplan apply"
 
 	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == applyCmd }}
-	_, err := NetworkUp(context.Background(), r, "isc-dhcp", ShapeBridge)
+	_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "isc-dhcp", ShapeBridge)
 	if err == nil {
 		t.Fatal("NetworkUp succeeded although its netplan apply failed")
 	}
@@ -125,7 +127,7 @@ func TestNetworkUpNamesTheCommandOnAnyBridgeSetupFailure(t *testing.T) {
 // forever.
 func TestNetworkDownRemovesTheForwardRule(t *testing.T) {
 	r := &fakeShapeRunner{}
-	NetworkDown(context.Background(), r, "dnsmasq", ShapeBridge)
+	NetworkDown(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge)
 
 	br := hostBridgeName(NetworkName("dnsmasq", ShapeBridge))
 	for _, want := range []string{forwardRuleDel(br), forwardRule6Del(br)} {
@@ -142,7 +144,7 @@ func TestNetworkDownToleratesForwardRuleAlreadyAbsent(t *testing.T) {
 	net := NetworkName("kea", ShapeBridge)
 	br := hostBridgeName(net)
 	r := &fakeShapeRunner{fail: func(cmd string) bool { return cmd == forwardRuleDel(br) || cmd == forwardRule6Del(br) }}
-	NetworkDown(context.Background(), r, "kea", ShapeBridge) // must not panic or block
+	NetworkDown(context.Background(), r, labyaml.NetStackNetplan, "kea", ShapeBridge) // must not panic or block
 }
 
 // The two IPAM shapes (issue #3 part 2) must pass --ipam-driver with
@@ -162,7 +164,7 @@ func TestNetworkUpPicksIPAMDriverByShape(t *testing.T) {
 	}
 	for _, c := range cases {
 		r := &fakeShapeRunner{}
-		if _, err := NetworkUp(context.Background(), r, "dnsmasq", c.shape); err != nil {
+		if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", c.shape); err != nil {
 			t.Fatalf("%s: NetworkUp: %v", c.shape, err)
 		}
 		var sawCreate bool
@@ -189,7 +191,7 @@ func TestNetworkUpBridgeIPAMUsesHostBridgeMachinery(t *testing.T) {
 	net := NetworkName("kea", ShapeBridgeIPAM)
 	br := hostBridgeName(net)
 
-	if _, err := NetworkUp(context.Background(), r, "kea", ShapeBridgeIPAM); err != nil {
+	if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "kea", ShapeBridgeIPAM); err != nil {
 		t.Fatalf("NetworkUp: %v", err)
 	}
 	wantCheck := forwardRuleCheck(br)
@@ -243,7 +245,7 @@ func TestNetworkUpInternalCreatesAnOrdinaryBridgeNetwork(t *testing.T) {
 func TestIsolateIPAMNetworkRefusesNonIPAMShapes(t *testing.T) {
 	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
 		r := &fakeShapeRunner{}
-		if _, _, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, nil); err == nil {
+		if _, _, err := IsolateIPAMNetwork(context.Background(), r, labyaml.NetStackNetplan, "kea", shape, nil); err == nil {
 			t.Errorf("%s: IsolateIPAMNetwork succeeded on a non-IPAM shape", shape)
 		}
 	}
@@ -259,7 +261,7 @@ func TestIsolateIPAMNetworkRecreatesWhenPossible(t *testing.T) {
 		var slept []time.Duration
 		sleep := func(d time.Duration) { slept = append(slept, d) }
 
-		net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+		net, method, err := IsolateIPAMNetwork(context.Background(), r, labyaml.NetStackNetplan, "kea", shape, sleep)
 		if err != nil {
 			t.Fatalf("%s: IsolateIPAMNetwork: %v", shape, err)
 		}
@@ -299,7 +301,7 @@ func TestIsolateIPAMNetworkFallsBackToWaitingWhenRecreateFails(t *testing.T) {
 	var slept []time.Duration
 	sleep := func(d time.Duration) { slept = append(slept, d) }
 
-	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, labyaml.NetStackNetplan, "kea", shape, sleep)
 	if err != nil {
 		t.Fatalf("IsolateIPAMNetwork: %v", err)
 	}
@@ -330,7 +332,7 @@ func TestIsolateIPAMNetworkFailsWhenRecreateFailsAndTheOldNetworkIsGone(t *testi
 	var slept []time.Duration
 	sleep := func(d time.Duration) { slept = append(slept, d) }
 
-	net, method, err := IsolateIPAMNetwork(context.Background(), r, "kea", shape, sleep)
+	net, method, err := IsolateIPAMNetwork(context.Background(), r, labyaml.NetStackNetplan, "kea", shape, sleep)
 	if err == nil {
 		t.Fatalf("IsolateIPAMNetwork succeeded (net=%q method=%q) when the old network was actually gone", net, method)
 	}

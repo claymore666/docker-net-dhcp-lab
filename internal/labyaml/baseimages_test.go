@@ -112,3 +112,33 @@ func TestTodaysImagesAreQcow2CloudInit(t *testing.T) {
 		}
 	}
 }
+
+// lab #70: the network stack each docker host image actually ships,
+// measured on the images (netplan.io and no ifupdown on Debian 13 and
+// Ubuntu 24.04; ifupdown 0.8.36 and no /etc/netplan on Debian 11).
+func TestNetStackPerDockerHostImage(t *testing.T) {
+	for name, want := range map[string]NetStack{
+		"debian-13-generic-amd64":            NetStackNetplan,
+		"ubuntu-24.04-server-cloudimg-amd64": NetStackNetplan,
+		"debian-11-generic-amd64":            NetStackIfupdown,
+	} {
+		if got := baseImages[name].NetStack; got != want {
+			t.Errorf("%s: NetStack = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// The setup line exists for an ifupdown image only, so no netplan host's
+// user-data gains a command, and it survives the sed renderer like
+// AptSourcesFix does.
+func TestSegmentNICSetupOnlyOnIfupdownAndSedSafe(t *testing.T) {
+	for name, bi := range baseImages {
+		line := bi.SegmentNICSetup()
+		if (line != "") != (bi.NetStack == NetStackIfupdown) {
+			t.Errorf("%s (%q): SegmentNICSetup = %q", name, bi.NetStack, line)
+		}
+		if strings.ContainsAny(line, "#&\\\n") {
+			t.Errorf("%s: SegmentNICSetup has a character the sed substitution cannot carry: %q", name, line)
+		}
+	}
+}
