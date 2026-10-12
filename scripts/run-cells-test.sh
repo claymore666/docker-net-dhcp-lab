@@ -57,6 +57,8 @@ write_stub_run_cell() {
 cell=$1
 echo "start $cell $(date +%s%N) $2 $3" >>"$LAB_TEST_DIR/calls.log"
 k=$(grep -c "^start $cell " "$LAB_TEST_DIR/calls.log")
+# what labctl remaining would see: the verdicts in the evidence dir at start
+find "$3" -maxdepth 1 -name '*.verdict' 2>/dev/null | wc -l >"$LAB_TEST_DIR/verdicts-at-start.$cell.$k"
 secs=0
 rc=0
 [ -f "$LAB_TEST_DIR/spec.$cell" ] && read -r secs rc <"$LAB_TEST_DIR/spec.$cell"
@@ -789,6 +791,7 @@ grep -q '^reason: second look passed' "$ev/A1.verdict" || bad "case 21: the reru
 grep -q 'ordinary failure' "$ev/A2.verdict" || bad "case 21: a verdict without the signature was moved"
 has "case 21 log" "$e" 'retry pass: a has 1 verdict\(s\) whose reason carries CreateEndpoint and Client.Timeout .*A1.verdict'
 has "case 21 log" "$e" 'retry pass: rerunning a once, -j 1'
+[ "$(tr -d ' ' <"$e/state/verdicts-at-start.a.2")" = 1 ] || bad "case 21: the rerun started with $(cat "$e/state/verdicts-at-start.a.2") verdicts in place, wanted only the one without the signature (a copy leaves the old one for labctl remaining to skip)"
 if [ ! -f "$e/root/logs/a.first.log" ] || [ ! -f "$e/root/logs/a.log" ]; then bad "case 21: the first attempt's log is gone"; fi
 has "case 21 table" "$e" '^a +0 \(retried\)'
 
