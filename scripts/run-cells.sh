@@ -20,14 +20,19 @@ DOWN_CELL="$REPO_ROOT/scripts/down-cell.sh"
 MIN_FREE_GIB=${LAB_MIN_FREE_GIB:-15}
 DISK_WAIT=${LAB_DISK_WAIT:-600}
 DISK_POLL=${LAB_DISK_POLL:-30}
+LOAD_POLL=${LAB_LOAD_POLL:-30}
+. "$REPO_ROOT/scripts/load-gate.sh"
 
 usage() {
-	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
+	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
 }
 
 JOBS=""
 ROOT=""
 STAGGER=60
+LOAD_WAIT=${LAB_LOAD_WAIT:-900}
+DURATIONS=""
+RETRY=1
 CHECK_ONLY=0
 CELLS=()
 while [ $# -gt 0 ]; do
@@ -47,6 +52,18 @@ while [ $# -gt 0 ]; do
 		fi
 		STAGGER=$2
 		shift 2
+		;;
+	--load-wait | --durations)
+		if [ $# -lt 2 ]; then
+			usage
+			exit 2
+		fi
+		if [ "$1" = "--load-wait" ]; then LOAD_WAIT=$2; else DURATIONS=$2; fi
+		shift 2
+		;;
+	--no-retry)
+		RETRY=0
+		shift
 		;;
 	--check)
 		CHECK_ONLY=1
@@ -70,6 +87,10 @@ if ! [[ "$STAGGER" =~ ^[0-9]+$ ]]; then
 	echo "run-cells: REFUSED -- --stagger wants a non-negative integer, got '$STAGGER'" >&2
 	exit 2
 fi
+if ! [[ "$LOAD_WAIT" =~ ^[0-9]+$ ]]; then
+	echo "run-cells: REFUSED -- --load-wait wants a non-negative integer, got '$LOAD_WAIT'" >&2
+	exit 2
+fi
 if [ -n "$JOBS" ] && ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
 	echo "run-cells: REFUSED -- -j wants a positive integer, got '$JOBS'" >&2
 	exit 2
@@ -90,6 +111,36 @@ done
 # Absolute, so every path handed to run-cell.sh and rm means the same
 # thing whatever the caller's working directory is.
 ROOT=$(realpath -m -- "${ROOT:-/srv/lab/work/$(whoami)}")
+
+### ---------- order: longest cell first (#79) ----------
+# One reordering, before --check resolves anything, so the table --check
+# prints and the order the pool starts in are the same list. A cell with no
+# duration sorts after every known one and keeps its given place among them.
+if [ -z "$DURATIONS" ]; then
+	if [ -f "$ROOT/durations.tsv" ]; then DURATIONS=$ROOT/durations.tsv; fi
+elif [ ! -f "$DURATIONS" ]; then
+	echo "run-cells: REFUSED -- --durations file '$DURATIONS' does not exist" >&2
+	exit 2
+fi
+order_cells() {
+	local -A dur=()
+	local c s i=0
+	while IFS=$'\t' read -r c s _ || [ -n "$c" ]; do
+		if [[ "$s" =~ ^[0-9]+$ ]]; then dur[$c]=$s; fi
+	done <"$DURATIONS"
+	mapfile -t CELLS < <(
+		for c in "${CELLS[@]}"; do
+			printf '%s\t%s\t%s\n' "${dur[$c]:--1}" "$i" "$c"
+			i=$((i + 1))
+		done | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2n | cut -f3
+	)
+}
+if [ -n "$DURATIONS" ]; then
+	order_cells
+	echo "run-cells: order, longest first from $DURATIONS: ${CELLS[*]}"
+else
+	echo "run-cells: order, as given (no durations file): ${CELLS[*]}"
+fi
 
 ### ---------- --check: resolve every cell, refuse on any shared name ----------
 declare -A OWNER=()
@@ -201,7 +252,9 @@ fi
 
 ### ---------- the pool ----------
 mkdir -p "$ROOT/logs"
-declare -A PID_CELL=() RC=() START=() END=()
+declare -A PID_CELL=() RC=() START=() END=() RETRIED=()
+LOAD_NAP=nap
+export LAB_LOAD_WAIT="$LOAD_WAIT" LAB_LOAD_POLL="$LOAD_POLL"
 RUNNING=0
 TERMINATING=0
 NAP_PID=""
@@ -256,6 +309,7 @@ start_cell() {
 		echo "run-cells: $cell not started, under $MIN_FREE_GIB GiB free on $ROOT for ${DISK_WAIT}s" >&2
 		return 0
 	fi
+	load_gate "run-cells: $cell" "$LOAD_WAIT" "$LOAD_POLL"
 	if msg=$(host_conflict "$cell"); then
 		RC[$cell]=skipped-exists
 		END[$cell]=$EPOCHSECONDS
@@ -304,6 +358,7 @@ print_table() {
 	printf '%-18s %-14s %8s  %s\n' cell rc minutes log
 	for cell in "${CELLS[@]}"; do
 		rc=${RC[$cell]:-not-started}
+		[ -z "${RETRIED[$cell]:-}" ] || rc="$rc (retried)"
 		mins=-
 		if [ -n "${START[$cell]:-}" ] && [ -n "${END[$cell]:-}" ]; then
 			mins=$(awk -v s="${START[$cell]}" -v e="${END[$cell]}" 'BEGIN {printf "%.1f", (e - s) / 60}')
@@ -346,15 +401,105 @@ on_signal() {
 }
 trap on_signal INT TERM HUP
 
-next=0
-while [ "$next" -lt "$ncells" ] || [ "$RUNNING" -gt 0 ]; do
-	while [ "$next" -lt "$ncells" ] && [ "$RUNNING" -lt "$JOBS" ]; do
-		stagger_gap
-		start_cell "${CELLS[$next]}"
-		next=$((next + 1))
+run_pool() {
+	local jobs=$1 next=0 n
+	shift
+	local -a queue=("$@")
+	n=${#queue[@]}
+	while [ "$next" -lt "$n" ] || [ "$RUNNING" -gt 0 ]; do
+		while [ "$next" -lt "$n" ] && [ "$RUNNING" -lt "$jobs" ]; do
+			stagger_gap
+			start_cell "${queue[$next]}"
+			next=$((next + 1))
+		done
+		if [ "$RUNNING" -gt 0 ]; then reap_one; fi
 	done
-	[ "$RUNNING" -gt 0 ] && reap_one
-done
+}
+
+# Only cells that exited 0 are recorded: a cell that died early would
+# otherwise sort last next time. Rows of cells not in this run are kept (#79).
+write_durations() {
+	local -A fresh=() seen=()
+	local cell c s tmp out=$ROOT/durations.tsv
+	for cell in "${CELLS[@]}"; do
+		if [ "${RC[$cell]:-}" = 0 ] && [ -n "${START[$cell]:-}" ] && [ -n "${END[$cell]:-}" ]; then
+			fresh[$cell]=$((END[$cell] - START[$cell]))
+		fi
+	done
+	[ "${#fresh[@]}" -gt 0 ] || return 0
+	tmp=$(mktemp "$ROOT/.durations.XXXXXX")
+	{
+		if [ -f "$out" ]; then
+			while IFS=$'\t' read -r c s _ || [ -n "$c" ]; do
+				if [[ "$s" =~ ^[0-9]+$ ]] && [ -z "${fresh[$c]:-}" ] && [ -z "${seen[$c]:-}" ]; then
+					seen[$c]=1
+					printf '%s\t%s\n' "$c" "$s"
+				fi
+			done <"$out"
+		fi
+		for c in "${!fresh[@]}"; do
+			printf '%s\t%s\n' "$c" "${fresh[$c]}"
+		done
+	} >"$tmp"
+	mv -f -- "$tmp" "$out"
+}
+
+# A verdict is a load casualty when one reason line carries both words,
+# in either order (run 1: 38 of them, #79).
+load_signature() {
+	grep -qE -e '^reason: .*CreateEndpoint.*Client\.Timeout' -e '^reason: .*Client\.Timeout.*CreateEndpoint' -- "$1"
+}
+
+# Moves, never overwrites: a name already in the target dir gets a number.
+move_aside() {
+	local dest=$2/${1##*/} n=1
+	while [ -e "$dest" ]; do
+		dest=$2/${1##*/}.$n
+		n=$((n + 1))
+	done
+	mv -- "$1" "$dest"
+}
+
+# One pass, never two (#79): the rerun's verdicts are final even if they
+# carry the signature. run-cell.sh resumes, so only the moved verdicts'
+# scenarios run again. The pool is capped at 2 for the pass.
+retry_pass() {
+	local cell ev f n names queue=() rj=$JOBS
+	for cell in "${CELLS[@]}"; do
+		[[ "${RC[$cell]:-}" =~ ^[0-9]+$ ]] || continue
+		ev=$ROOT/evidence/$cell
+		n=0
+		names=""
+		for f in "$ev"/*.verdict; do
+			[ -e "$f" ] || continue
+			load_signature "$f" || continue
+			[ "$n" -gt 0 ] || mkdir -p "$ev/retried"
+			names="$names ${f##*/}"
+			move_aside "$f" "$ev/retried"
+			n=$((n + 1))
+		done
+		[ "$n" -gt 0 ] || continue
+		echo "run-cells: retry pass: $cell has $n verdict(s) whose reason carries CreateEndpoint and Client.Timeout (load signature); moved to $ev/retried/:$names"
+		mv -f -- "$ROOT/logs/$cell.log" "$ROOT/logs/$cell.first.log"
+		RETRIED[$cell]=1
+		queue+=("$cell")
+	done
+	if [ "${#queue[@]}" -eq 0 ]; then
+		echo "run-cells: retry pass: no verdict carries the load signature"
+		return 0
+	fi
+	[ "$rj" -le 2 ] || rj=2
+	echo "run-cells: retry pass: rerunning ${queue[*]} once, -j $rj"
+	run_pool "$rj" "${queue[@]}"
+}
+
+run_pool "$JOBS" "${CELLS[@]}"
+write_durations
+if [ "$RETRY" -eq 1 ]; then
+	retry_pass
+else
+	echo "run-cells: retry pass disabled (--no-retry)"
+fi
 
 print_table
 failed=0

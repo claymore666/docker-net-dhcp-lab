@@ -120,8 +120,11 @@ func b2WireClientID(id string) string { return hexColonID(append([]byte{0}, id..
 // refused", and the lab will not give the second network its own
 // subnet or parent (measured on the kea cell).
 func bIPAMNA(name string, e Env) (Verdict, bool) {
-	return ipamNA(name, e, "the option-carrying network")
+	return ipamNA(name, e, optionNetworkWhat)
 }
+
+// optionNetworkWhat is the second network bIPAMNA names in its reason.
+const optionNetworkWhat = "the option-carrying network"
 
 // ipamNA is bIPAMNA naming which second network the shape refuses.
 func ipamNA(name string, e Env, network string) (Verdict, bool) {

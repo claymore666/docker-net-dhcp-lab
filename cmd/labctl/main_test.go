@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -266,5 +267,131 @@ func TestNewSourceAdapterFritzbox(t *testing.T) {
 	a, err := newSourceAdapter("fritzbox", mgmtRunner("10.200.255.171/24"))
 	if f, ok := a.(*sourceadapter.FritzboxAdapter); err != nil || !ok || f.Runner != mgmtRunner("10.200.255.171/24") {
 		t.Fatalf("fritzbox: %#v, %v", a, err)
+	}
+}
+
+// The per-scenario wrapper (plugin and bridge checks, source readiness,
+// and on the ipam shapes a fresh network before every scenario after the
+// first) runs once per scenario the shape does not already answer (#79).
+// The counts are for a source declaring every capability: the catalog
+// size on the null-IPAM shapes, and the catalog minus the shape-static
+// N/A rows on the two ipam shapes.
+func TestStaticNAForCountsTheWrapperCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	static := 0
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		calls := len(scenario.Catalog) - len(na)
+		ipam := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		switch {
+		case !ipam && len(na) != 0:
+			t.Errorf("%s: %d scenarios skipped on a shape without the ipam refusal", shape, len(na))
+		case ipam && len(na) == 0:
+			t.Errorf("%s: no scenario skipped", shape)
+		}
+		if ipam {
+			static = len(na)
+		}
+		t.Logf("%s: %d scenarios, %d wrapper calls, %d answered statically", shape, len(scenario.Catalog), calls, len(na))
+		for name, v := range na {
+			if v.Result != scenario.NA || v.Scenario != name || v.Shape != shape || v.Cell != "kea" {
+				t.Errorf("%s/%s: skipped verdict %+v", shape, name, v)
+			}
+		}
+	}
+	if static == 0 {
+		t.Fatal("no ipam shape was counted")
+	}
+}
+
+// A scenario answered without the wrapper leaves no identity behind on
+// the network, so the first scenario that does run starts on the network
+// NetworkUp made and each later one gets a fresh one.
+func TestNeedsIsolationKeysOnScenariosThatRan(t *testing.T) {
+	for ran, want := range []bool{false, true, true} {
+		if got := needsIsolation(ran); got != want {
+			t.Errorf("needsIsolation(%d) = %v, want %v", ran, got, want)
+		}
+	}
+}
+
+// The loop cmdRun runs, driven with fake steps on every shape: the ipam
+// shapes send only the scenarios the shape does not answer through the
+// wrapper, isolate before each of them but the first, and write the rest
+// without either; the other shapes send the whole catalog through (#79).
+func TestRunScenariosCountsWrapperAndIsolationCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		isolating := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		var ran, isolated, written []string
+		failed, err := runScenarios(scenario.Catalog, na, isolating, scenarioSteps{
+			static: func(v scenario.Verdict) error { written = append(written, v.Scenario); return nil },
+			isolate: func(s scenario.Scenario) error {
+				isolated = append(isolated, s.Name)
+				return nil
+			},
+			run: func(s scenario.Scenario) (scenario.Verdict, error) {
+				ran = append(ran, s.Name)
+				return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+			},
+		})
+		if err != nil || failed != 0 {
+			t.Fatalf("%s: failed=%d err=%v", shape, failed, err)
+		}
+		if len(ran) != len(scenario.Catalog)-len(na) || len(written) != len(na) {
+			t.Errorf("%s: %d wrapper runs, %d static writes; want %d and %d", shape, len(ran), len(written), len(scenario.Catalog)-len(na), len(na))
+		}
+		wantIso := 0
+		if isolating && len(ran) > 0 {
+			wantIso = len(ran) - 1
+		}
+		if len(isolated) != wantIso {
+			t.Errorf("%s: %d isolations for %d wrapper runs, want %d", shape, len(isolated), len(ran), wantIso)
+		}
+		if isolating && len(ran) > 1 && isolated[0] != ran[1] {
+			t.Errorf("%s: first isolation is before %s, want before %s", shape, isolated[0], ran[1])
+		}
+		t.Logf("%s: %d wrapper runs, %d isolations, %d static writes", shape, len(ran), len(isolated), len(written))
+	}
+}
+
+// A step error ends the loop: nothing behind it is written or run, and a
+// FAIL verdict counts.
+func TestRunScenariosStopsOnAStepErrorAndCountsFails(t *testing.T) {
+	list := []scenario.Scenario{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	var ran []string
+	failed, err := runScenarios(list, nil, false, scenarioSteps{
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			ran = append(ran, s.Name)
+			if s.Name == "b" {
+				return scenario.Verdict{}, errors.New("disk")
+			}
+			return scenario.Verdict{Result: scenario.FAIL}, nil
+		},
+	})
+	if err == nil || failed != 1 || len(ran) != 2 {
+		t.Fatalf("failed=%d err=%v ran=%v", failed, err, ran)
+	}
+}
+
+// A resumed run can start its list with a scenario the shape answers: the
+// first scenario that really runs still starts on the network NetworkUp
+// made and gets no isolation (#79).
+func TestRunScenariosListStartingWithAStaticRowIsolatesLater(t *testing.T) {
+	list := []scenario.Scenario{{Name: "s"}, {Name: "a"}, {Name: "b"}}
+	na := map[string]scenario.Verdict{"s": {Scenario: "s", Result: scenario.NA}}
+	var isolated []string
+	_, err := runScenarios(list, na, true, scenarioSteps{
+		static:  func(scenario.Verdict) error { return nil },
+		isolate: func(s scenario.Scenario) error { isolated = append(isolated, s.Name); return nil },
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+		},
+	})
+	if err != nil || len(isolated) != 1 || isolated[0] != "b" {
+		t.Fatalf("isolated before %v (err %v), want only b", isolated, err)
 	}
 }
