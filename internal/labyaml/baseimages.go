@@ -98,7 +98,7 @@ func archiveAptSourcesFix(suite string) string {
 // up-source.sh dispatch on; any other value is refused there too.
 var (
 	ImageKinds = []string{"qcow2", "archive", "built"}
-	SeedKinds  = []string{"cloud-init", "qga", "baked"}
+	SeedKinds  = []string{"cloud-init", "qga", "baked", "windows"}
 	Firmwares  = []string{"", "bios"}
 )
 
@@ -163,6 +163,14 @@ var baseImages = map[string]BaseImage{
 		OSVariant: "linux2022",
 		Kind:      "built",
 		Seed:      "baked",
+	},
+	// Windows Server 2025 evaluation, installed once by
+	// scripts/build-windows-image.sh from an ISO placed by hand (lab #14).
+	"windows-2025-eval": {
+		Name:      "windows-2025-eval",
+		OSVariant: "win2k25",
+		Kind:      "built",
+		Seed:      "windows",
 	},
 }
 

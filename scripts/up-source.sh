@@ -81,6 +81,15 @@ image_sums=$(jq -r '.source_image.checksum_url // ""' <<<"$RESOLVED")
 seed_kind=$(jq -r '.source_image.seed' <<<"$RESOLVED")
 case "$seed_kind" in
 cloud-init | qga | baked) seed_hook=${seed_kind//-/_} ;;
+windows)
+	# The seed and ready hooks of the Windows cell land with its wiring
+	# (lab #14); until then only the render path accepts the kind.
+	if [ -z "${UP_SOURCE_RENDER_ONLY:-}" ]; then
+		echo "up-source: REFUSED -- the Windows seed and ready hooks land in a later change; $image_name cannot be brought up yet" >&2
+		exit 1
+	fi
+	seed_hook=windows
+	;;
 *)
 	echo "up-source: REFUSED -- unknown seed kind '$seed_kind' for $image_name" >&2
 	exit 1
@@ -294,6 +303,12 @@ ready_baked() {
 		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
 		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
 		lab@"$mgmt_ip" "grep -qxF $baked_id /etc/lab-bootstrap-done" 2>/dev/null
+}
+
+# windows (#14): the render path ends here; the run path was refused above.
+seed_windows() {
+	echo "up-source: render-only, the Windows image carries its own seed"
+	exit 0
 }
 
 seed_args=()

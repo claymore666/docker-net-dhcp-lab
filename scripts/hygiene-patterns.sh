@@ -37,3 +37,25 @@ hygiene_address_disallowed() {
 		fi
 	done < <(hygiene_address_candidates "$line")
 }
+
+# hygiene_password_literals FILE prints the line number of every <Value>
+# inside an <AdministratorPassword> or <Password> element that is not a
+# bare __PLACEHOLDER__ -- the unattended-install answer file format (lab
+# #14). A template carries the placeholder; the build script fills it
+# with a per-build draw in a work directory that is never tracked. The
+# element can span lines, and so can its <Value>.
+hygiene_password_literals() {
+	awk '
+	/<(Administrator)?Password>/ { inpw = 1 }
+	inpw && /<Value>/ {
+		s = $0
+		while (match(s, /<Value>[^<]*<\/Value>/)) {
+			v = substr(s, RSTART + 7, RLENGTH - 15)
+			if (v !~ /^__[A-Z0-9_]+__$/) { print FNR; break }
+			s = substr(s, RSTART + RLENGTH)
+		}
+		if (s ~ /<Value>/ && s !~ /<Value>[^<]*<\/Value>/) print FNR
+	}
+	/<\/(Administrator)?Password>/ { inpw = 0 }
+	' "$1" | sort -un
+}

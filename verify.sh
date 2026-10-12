@@ -58,6 +58,9 @@ echo "== source-types.sh: per-type version and config reads; every schema type h
 echo "== build-openwrt-image.sh: the overlay has no br-lan, odhcpd off, an id that follows the cell (lab #9) =="
 ./scripts/build-openwrt-image-test.sh
 
+echo "== build-windows-image.sh: the answer file and first logon render, every refusal comes before a VM, the second boot is the proof (lab #14) =="
+./scripts/build-windows-image-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.
