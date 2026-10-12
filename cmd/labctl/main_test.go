@@ -376,3 +376,22 @@ func TestRunScenariosStopsOnAStepErrorAndCountsFails(t *testing.T) {
 		t.Fatalf("failed=%d err=%v ran=%v", failed, err, ran)
 	}
 }
+
+// A resumed run can start its list with a scenario the shape answers: the
+// first scenario that really runs still starts on the network NetworkUp
+// made and gets no isolation (#79).
+func TestRunScenariosListStartingWithAStaticRowIsolatesLater(t *testing.T) {
+	list := []scenario.Scenario{{Name: "s"}, {Name: "a"}, {Name: "b"}}
+	na := map[string]scenario.Verdict{"s": {Scenario: "s", Result: scenario.NA}}
+	var isolated []string
+	_, err := runScenarios(list, na, true, scenarioSteps{
+		static:  func(scenario.Verdict) error { return nil },
+		isolate: func(s scenario.Scenario) error { isolated = append(isolated, s.Name); return nil },
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+		},
+	})
+	if err != nil || len(isolated) != 1 || isolated[0] != "b" {
+		t.Fatalf("isolated before %v (err %v), want only b", isolated, err)
+	}
+}
