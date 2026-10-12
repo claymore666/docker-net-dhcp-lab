@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -15,8 +16,15 @@ import (
 // unicast MAC for A5b, distinct per cell x shape so parallel cells never
 // collide on the same segment (#3).
 func fixedMACFor(cell string, shape Shape) string {
+	return fixedMACForScenario(cell, shape, "a5b")
+}
+
+// fixedMACForScenario is fixedMACFor with the scenario tag spelled out,
+// so group B's reservation scenarios never share a MAC (and so a stale
+// lease) with A5b (#23).
+func fixedMACForScenario(cell string, shape Shape, tag string) string {
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-a5b"))
+	_, _ = h.Write([]byte(cell + "-" + string(shape) + "-" + tag))
 	sum := h.Sum32()
 	return fmt.Sprintf("02:42:%02x:%02x:%02x:%02x", byte(sum>>24), byte(sum>>16), byte(sum>>8), byte(sum))
 }
@@ -313,6 +321,17 @@ func runA4(ctx context.Context, e Env) Verdict {
 		ev, e.GitSHA)
 }
 
+// rebootWaitVerdict is BLOCKED when the docker host never answered ssh after the reboot, FAIL otherwise.
+func rebootWaitVerdict(name string, e Env, err error, evBefore map[string]string) Verdict {
+	// #38: under load a guest can take longer than the bound to answer
+	// again; a host that never answers is a lab outcome, not the plugin's.
+	var unreachable *HostUnreachableError
+	if errors.As(err, &unreachable) {
+		return blocked(name, e.Cell, e.Shape, err.Error(), e.GitSHA)
+	}
+	return fail(name, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+}
+
 // runA5 -- host reboot: the whole docker host VM reboots. Bounded waits
 // for the boot id to change and settle, then dockerd, then the
 // container, then PASS needs all of: Running again, the source's table
@@ -360,7 +379,7 @@ func runA5(ctx context.Context, e Env) Verdict {
 	// not a failure to surface (issue #3 defeat list on waitHostRebooted).
 	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
 	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
-		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+		return rebootWaitVerdict(NameA5, e, err, evBefore)
 	}
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA5, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
@@ -463,7 +482,7 @@ func runA5b(ctx context.Context, e Env) Verdict {
 
 	_, _ = e.Host.Run(ctx, "sudo systemctl reboot")
 	if err := waitHostRebooted(ctx, e.Host, beforeBootID, 3*time.Minute); err != nil {
-		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
+		return rebootWaitVerdict(NameA5b, e, err, evBefore)
 	}
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA5b, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)

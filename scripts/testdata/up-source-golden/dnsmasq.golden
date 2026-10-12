@@ -1,0 +1,89 @@
+== source VM (dnsmasq, primary) ==
+== wait for cloud-init (bounded) ==
+up-source: dnsmasq source (dnsmasq, primary) ready at 10.200.255.41, segment address 10.200.3.2
+exit=0
+=== calls
+fetch-base-image debian-13-generic-amd64 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b /srv/lab/images/debian-13-generic-amd64.qcow2 @TMP@/work-dnsmasq/lab-dnsmasq-source.qcow2 6G
+genisoimage -output @TMP@/work-dnsmasq/lab-dnsmasq-source-seed.iso -volid cidata -joliet -rock @TMP@/work-dnsmasq/seed-source/user-data @TMP@/work-dnsmasq/seed-source/meta-data @TMP@/work-dnsmasq/seed-source/network-config
+--- user-data
+#cloud-config
+# dnsmasq source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-dnsmasq-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaGolden lab-controller
+package_update: true
+runcmd:
+  # noninteractive: same debconf-hang guard as the kea and isc-dhcp
+  # templates (issue #2, measured live 2026-09-25).
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq dnsmasq-base iputils-arping
+  - systemctl stop dnsmasq
+  - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
+  - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock
+  - touch /etc/dnsmasq.d/lab-reservations.conf
+  - |
+    cat >/etc/dnsmasq.conf <<'DNSMASQEOF'
+    interface=eth1
+    bind-interfaces
+    except-interface=eth0
+    dhcp-authoritative
+    dhcp-vendorclass=set:b5,lab-class-b5
+    dhcp-range=tag:!b5,10.200.3.100,10.200.3.200,12h
+    dhcp-range=tag:b5,10.200.3.221,10.200.3.230,12h
+    dhcp-option=3,10.200.3.2
+    conf-dir=/etc/dnsmasq.d/,*.conf
+    DNSMASQEOF
+  # DHCPv6 and RA (#23 group D): dnsmasq sends its own RA. "slaac" sets
+  # A=1 for the M=1 A=1 baseline; ra-param keeps router lifetime 1800.
+  # IA_TA is served from the same range with no extra line.
+  - |
+    cat >/etc/dnsmasq.d/lab-v6.conf <<'DNSMASQEOF'
+    enable-ra
+    dhcp-range=fd42:200:0:300::100,fd42:200:0:300::1ff,slaac,64,2h
+    ra-param=eth1,10,1800
+    DNSMASQEOF
+  - systemctl enable --now dnsmasq
+  - touch /var/lib/cloud/lab-bootstrap-done
+--- meta-data
+instance-id: lab-dnsmasq-source
+local-hostname: lab-dnsmasq-source
+--- network-config
+# Source VM networking (issue #2): dual-homed like the docker host --
+# eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
+# naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
+# base image). eth1 carries a real address here: the source binds and
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
+# the segment's own router (none exists) reconfigure this NIC.
+# macaddress quoted and no top-level `network:` key, both for the same
+# reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
+# MAC parses as a YAML int, and the wrapper key makes cloud-init's
+# NoCloud datasource skip applying the config entirely.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "52:54:00:25:c5:fb"
+    set-name: eth0
+    addresses: [10.200.255.41/24]
+    gateway4: 10.200.255.1
+    nameservers:
+      addresses: [10.200.255.1]
+  seg0:
+    match:
+      macaddress: "52:54:00:0e:37:1b"
+    set-name: eth1
+    addresses: [10.200.3.2/24, "fd42:200:0:300::2/64"]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+sudo -n virsh dominfo lab-dnsmasq-source
+sudo -n virt-install --name lab-dnsmasq-source --memory 1024 --vcpus 1 --disk path=@TMP@/work-dnsmasq/lab-dnsmasq-source.qcow2\,format=qcow2\,bus=virtio --disk path=@TMP@/work-dnsmasq/lab-dnsmasq-source-seed.iso\,device=cdrom --network network=net-mgmt\,model=virtio\,mac=52:54:00:25:c5:fb --network bridge=lab-br-dnsmasq\,model=virtio\,mac=52:54:00:0e:37:1b --os-variant debian13 --cpu host-model --boot loader=/usr/share/OVMF/OVMF_CODE_4M.fd\,loader_ro=yes\,loader_type=pflash\,loader_secure=off\,nvram_template=/usr/share/OVMF/OVMF_VARS_4M.fd\,nvram=@TMP@/work-dnsmasq/lab-dnsmasq-source-VARS.fd --graphics none --noautoconsole --import
+ssh -o UserKnownHostsFile=@TMP@/work-dnsmasq/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o ControlMaster=no -o ControlPath=none -i @TMP@/home/.ssh/id_ed25519_lab lab@10.200.255.41 test\ -f\ /var/lib/cloud/lab-bootstrap-done

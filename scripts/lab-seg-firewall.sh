@@ -11,6 +11,16 @@
 # Idempotent; refuses outright if the DMZ jump is not where expected.
 set -euo pipefail
 
+# One call at a time per host (issue #38): the delete-then-insert below,
+# run by two cells at once, lets one call remove the other's fresh jump,
+# fail its own landing check and undo the survivor's jump. The lock is
+# held on fd 9 until this script exits.
+LOCK_FILE=${LAB_SEG_LOCK_FILE:-/run/lock/lab-seg-firewall.lock}
+if ! { exec 9>"$LOCK_FILE"; } 2>/dev/null || ! flock -w "${LAB_SEG_LOCK_WAIT:-120}" 9; then
+	echo "lab-seg-firewall: REFUSED -- lock held (or not creatable): $LOCK_FILE" >&2
+	exit 1
+fi
+
 IPT=${LAB_SEG_IPTABLES:-iptables}
 IPT6=${LAB_SEG_IP6TABLES:-ip6tables}
 DMZ_COMMENT="CI DMZ containment"

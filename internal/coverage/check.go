@@ -2,10 +2,11 @@ package coverage
 
 import "sort"
 
-// Result is one coverage run's summary (issue #4): every option
-// docs/reference.md's tables name, whether it maps to a scenario this
-// lab actually runs, or carries a recorded reason it does not yet.
-type Result struct {
+// MappingResult is one option-to-scenario run's summary (issue #4):
+// every option docs/reference.md's tables name, whether it maps to a
+// scenario this lab actually runs, or carries a recorded reason it
+// does not yet.
+type MappingResult struct {
 	Total    int
 	Covered  int
 	Reasoned int
@@ -15,13 +16,13 @@ type Result struct {
 	Unmapped []string
 }
 
-// Check compares options (ParseOptions' output) against Mapping. It is
+// Check compares options (Keys of ParseRows' output) against Mapping. It is
 // the "fails, with a clear message, when an option maps to no scenario
 // and has no recorded reason" rule issue #4 asks for -- the caller
 // decides what "fails" means (labctl coverage's non-zero exit); this
 // function only classifies.
-func Check(options []string) Result {
-	var r Result
+func Check(options []string) MappingResult {
+	var r MappingResult
 	seen := map[string]bool{}
 	for _, opt := range options {
 		if seen[opt] {
@@ -45,4 +46,13 @@ func Check(options []string) Result {
 	}
 	sort.Strings(r.Unmapped)
 	return r
+}
+
+// Keys returns each row's Mapping key, in document order.
+func Keys(rows []Row) []string {
+	keys := make([]string, len(rows))
+	for i, r := range rows {
+		keys[i] = r.Key()
+	}
+	return keys
 }

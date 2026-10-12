@@ -15,7 +15,7 @@ package_update: true
 runcmd:
   # noninteractive: same debconf-hang guard as the kea and isc-dhcp
   # templates (issue #2, measured live 2026-09-25).
-  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq dnsmasq-base iputils-arping
   - systemctl stop dnsmasq
   - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
   - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock
@@ -26,9 +26,20 @@ runcmd:
     bind-interfaces
     except-interface=eth0
     dhcp-authoritative
-    dhcp-range=__POOL_START__,__POOL_END__,12h
+    dhcp-vendorclass=set:b5,lab-class-b5
+    dhcp-range=tag:!b5,__POOL_START__,__POOL_END__,12h
+    dhcp-range=tag:b5,__CLASS_POOL_START__,__CLASS_POOL_END__,12h
     dhcp-option=3,__SEG_GATEWAY__
     conf-dir=/etc/dnsmasq.d/,*.conf
+    DNSMASQEOF
+  # DHCPv6 and RA (#23 group D): dnsmasq sends its own RA. "slaac" sets
+  # A=1 for the M=1 A=1 baseline; ra-param keeps router lifetime 1800.
+  # IA_TA is served from the same range with no extra line.
+  - |
+    cat >/etc/dnsmasq.d/lab-v6.conf <<'DNSMASQEOF'
+    enable-ra
+    dhcp-range=__POOL6_START__,__POOL6_END__,slaac,64,2h
+    ra-param=eth1,10,1800
     DNSMASQEOF
   - systemctl enable --now dnsmasq
   - touch /var/lib/cloud/lab-bootstrap-done

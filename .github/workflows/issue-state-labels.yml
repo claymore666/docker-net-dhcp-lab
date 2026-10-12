@@ -1,0 +1,71 @@
+name: Issue state labels
+
+# Keeps `has-pr` and `in-dev` on open issues (#41); the reference rules
+# are in scripts/sync-issue-state-labels.sh. Every PR targets `dev`, so
+# GitHub builds no "Development" link and merged work reads as untouched.
+#
+# A reconciler, not a transition handler: every run recomputes the
+# desired state of every open issue and adds and removes to match, so a
+# missed event or a cancelled run costs nothing.
+#
+# Security (the repository becomes public): `pull_request_target` runs
+# with no PR checkout. Nothing authored in a PR is fetched, built or
+# executed; the title and body are reduced to digits that must already
+# match an open issue. The token (issues: write) can only add or remove
+# these two labels.
+
+on:
+  # Closed only: a merge is the event that sets in-dev. Opened, edited
+  # and push events only moved has-pr earlier than the next scheduled run.
+  pull_request_target:
+    types: [closed]
+  # The convergence path. GitHub fires hourly crons late, so has-pr and a
+  # label left by a direct push to dev lag by hours; both are conveniences.
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+# One group per PR, not per repository: a cancelled job renders as a red
+# check on the PR that triggered it, so a repo-wide group let one PR's
+# event cancel another's run. Keyed by PR number, a new event on the same
+# PR still supersedes its own in-flight run. Schedule runs fall back to
+# github.ref and collide with no PR. Overlapping runs for different PRs
+# converge on the same answer, since each recomputes everything.
+concurrency:
+  group: issue-state-labels-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    # A fork has neither the issues nor a writable token.
+    if: github.repository == 'claymore666/docker-net-dhcp-lab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Pinned, not redundant: without a ref, cron runs `main`'s copy
+          # of the script and a PR event runs the base branch's. Every run
+          # also removes labels, so two parser versions would undo each
+          # other until a change ships. The labels mean "merged into dev,
+          # not yet on main", so dev's script is the one that describes
+          # them. Safe under pull_request_target: dev is the trusted base.
+          ref: dev
+          fetch-depth: 0
+
+      # The script needs both branch tips to ask what is in dev and not
+      # yet on main, and fails loudly on a missing ref rather than
+      # treating it as "nothing merged", which would strip in-dev
+      # from every issue at once.
+      - name: Fetch both branch tips
+        run: git fetch --no-tags origin main dev
+
+      - name: Sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/sync-issue-state-labels.sh

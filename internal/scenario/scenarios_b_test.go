@@ -249,12 +249,16 @@ func (a *sequencedLeaseAdapter) Leases(_ context.Context) ([]sourceadapter.Lease
 	a.call++
 	return a.sequence[i], nil
 }
-func (a *sequencedLeaseAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
-func (a *sequencedLeaseAdapter) ResetLeases(_ context.Context) error             { return nil }
-func (a *sequencedLeaseAdapter) Restart(_ context.Context) error                 { return nil }
-func (a *sequencedLeaseAdapter) Stop(_ context.Context) error                    { return nil }
-func (a *sequencedLeaseAdapter) Start(_ context.Context) error                   { return nil }
-func (a *sequencedLeaseAdapter) Reachable(_ context.Context, _ string) error     { return a.reachErr }
+func (a *sequencedLeaseAdapter) ReserveMAC(_ context.Context, _, _ string) error      { return nil }
+func (a *sequencedLeaseAdapter) ResetLeases(_ context.Context) error                  { return nil }
+func (a *sequencedLeaseAdapter) Restart(_ context.Context) error                      { return nil }
+func (a *sequencedLeaseAdapter) Stop(_ context.Context) error                         { return nil }
+func (a *sequencedLeaseAdapter) Start(_ context.Context) error                        { return nil }
+func (a *sequencedLeaseAdapter) Reachable(_ context.Context, _ string) error          { return a.reachErr }
+func (a *sequencedLeaseAdapter) ReserveClientID(_ context.Context, _, _ string) error { return nil }
+func (a *sequencedLeaseAdapter) SetDNSOption(_ context.Context, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
 func (a *sequencedLeaseAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
@@ -621,4 +625,44 @@ func TestRunA16FailsWhenLeaseIsGoneAfterForceRemove(t *testing.T) {
 	if !strings.Contains(v.Reason, "nothing should have released it") {
 		t.Fatalf("want the reason to name the unwanted release, got %q", v.Reason)
 	}
+}
+
+func (a *sequencedLeaseAdapter) Ready(_ context.Context) error   { return nil }
+func (a *sequencedLeaseAdapter) Recover(_ context.Context) error { return nil }
+func (a *sequencedLeaseAdapter) SendForceRenew(_ context.Context, _ []byte, _ sourceadapter.ForceRenewParams) (string, error) {
+	return "", nil
+}
+func (a *sequencedLeaseAdapter) EnableFeature(_ context.Context, _ sourceadapter.Feature, _ sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) Squat(_ context.Context, _ string, _ bool) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) StartRogue(_ context.Context, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return nil, nil
+}
+func (a *sequencedLeaseAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
+func (a *sequencedLeaseAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+
+func (a *sequencedLeaseAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error) {
+	return nil, nil
+}
+func (a *sequencedLeaseAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *sequencedLeaseAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
 }

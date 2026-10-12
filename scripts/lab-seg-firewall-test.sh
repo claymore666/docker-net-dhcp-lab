@@ -11,6 +11,7 @@ FIREWALL="$REPO_ROOT/scripts/lab-seg-firewall.sh"
 fail=0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+export LAB_SEG_LOCK_FILE="$tmp/lab-seg-firewall.lock"
 
 cat >"$tmp/fake-ipt" <<'STUB'
 #!/bin/bash
@@ -120,10 +121,12 @@ ln -s fake-ipt "$tmp/ip6tables"
 # one test case give lab-seg-firewall.sh independent v4 and v6 state.
 cat >"$tmp/ipt-v4" <<EOF
 #!/bin/bash
+[ -z "\${LAB_SEG_TEST_CALLLOG:-}" ] || echo "v4 \$*" >>"\$LAB_SEG_TEST_CALLLOG"
 exec env STATE_DIR="\$LAB_SEG_TEST_V4_STATE" "$tmp/fake-ipt" "\$@"
 EOF
 cat >"$tmp/ipt-v6" <<EOF
 #!/bin/bash
+[ -z "\${LAB_SEG_TEST_CALLLOG:-}" ] || echo "v6 \$*" >>"\$LAB_SEG_TEST_CALLLOG"
 exec env STATE_DIR="\$LAB_SEG_TEST_V6_STATE" "$tmp/fake-ipt" "\$@"
 EOF
 chmod +x "$tmp/ipt-v4" "$tmp/ipt-v6"
@@ -317,12 +320,97 @@ if ! out=$(LAB_SEG_TEST_INSERT_BUG=concurrent-shift run_firewall "$v4" "$v6" 2>&
 	fail=1
 fi
 
+seed_dmz() {
+	seed_chain "$1" DOCKER-USER '-j ACCEPT'
+	seed_chain "$1" DOCKER-USER '-m comment --comment "CI DMZ containment" -j CI-DMZ-FWD'
+	seed_chain "$2" FORWARD '-m comment --comment "CI DMZ containment" -j CI-DMZ-V6'
+}
+
+# Cases 13-16 (issue #38): the host-wide lock. A held lock refuses
+# without touching any table; a free lock inserts exactly once per
+# protocol; an uncreatable lock file refuses; two runs at once end with
+# exactly one jump after the DMZ jump in each protocol.
+case13=$(new_case)
+seed_dmz "$case13/v4" "$case13/v6"
+calllog13="$case13/calls.log"
+: >"$calllog13"
+exec 8>"$LAB_SEG_LOCK_FILE"
+flock -n 8
+if out=$(LAB_SEG_LOCK_WAIT=1 LAB_SEG_TEST_CALLLOG="$calllog13" run_firewall "$case13/v4" "$case13/v6" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 13: ran although another call held the lock" >&2
+	fail=1
+fi
+exec 8>&-
+if ! grep -q "REFUSED -- lock held" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 13: no lock-held refusal in: $out" >&2
+	fail=1
+fi
+# The seed above already wrote to the state dirs through the fake, so
+# the call log (written only by the dispatchers run_firewall points at)
+# is the evidence that no iptables call happened.
+if [ -s "$calllog13" ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 13: iptables was called under a held lock:" >&2
+	cat "$calllog13" >&2
+	fail=1
+fi
+
+case14=$(new_case)
+seed_dmz "$case14/v4" "$case14/v6"
+calllog14="$case14/calls.log"
+: >"$calllog14"
+if ! out=$(LAB_SEG_LOCK_WAIT=1 LAB_SEG_TEST_CALLLOG="$calllog14" run_firewall "$case14/v4" "$case14/v6" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 14: refused with the lock free: $out" >&2
+	fail=1
+fi
+inserts14=$(grep -c -- ' -I .*lab segments' "$calllog14" || true)
+if [ "$inserts14" -ne 2 ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 14: expected one insert per protocol (2), saw $inserts14" >&2
+	cat "$calllog14" >&2
+	fail=1
+fi
+
+case15=$(new_case)
+seed_dmz "$case15/v4" "$case15/v6"
+if out=$(LAB_SEG_LOCK_FILE="$case15/no-such-dir/lock" run_firewall "$case15/v4" "$case15/v6" 2>&1); then
+	echo "lab-seg-firewall-test: FAIL -- case 15: ran although the lock file could not be created" >&2
+	fail=1
+fi
+if ! grep -q "REFUSED -- lock held" <<<"$out"; then
+	echo "lab-seg-firewall-test: FAIL -- case 15: no refusal in: $out" >&2
+	fail=1
+fi
+
+case16=$(new_case)
+seed_dmz "$case16/v4" "$case16/v6"
+pids16=()
+for _ in 1 2 3 4 5 6; do
+	run_firewall "$case16/v4" "$case16/v6" >"$case16/out.$_" 2>&1 &
+	pids16+=("$!")
+done
+for p in "${pids16[@]}"; do
+	wait "$p" || {
+		echo "lab-seg-firewall-test: FAIL -- case 16: one of six concurrent runs refused" >&2
+		cat "$case16"/out.* >&2
+		fail=1
+	}
+done
+if [ "$(count_of "$case16/v4" DOCKER-USER "lab segments")" -ne 1 ] || [ "$(count_of "$case16/v6" FORWARD "lab segments")" -ne 1 ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 16: not exactly one lab-segments jump per protocol after six concurrent runs" >&2
+	fail=1
+fi
+d16=$(line_of "$case16/v4" DOCKER-USER "CI DMZ containment")
+l16=$(line_of "$case16/v4" DOCKER-USER "lab segments")
+if [ -z "$l16" ] || [ "$l16" -ne "$((d16 + 1))" ]; then
+	echo "lab-seg-firewall-test: FAIL -- case 16: the jump is not directly after the DMZ jump" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "lab-seg-firewall-test: fake-ipt cases PASS -- 7 cases behaved as expected"
+echo "lab-seg-firewall-test: fake-ipt cases PASS -- 11 cases behaved as expected"
 
-# Cases 8-12 run against the real iptables/ip6tables binaries in a fresh
+# Cases 8-12 (after the fake-ipt cases above) run against the real iptables/ip6tables binaries in a fresh
 # user+network namespace (unshare -rnm), never the fake above: real
 # `-L -n --line-numbers` prints a target NAME in its own column
 # ("RETURN"), never a "-j RETURN" flag pair, and only the real binary
@@ -334,7 +422,7 @@ if ! unshare -rnm true 2>/dev/null; then
 		exit 1
 	fi
 	echo "lab-seg-firewall-test: SKIP -- unshare -rnm not available here (not CI)" >&2
-	echo "lab-seg-firewall-test: PASS -- 7 fake-ipt cases behaved as expected, real-iptables cases skipped"
+	echo "lab-seg-firewall-test: PASS -- 11 fake-ipt cases behaved as expected, real-iptables cases skipped"
 	exit 0
 fi
 
@@ -466,4 +554,4 @@ WRAP
 chmod +x "$tmp/ipt-fail-add"
 
 unshare -rnm bash -c "$real_inner" bash "$FIREWALL" "$tmp/ipt-fail-add"
-echo "lab-seg-firewall-test: PASS -- all 12 cases behaved as expected"
+echo "lab-seg-firewall-test: PASS -- all 16 cases behaved as expected"

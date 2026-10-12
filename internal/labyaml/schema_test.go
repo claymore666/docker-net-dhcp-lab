@@ -235,6 +235,15 @@ func TestRejectsBridgeNameLongerThanIfnameLimit(t *testing.T) {
 	}
 }
 
+// lab-seg-firewall.sh forwards bridged traffic only on lab-br+ (#11): a
+// bridge outside that prefix would bring up a cell whose DHCP is dropped.
+func TestRejectsBridgeOutsideTheFirewallPrefix(t *testing.T) {
+	bad := strings.Replace(goodMin, "bridge: lab-br-ref-only", "bridge: br-ref-only", 1)
+	if _, err := Load(write(t, bad)); err == nil || !strings.Contains(err.Error(), "does not start with lab-br-") {
+		t.Fatalf("a bridge outside lab-br- was accepted: %v", err)
+	}
+}
+
 // One character over the limit is the boundary the kernel actually
 // draws (IFNAMSIZ-1 = 15): the 39-character case above only proves
 // "too long" is caught, not that the limit itself is 15 and not 16.
@@ -290,5 +299,307 @@ func TestEngineVersionParses(t *testing.T) {
 	}
 	if cell.DockerHost.EngineVersion != "5:20.10.24~3-0~debian-bullseye" {
 		t.Fatalf("engine_version = %q, want the pinned value", cell.DockerHost.EngineVersion)
+	}
+}
+
+const withSource6 = `
+management:
+  libvirt_network: net-mgmt
+  subnet: 10.200.255.0/24
+  gateway: 10.200.255.1
+ula_prefix: "fd42:200::/48"
+cells:
+  - name: kea
+    segment:
+      bridge: lab-br-kea
+      subnet: 10.200.1.0/24
+      subnet6: "fd42:200:0:100::/64"
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.21/24
+      seg_address: 10.200.1.2/24
+      pool_start: 10.200.1.100
+      pool_end: 10.200.1.200
+      seg_address6: "fd42:200:0:100::2/64"
+      pool6_start: "fd42:200:0:100::100"
+      pool6_end: "fd42:200:0:100::1ff"
+      temp6_pool: "fd42:200:0:100::200/120"
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.20/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+  - name: isc-dhcp
+    segment:
+      bridge: lab-br-isc-dhcp
+      subnet: 10.200.2.0/24
+      subnet6: "fd42:200:0:200::/64"
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.30/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+`
+
+func TestLoadWithSource6(t *testing.T) {
+	c, err := Load(write(t, withSource6))
+	if err != nil {
+		t.Fatalf("valid v6 cell rejected: %v", err)
+	}
+	cell, _ := c.CellByName("kea")
+	if cell.Segment.Subnet6 != "fd42:200:0:100::/64" || cell.Source.Temp6Pool == "" {
+		t.Fatal("v6 fields lost in parsing")
+	}
+}
+
+// Defeat 17 (#23 group D): every v6 value outside the lab's /48, a v4 value
+// in a v6 field, an overlap and a missing field are refused.
+func TestRejectsBadV6Values(t *testing.T) {
+	cases := []struct{ name, from, to string }{
+		{"v4 value in subnet6", `subnet6: "fd42:200:0:100::/64"`, `subnet6: "10.200.9.0/24"`},
+		{"global prefix", `subnet6: "fd42:200:0:100::/64"`, `subnet6: "2001:db8:0:100::/64"`},
+		{"other /48", `subnet6: "fd42:200:0:100::/64"`, `subnet6: "fd42:201:0:100::/64"`},
+		{"overlap across cells", `subnet6: "fd42:200:0:200::/64"`, `subnet6: "fd42:200:0:100::/64"`},
+		{"wider prefix covering a sibling", `subnet6: "fd42:200:0:200::/64"`, `subnet6: "fd42:200:0:100::/56"`},
+		{"host bits set", `subnet6: "fd42:200:0:200::/64"`, `subnet6: "fd42:200:0:200::1/64"`},
+		{"ula outside fd00::/8", `ula_prefix: "fd42:200::/48"`, `ula_prefix: "fc00:200::/48"`},
+		{"ula global", `ula_prefix: "fd42:200::/48"`, `ula_prefix: "2001:db8::/48"`},
+		{"ula missing", `ula_prefix: "fd42:200::/48"`, ``},
+		{"seg_address6 missing", `seg_address6: "fd42:200:0:100::2/64"`, ``},
+		{"pool6_end missing", `pool6_end: "fd42:200:0:100::1ff"`, ``},
+		{"temp6_pool missing", `temp6_pool: "fd42:200:0:100::200/120"`, ``},
+		{"seg_address6 outside subnet6", `seg_address6: "fd42:200:0:100::2/64"`, `seg_address6: "fd42:200:0:200::2/64"`},
+		{"seg_address6 wrong length", `seg_address6: "fd42:200:0:100::2/64"`, `seg_address6: "fd42:200:0:100::2/128"`},
+		{"pool6 outside subnet6", `pool6_end: "fd42:200:0:100::1ff"`, `pool6_end: "fd42:200:0:101::1ff"`},
+		{"pool6 inverted", `pool6_start: "fd42:200:0:100::100"`, `pool6_start: "fd42:200:0:100::1ff0"`},
+		{"pool6 holds seg_address6", `pool6_start: "fd42:200:0:100::100"`, `pool6_start: "fd42:200:0:100::1"`},
+		{"temp6_pool overlaps pool6", `temp6_pool: "fd42:200:0:100::200/120"`, `temp6_pool: "fd42:200:0:100::100/120"`},
+		{"temp6_pool outside subnet6", `temp6_pool: "fd42:200:0:100::200/120"`, `temp6_pool: "fd42:200:0:101::200/120"`},
+		{"temp6_pool host bits", `temp6_pool: "fd42:200:0:100::200/120"`, `temp6_pool: "fd42:200:0:100::201/120"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(withSource6, tc.from) {
+				t.Fatalf("fixture lacks %q", tc.from)
+			}
+			bad := strings.Replace(withSource6, tc.from, tc.to, 1)
+			if _, err := Load(write(t, bad)); err == nil {
+				t.Fatalf("accepted: %s", tc.name)
+			}
+		})
+	}
+}
+
+const withRelay = goodMin + `
+  - name: kea-relay
+    segment:
+      bridge: lab-br-kea-rly
+      subnet: 10.200.10.0/24
+    relay:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.112/24
+      client_address: 10.200.10.1/24
+      server_address: 10.200.11.1/24
+      server_segment:
+        bridge: lab-br-kea-rsv
+        subnet: 10.200.11.0/24
+      agent_options: true
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.111/24
+      seg_address: 10.200.11.2/24
+      pool_start: 10.200.10.100
+      pool_end: 10.200.10.200
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.110/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2
+`
+
+func TestLoadWithRelay(t *testing.T) {
+	c, err := Load(write(t, withRelay))
+	if err != nil {
+		t.Fatalf("valid relay cell rejected: %v", err)
+	}
+	cell, err := c.CellByName("kea-relay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cell.Relay == nil || cell.Relay.ServerSegment.Bridge != "lab-br-kea-rsv" || !cell.Relay.AgentOptions {
+		t.Fatalf("relay block lost in parsing: %+v", cell.Relay)
+	}
+	ref, _ := c.CellByName("ref-only")
+	if ref.Relay != nil {
+		t.Fatal("a cell without a relay block parsed with one")
+	}
+}
+
+// One row per validator rule (defeat 9 of the relay design, #11): each
+// edit breaks exactly one rule of an otherwise valid relay file.
+func TestRelayValidatorRules(t *testing.T) {
+	cases := []struct {
+		name, old, new, want string
+	}{
+		{"relay without a source", "    source:\n      type: kea\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111/24\n      seg_address: 10.200.11.2/24\n      pool_start: 10.200.10.100\n      pool_end: 10.200.10.200\n", "", "needs a source"},
+		{"non-kea source", "      type: kea\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111", "      type: dnsmasq\n      base_image: debian-13-generic-amd64\n      mgmt_address: 10.200.255.111", "only built for a kea source"},
+		{"missing base image", "    relay:\n      base_image: debian-13-generic-amd64\n", "    relay:\n", "relay.base_image is required"},
+		{"unregistered base image", "    relay:\n      base_image: debian-13-generic-amd64\n", "    relay:\n      base_image: no-such-image\n", "relay.base_image:"},
+		{"missing server bridge", "        bridge: lab-br-kea-rsv\n", "", "server_segment.bridge is required"},
+		{"server bridge over 15", "lab-br-kea-rsv", "lab-br-kea-rsv-xx", "interface name limit"},
+		{"server bridge equals client bridge", "lab-br-kea-rsv", "lab-br-kea-rly", "reused by another segment"},
+		{"server bridge outside lab-br-", "lab-br-kea-rsv", "br-kea-rsv", "server_segment.bridge \"br-kea-rsv\" does not start with lab-br-"},
+		{"server bridge equals another cell's", "lab-br-kea-rsv", "lab-br-ref-only", "reused by another segment"},
+		{"server subnet outside lab range", "        subnet: 10.200.11.0/24", "        subnet: 10.55.11.0/24", "outside the lab's published range"},
+		{"server subnet overlaps management", "        subnet: 10.200.11.0/24", "        subnet: 10.200.254.0/23", "overlaps the management subnet"},
+		{"server subnet overlaps client segment", "        subnet: 10.200.11.0/24", "        subnet: 10.200.10.0/23", "overlaps segment subnet 10.200.10.0/24"},
+		{"server subnet overlaps another cell", "        subnet: 10.200.11.0/24", "        subnet: 10.200.0.128/25", "overlaps segment subnet 10.200.0.0/24"},
+		{"mgmt address outside management", "mgmt_address: 10.200.255.112/24", "mgmt_address: 10.200.12.112/24", "relay.mgmt_address is not inside"},
+		{"mgmt address reused", "mgmt_address: 10.200.255.112/24", "mgmt_address: 10.200.255.10/24", "relay.mgmt_address 10.200.255.10 reused"},
+		{"client address outside client segment", "client_address: 10.200.10.1/24", "client_address: 10.200.11.9/24", "client_address: 10.200.11.9 is not inside"},
+		{"client address in pool", "client_address: 10.200.10.1/24", "client_address: 10.200.10.150/24", "inside the source pool"},
+		{"client address at the DNS option octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.253/24", "group B, C or F reserves"},
+		{"client address at the user-class octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.203/24", "group B, C or F reserves"},
+		{"client address at the rogue server octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.240/24", "group B, C or F reserves"},
+		{"client address at the narrowed pool octet", "client_address: 10.200.10.1/24", "client_address: 10.200.10.201/24", "group B, C or F reserves"},
+		{"client address prefix length", "client_address: 10.200.10.1/24", "client_address: 10.200.10.1/25", "prefix length /25"},
+		{"client address is the network address", "client_address: 10.200.10.1/24", "client_address: 10.200.10.0/24", "client_address: 10.200.10.0 is the network or broadcast address of 10.200.10.0/24"},
+		{"server address is the broadcast address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.255/24", "server_address: 10.200.11.255 is the network or broadcast address of 10.200.11.0/24"},
+		{"server address outside server segment", "server_address: 10.200.11.1/24", "server_address: 10.200.10.2/24", "server_address: 10.200.10.2 is not inside"},
+		{"server address equals source seg_address", "server_address: 10.200.11.1/24", "server_address: 10.200.11.2/24", "is also source.seg_address"},
+		{"seg_address on the client segment", "seg_address: 10.200.11.2/24", "seg_address: 10.200.10.2/24", "source.seg_address is not inside relay.server_segment.subnet"},
+		{"pool on the server segment", "pool_start: 10.200.10.100\n      pool_end: 10.200.10.200", "pool_start: 10.200.11.100\n      pool_end: 10.200.11.200", "source pool is not inside segment.subnet"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(withRelay, tc.old) {
+				t.Fatalf("fixture lacks %q", tc.old)
+			}
+			_, err := Load(write(t, strings.Replace(withRelay, tc.old, tc.new, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// A source with v6 fields on a cell without segment.subnet6 is refused,
+// and a cell without any v6 field still loads (goodMin, withSource).
+func TestRejectsV6SourceFieldsWithoutSubnet6(t *testing.T) {
+	bad := strings.Replace(withSource6, "      subnet6: \"fd42:200:0:100::/64\"\n", "", 1)
+	if _, err := Load(write(t, bad)); err == nil {
+		t.Fatal("seg_address6 accepted on a cell with no subnet6")
+	}
+}
+
+// Every source cell this repository ships carries the IPv6 segment that
+// declares sourceadapter.CapV6 for it (#23 group D).
+func TestRealLabYAMLSourcesHaveV6(t *testing.T) {
+	c, err := Load("../../lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cell := range c.Cells {
+		if cell.Source != nil && !SourceServesV6(cell.Source.Type) {
+			continue
+		}
+		if cell.Segment.Subnet6 == "" {
+			t.Errorf("cell %s has no segment.subnet6", cell.Name)
+		}
+	}
+}
+
+// The exact-match subnet check let a wider prefix swallow a sibling cell's
+// /24 (#11); a duplicate subnet must stay refused too.
+func TestRejectsOverlappingCellSubnets(t *testing.T) {
+	cases := []struct{ subnet, seg, start, end string }{
+		{"10.200.0.0/24", "10.200.0.2/24", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.0/23", "10.200.0.2/23", "10.200.0.100", "10.200.0.200"},
+		{"10.200.0.64/26", "10.200.0.66/26", "10.200.0.70", "10.200.0.80"},
+	}
+	for _, tc := range cases {
+		r := strings.NewReplacer("      subnet: 10.200.1.0/24", "      subnet: "+tc.subnet,
+			"10.200.1.2/24", tc.seg, "10.200.1.100", tc.start, "10.200.1.200", tc.end)
+		_, err := Load(write(t, r.Replace(withSource)))
+		if err == nil || !strings.Contains(err.Error(), "overlaps segment subnet 10.200.0.0/24") {
+			t.Fatalf("%s beside 10.200.0.0/24: want an overlap error, got %v", tc.subnet, err)
+		}
+	}
+}
+
+func TestAcceptsUdhcpdSourceType(t *testing.T) {
+	ok := strings.Replace(withSource, "type: kea", "type: udhcpd", 1)
+	if _, err := Load(write(t, ok)); err != nil {
+		t.Fatalf("source.type udhcpd rejected: %v", err)
+	}
+}
+
+func TestAcceptsPiholeSourceType(t *testing.T) {
+	ok := strings.Replace(withSource, "type: kea", "type: pihole", 1)
+	if _, err := Load(write(t, ok)); err != nil {
+		t.Fatalf("source.type pihole rejected: %v", err)
+	}
+}
+
+// D18 (DESIGN-910): C9 moves a cell's third octet by C9OctetShift; a cell
+// sitting on that target would share a bridge with the renumbered source.
+func TestRejectsCellOnAnotherCellsC9Target(t *testing.T) {
+	cell := func(name, subnet, mgmt string) string {
+		return `
+  - name: ` + name + `
+    segment:
+      bridge: lab-br-` + name + `
+      subnet: ` + subnet + `
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: ` + mgmt + `
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.2.2`
+	}
+	body := goodMin + cell("low", "10.200.12.0/24", "10.200.255.11/24") + cell("high", "10.200.112.0/24", "10.200.255.12/24")
+	_, err := Load(write(t, body))
+	if err == nil {
+		t.Fatal("a cell on another cell's C9 target was accepted")
+	}
+	for _, want := range []string{"low", "high", "10.200.112.0/24"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %q", err, want)
+		}
+	}
+	apart := goodMin + cell("low", "10.200.12.0/24", "10.200.255.11/24") + cell("other", "10.200.113.0/24", "10.200.255.12/24")
+	if _, err := Load(write(t, apart)); err != nil {
+		t.Fatalf("cells whose C9 targets do not meet were refused: %v", err)
+	}
+}
+
+// Lab #10: the IPv6 block follows the source type. A v4-only server
+// (udhcpd, pihole) cannot sit on a cell with segment.subnet6, and
+// SourceServesV6 is what labctl resolve hands up-source.sh.
+func TestV4OnlySourceTypeRefusesSegmentSubnet6(t *testing.T) {
+	for _, typ := range []string{"udhcpd", "pihole"} {
+		bad := strings.Replace(withSource6, "type: kea", "type: "+typ, 1)
+		_, err := Load(write(t, bad))
+		if err == nil || !strings.Contains(err.Error(), "DHCPv4 only") {
+			t.Fatalf("%s on a subnet6 cell: %v", typ, err)
+		}
+	}
+}
+
+func TestSourceServesV6ByType(t *testing.T) {
+	for typ, want := range map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": false, "pihole": false} {
+		if got := SourceServesV6(typ); got != want {
+			t.Errorf("SourceServesV6(%s) = %v, want %v", typ, got, want)
+		}
+	}
+}
+
+// lab #70: a docker host image must name its network stack, or the bridge
+// shapes would have to guess the recipe.
+func TestRejectsDockerHostBaseImageWithNoNetStack(t *testing.T) {
+	bad := strings.Replace(goodMin, "base_image: debian-13-generic-amd64", "base_image: chr-7.24.5", 1)
+	_, err := Load(write(t, bad))
+	if err == nil || !strings.Contains(err.Error(), "has no net_stack") {
+		t.Fatalf("a docker host image with no net_stack: err = %v", err)
 	}
 }

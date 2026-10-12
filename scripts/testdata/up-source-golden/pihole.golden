@@ -1,0 +1,96 @@
+== source VM (pihole, primary) ==
+== wait for cloud-init (bounded) ==
+up-source: pihole source (pihole, primary) ready at 10.200.255.131, segment address 10.200.13.2
+exit=0
+=== calls
+fetch-base-image debian-13-generic-amd64 https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+qemu-img create -f qcow2 -F qcow2 -b /srv/lab/images/debian-13-generic-amd64.qcow2 @TMP@/work-pihole/lab-pihole-source.qcow2 6G
+genisoimage -output @TMP@/work-pihole/lab-pihole-source-seed.iso -volid cidata -joliet -rock @TMP@/work-pihole/seed-source/user-data @TMP@/work-pihole/seed-source/meta-data @TMP@/work-pihole/seed-source/network-config
+--- user-data
+#cloud-config
+# Pi-hole source cell (issue #10). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Three steps in
+# one script, in this order: the toml, then the installer, then the
+# marker. With pihole.toml already in place the installer takes its
+# update path and shows no dialog; without it --unattended is ignored
+# (basic-install.sh check_fresh_install, #10). The stock copy is the
+# live toml with each key FTL marked "### CHANGED, default = D" put back
+# to D, so it is derived from FTL's own markers. The Debian dnsmasq
+# package stays out: dnsmasq-base only gives the rogue-server actor its
+# binary, and FTL embeds its own.
+hostname: lab-pihole-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaGolden lab-controller
+package_update: true
+runcmd:
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates dnsmasq-base iputils-arping python3
+  - |
+    set -e
+    mkdir -p /etc/pihole /etc/dnsmasq.d /root/lab-stock-config
+    cat >/etc/pihole/pihole.toml <<'TOMLEOF'
+    [dns]
+      interface = "eth1"
+      listeningMode = "BIND"
+    [dhcp]
+      active = true
+      start = "10.200.13.100"
+      end = "10.200.13.200"
+      router = "10.200.13.2"
+      netmask = "255.255.255.0"
+      leaseTime = "12h"
+    [misc]
+      etc_dnsmasq_d = true
+    TOMLEOF
+    cat >/etc/dnsmasq.d/90-lab.conf <<'LABEOF'
+    # lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)
+    LABEOF
+    touch /etc/dnsmasq.d/lab-reservations.conf
+    curl -fsSL https://install.pi-hole.net -o /root/pihole-install.sh
+    bash /root/pihole-install.sh --unattended >/var/log/lab-pihole-install.log 2>&1
+    systemctl is-active --quiet pihole-FTL
+    for b in dnsmasq arping python3; do command -v "$b" >/dev/null; done
+    if systemctl is-enabled --quiet dnsmasq 2>/dev/null; then echo "debian dnsmasq unit is enabled" >&2; exit 1; fi
+    sed -E 's/^([[:space:]]*[A-Za-z0-9_]+ = ).* ### CHANGED, default = (.*)$/\1\2/' /etc/pihole/pihole.toml >/root/lab-stock-config/pihole.toml.stock
+    grep -q '### CHANGED' /etc/pihole/pihole.toml
+    if grep -q '### CHANGED' /root/lab-stock-config/pihole.toml.stock; then echo "stock copy still carries a CHANGED marker" >&2; exit 1; fi
+    touch /var/lib/cloud/lab-bootstrap-done
+--- meta-data
+instance-id: lab-pihole-source
+local-hostname: lab-pihole-source
+--- network-config
+# Source VM networking (issue #2): dual-homed like the docker host --
+# eth0 for apt only, eth1 for the DHCP service, matched by MAC (same
+# naming reason as network-config.tmpl.yaml: no net.ifnames=0 in the
+# base image). eth1 carries a real address here: the source binds and
+# answers on it, v4 and v6; no gateway/RA on eth1, since accepting one would let
+# the segment's own router (none exists) reconfigure this NIC.
+# macaddress quoted and no top-level `network:` key, both for the same
+# reason as network-config.tmpl.yaml (issue #8): an unquoted all-digit
+# MAC parses as a YAML int, and the wrapper key makes cloud-init's
+# NoCloud datasource skip applying the config entirely.
+version: 2
+ethernets:
+  mgmt0:
+    match:
+      macaddress: "52:54:00:fc:08:72"
+    set-name: eth0
+    addresses: [10.200.255.131/24]
+    gateway4: 10.200.255.1
+    nameservers:
+      addresses: [10.200.255.1]
+  seg0:
+    match:
+      macaddress: "52:54:00:d0:96:83"
+    set-name: eth1
+    addresses: [10.200.13.2/24]
+    dhcp4: false
+    dhcp6: false
+    accept-ra: false
+sudo -n virsh dominfo lab-pihole-source
+sudo -n virt-install --name lab-pihole-source --memory 1024 --vcpus 1 --disk path=@TMP@/work-pihole/lab-pihole-source.qcow2\,format=qcow2\,bus=virtio --disk path=@TMP@/work-pihole/lab-pihole-source-seed.iso\,device=cdrom --network network=net-mgmt\,model=virtio\,mac=52:54:00:fc:08:72 --network bridge=lab-br-pihole\,model=virtio\,mac=52:54:00:d0:96:83 --os-variant debian13 --cpu host-model --boot loader=/usr/share/OVMF/OVMF_CODE_4M.fd\,loader_ro=yes\,loader_type=pflash\,loader_secure=off\,nvram_template=/usr/share/OVMF/OVMF_VARS_4M.fd\,nvram=@TMP@/work-pihole/lab-pihole-source-VARS.fd --graphics none --noautoconsole --import
+ssh -o UserKnownHostsFile=@TMP@/work-pihole/known_hosts -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o ControlMaster=no -o ControlPath=none -i @TMP@/home/.ssh/id_ed25519_lab lab@10.200.255.131 test\ -f\ /var/lib/cloud/lab-bootstrap-done

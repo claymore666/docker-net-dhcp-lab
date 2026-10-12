@@ -310,3 +310,32 @@ func TestRenderShowsHostPerColumnAndInHeader(t *testing.T) {
 		t.Fatalf("rendered header line does not carry the kernel:\n%s", page)
 	}
 }
+
+// TestRenderKeaHAColumnsCarryTheC5Rows: the failover pair cell renders
+// as its own "kea-ha / <shape>" columns with C5 to C5d in plain words (#12).
+func TestRenderKeaHAColumnsCarryTheC5Rows(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "evidence-abc123-kea-ha")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeResolvedLab(t, dir, "kea-ha", "ghcr.io/claymore666/docker-net-dhcp:v2.5.0", "ghcr.io/claymore666/docker-net-dhcp:v2.4.0")
+	for _, s := range []scenario.Shape{scenario.ShapeMacvlan, scenario.ShapeBridge} {
+		for _, id := range []string{scenario.NameC5, scenario.NameC5b, scenario.NameC5c, scenario.NameC5d} {
+			writeVerdict(t, dir, scenario.Verdict{Scenario: id, Cell: "kea-ha", Shape: s, Result: scenario.FAIL, Reason: "probe"})
+		}
+	}
+	b, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := Render(root, "", []Bundle{b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"kea-ha / macvlan", "kea-ha / bridge", "failover, granting peer stopped", "failover, primary down at create", "failover, primary returns", "failover, no address given twice"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+}

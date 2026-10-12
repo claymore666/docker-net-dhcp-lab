@@ -14,15 +14,11 @@ RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
 bridge=$(jq -r '.cell.segment.bridge' <<<"$RESOLVED")
 mgmt_addr=$(jq -r '.cell.docker_host.mgmt_address' <<<"$RESOLVED")
 mgmt_gw=$(jq -r '.management.gateway' <<<"$RESOLVED")
-plugin_tag=$(jq -r '.cell.docker_host.plugin_tag' <<<"$RESOLVED")
 vcpus=$(jq -r '.cell.docker_host.vcpus' <<<"$RESOLVED")
 mem=$(jq -r '.cell.docker_host.memory_mib' <<<"$RESOLVED")
 diskgib=$(jq -r '.cell.docker_host.disk_gib' <<<"$RESOLVED")
-engine_version=$(jq -r '.cell.docker_host.engine_version // empty' <<<"$RESOLVED")
 image_name=$(jq -r '.docker_host_image.name' <<<"$RESOLVED")
 image_url=$(jq -r '.docker_host_image.url' <<<"$RESOLVED")
-image_distro=$(jq -r '.docker_host_image.distro' <<<"$RESOLVED")
-image_suite=$(jq -r '.docker_host_image.suite' <<<"$RESOLVED")
 os_variant=$(jq -r '.docker_host_image.os_variant' <<<"$RESOLVED")
 domain="lab-${CELL}-dockerhost"
 
@@ -44,6 +40,15 @@ echo "== segment bridge =="
 # Without this, a bring-up worked only because some earlier privileged
 # run had already created the bridge, not because this call could.
 sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$bridge"
+# A relay cell (#11) has a second segment, the source's server segment
+# behind the relay; both names are recorded in $WORK before it is built,
+# so down-cell.sh still finds them after a bring-up that failed later.
+server_bridge=$(jq -r '.cell.relay.server_segment.bridge // empty' <<<"$RESOLVED")
+if [ -n "$server_bridge" ]; then
+	mkdir -p "$WORK"
+	printf '%s\n' "$bridge" "$server_bridge" >"$WORK/relay-bridges"
+	sudo -n "$REPO_ROOT/scripts/build-bridge.sh" "$server_bridge"
+fi
 
 echo "== base image cache ($image_name) =="
 base_path=$("$REPO_ROOT/scripts/fetch-base-image.sh" "$image_name" "$image_url")
@@ -73,10 +78,7 @@ pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 
 seed_dir="$WORK/seed"
 mkdir -p "$seed_dir"
-sed -e "s#__PLUGIN_TAG__#$plugin_tag#g" -e "s#__SSH_PUBKEY__#$pubkey#" \
-	-e "s#__DOCKER_APT_DISTRO__#$image_distro#g" -e "s#__DOCKER_APT_SUITE__#$image_suite#g" \
-	-e "s#__DOCKER_ENGINE_PACKAGE__#${engine_version:+=$engine_version}#g" \
-	"$REPO_ROOT/cloud-init/docker-host-user-data.tmpl.yaml" >"$seed_dir/user-data"
+"$REPO_ROOT/scripts/render-docker-host-user-data.sh" "$pubkey" <<<"$RESOLVED" >"$seed_dir/user-data"
 sed -e "s#__MGMT_ADDR__#$mgmt_addr#" -e "s#__MGMT_GW__#$mgmt_gw#g" \
 	-e "s#__MGMT_MAC__#$mgmt_mac#" -e "s#__SEG_MAC__#$seg_mac#" \
 	"$REPO_ROOT/cloud-init/network-config.tmpl.yaml" >"$seed_dir/network-config"
@@ -181,10 +183,20 @@ done
 # If this cell has an IP source in lab.yaml (issue #2), bring it up too,
 # on the segment bridge just built above. A cell with no source (issue
 # #1's ref-only) leaves this a no-op.
+# A relay cell's relay (#11) comes up before its source, so the source's
+# first boot already has its route's next hop.
+if [ -n "$server_bridge" ]; then
+	echo "== relay =="
+	"$REPO_ROOT/scripts/up-relay.sh" "$CELL" "$WORK"
+fi
 has_source=$(jq -r '.cell.source.type // empty' <<<"$RESOLVED")
 if [ -n "$has_source" ]; then
 	echo "== source ($has_source) =="
-	"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK"
+	"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK" primary
+	# A failover pair (#12) has a second peer on the same segment.
+	if [ -n "$(jq -r '.cell.source.partner.mgmt_address // empty' <<<"$RESOLVED")" ]; then
+		"$REPO_ROOT/scripts/up-source.sh" "$CELL" "$WORK" partner
+	fi
 fi
 
 echo "up-cell: $CELL ready, docker host at $mgmt_ip, segment bridge $bridge"

@@ -1,0 +1,26 @@
+# VERBATIM SLICE of the local measurement transcript omshell-recover.txt, lines 1-25, the whole file (dhcpd 4.4.3-P1, lab #12).
+> > > obj: <null>
+> obj: failover-state
+> obj: failover-state
+name = "lab"
+> obj: failover-state
+name = "lab"
+partner-address = 50:46:15:01:9a:55:00:00
+partner-port = 00:00:02:87
+local-address = a0:45:15:01:9a:55:00:00
+local-port = 00:00:02:87
+max-outstanding-updates = 00:00:00:0a
+mclt = 00:00:00:3c
+load-balance-max-secs = 00:00:00:03
+load-balance-hba = ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
+partner-state = 00:00:00:00
+local-state = 00:00:00:01
+partner-stos = 6a:ca:60:a2
+local-stos = 6a:ca:60:a2
+hierarchy = 00:00:00:00
+last-packet-sent = 00:00:00:00
+last-timestamp-received = 00:00:00:00
+skew = 00:00:00:00
+max-response-delay = 00:00:00:1e
+cur-unacked-updates = 00:00:00:00
+> 

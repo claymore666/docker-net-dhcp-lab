@@ -67,10 +67,50 @@ ip link add stray0 type veth peer name stray0-peer
 ip link set stray0 master bridge-d
 run_refused "pre-existing stray port refused with no --add-port" bridge-d
 
+# Case E (#23): every accepted bridge, new or already present, is left in
+# hub mode, so the observer sees unicast renewals.
+ageing() { cat "/sys/class/net/$1/bridge/ageing_time"; }
+if [ "$(ageing bridge-a)" != "0" ]; then
+	echo "build-bridge-test: FAIL -- new bridge-a ageing_time $(ageing bridge-a), want 0" >&2
+	fail=1
+fi
+ip link add bridge-e type bridge
+run_ok "existing lab bridge accepted" bridge-e
+if [ "$(ageing bridge-e)" != "0" ]; then
+	echo "build-bridge-test: FAIL -- existing bridge-e ageing_time $(ageing bridge-e), want 0" >&2
+	fail=1
+fi
+
+# Group D (#23): IPv6 off on every bridge the script builds or adopts,
+# and no inet6 address left on it.
+for b in bridge-a bridge-e; do
+	if [ "$(cat "/proc/sys/net/ipv6/conf/$b/disable_ipv6")" != "1" ]; then
+		echo "build-bridge-test: FAIL -- $b disable_ipv6 is not 1" >&2
+		fail=1
+	fi
+	if [ -n "$(ip -6 -o addr show dev "$b")" ]; then
+		echo "build-bridge-test: FAIL -- $b carries an IPv6 address" >&2
+		fail=1
+	fi
+done
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "build-bridge-test: PASS -- all 4 cases behaved as expected"
+echo "build-bridge-test: PASS -- all 6 cases behaved as expected"
 '
+
+# Order check on the source: a new bridge gets IPv6 off before "up".
+# shellcheck disable=SC2016 # literal source text, not an expansion
+add_line=$(grep -n 'ip link add name "$bridge" type bridge' "$BUILD_BRIDGE" | cut -d: -f1)
+# shellcheck disable=SC2016 # literal source text, not an expansion
+off_line=$(grep -n '^	no_ipv6 "$bridge"$' "$BUILD_BRIDGE" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016 # literal source text, not an expansion
+up_line=$(grep -n 'ip link set "$bridge" up' "$BUILD_BRIDGE" | cut -d: -f1)
+if [ -z "$add_line" ] || [ -z "$off_line" ] || [ -z "$up_line" ] ||
+	[ "$add_line" -ge "$off_line" ] || [ "$off_line" -ge "$up_line" ]; then
+	echo "build-bridge-test: FAIL -- build-bridge.sh does not turn IPv6 off between add and up" >&2
+	exit 1
+fi
 
 unshare -rnm bash -c "$inner" bash "$BUILD_BRIDGE"

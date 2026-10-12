@@ -1,0 +1,72 @@
+# variants: 70
+# id	kind	mode	families	points
+LOG_LEVEL=debug	single			start,settled
+LOG_LEVEL=info	single			start,settled
+alias:ipv6_mode=empty~ipv6_mode=unset	alias			create
+alias:ipv6_mode=off~ipv6_mode=unset	alias			create
+alias:ipv6_pd=empty~ipv6_pd=unset	alias			create
+alias:mode=empty~mode=unset	alias			create
+alias:skip_routes=0~skip_routes=false	alias			create
+alias:skip_routes=1~skip_routes=true	alias			create
+alias:skip_routes=empty~skip_routes=unset	alias			create
+alias:skip_routes=false~skip_routes=unset	alias			create
+env:ipv6_mode=dhcp@bridge#E1	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E2	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E3	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@bridge#E4	env	bridge	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E1	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E2	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E3	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@ipvlan#E4	env	ipvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E1	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E2	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E3	env	macvlan	env	start,settled
+env:ipv6_mode=dhcp@macvlan#E4	env	macvlan	env	start,settled
+env:skip_routes=true@bridge#E1	env	bridge	env	start,settled
+env:skip_routes=true@bridge#E3	env	bridge	env	start,settled
+env:skip_routes=true@ipvlan#E1	env	ipvlan	env	start,settled
+env:skip_routes=true@ipvlan#E3	env	ipvlan	env	start,settled
+env:skip_routes=true@macvlan#E1	env	macvlan	env	start,settled
+env:skip_routes=true@macvlan#E3	env	macvlan	env	start,settled
+ip=192.0.2.50@bridge	single	bridge		start,settled
+ip=192.0.2.50@ipvlan	single	ipvlan		start,settled
+ip=192.0.2.50@macvlan	single	macvlan		start,settled
+ip=unset@bridge	single	bridge		start,settled
+ip=unset@ipvlan	single	ipvlan		start,settled
+ip=unset@macvlan	single	macvlan		start,settled
+ipv6_mode=!bogus	refused			create
+ipv6_mode=dhcp@bridge	single	bridge		start,settled
+ipv6_mode=dhcp@ipvlan	single	ipvlan		start,settled
+ipv6_mode=dhcp@macvlan	single	macvlan		start,settled
+ipv6_mode=off@bridge	single	bridge		start,settled
+ipv6_mode=off@ipvlan	single	ipvlan		start,settled
+ipv6_mode=off@macvlan	single	macvlan		start,settled
+ipv6_mode=slaac@bridge	single	bridge		start,settled
+ipv6_mode=slaac@ipvlan	single	ipvlan		start,settled
+ipv6_mode=slaac@macvlan	single	macvlan		start,settled
+ipv6_pd=64@bridge	single	bridge		start,settled
+ipv6_pd=64@macvlan	single	macvlan		start,settled
+ipv6_pd=unset@bridge	single	bridge		start,settled
+ipv6_pd=unset@macvlan	single	macvlan		start,settled
+ipv6_pd@!ipvlan	outofmode	ipvlan		create
+mode=bridge@bridge	single	bridge		start,settled
+mode=ipvlan@ipvlan	single	ipvlan		start,settled
+mode=macvlan@macvlan	single	macvlan		start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=64@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+ipv6_pd=64@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=dhcp+skip_routes=true@bridge	pair	bridge	named,routes	start,settled
+pair:ipv6_mode=dhcp+skip_routes=true@ipvlan	pair	ipvlan	named,routes	start,settled
+pair:ipv6_mode=dhcp+skip_routes=true@macvlan	pair	macvlan	named,routes	start,settled
+pair:ipv6_mode=slaac+ipv6_pd=64@bridge	pair	bridge	ipv6,routes	start,settled
+pair:ipv6_mode=slaac+ipv6_pd=64@macvlan	pair	macvlan	ipv6,routes	start,settled
+pair:ipv6_mode=slaac+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_mode=slaac+skip_routes=true@ipvlan	pair	ipvlan	routes	start,settled
+pair:ipv6_mode=slaac+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+pair:ipv6_pd=64+skip_routes=true@bridge	pair	bridge	routes	start,settled
+pair:ipv6_pd=64+skip_routes=true@macvlan	pair	macvlan	routes	start,settled
+skip_routes=false@bridge	single	bridge		start,settled
+skip_routes=false@ipvlan	single	ipvlan		start,settled
+skip_routes=false@macvlan	single	macvlan		start,settled
+skip_routes=true@bridge	single	bridge		start,settled
+skip_routes=true@ipvlan	single	ipvlan		start,settled
+skip_routes=true@macvlan	single	macvlan		start,settled

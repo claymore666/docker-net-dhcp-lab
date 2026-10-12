@@ -1,0 +1,12 @@
+2026-10-11T12:00:00+0000 lab-isc dhcpd[701]: Server starting service.
+2026-10-11T12:00:05+0000 lab-isc dhcpd[701]: DHCPDISCOVER from 02:aa:bb:cc:dd:01 via eth1
+2026-10-11T12:00:06+0000 lab-isc dhcpd[701]: DHCPOFFER on 10.200.1.150 to 02:aa:bb:cc:dd:01 (lab-a) via eth1
+2026-10-11T12:00:06+0000 lab-isc dhcpd[701]: DHCPREQUEST for 10.200.1.150 (10.200.1.2) from 02:aa:bb:cc:dd:01 (lab-a) via eth1
+2026-10-11T12:00:06+0000 lab-isc dhcpd[701]: DHCPACK on 10.200.1.150 to 02:aa:bb:cc:dd:01 (lab-a) via eth1
+2026-10-11T12:00:09+0000 lab-isc dhcpd[701]: DHCPDISCOVER from 02:aa:bb:cc:dd:02 via eth1: network 10.200.1.0/24: no free leases
+2026-10-11T12:05:06+0000 lab-isc dhcpd[701]: DHCPREQUEST for 10.200.1.150 from 02:aa:bb:cc:dd:01 (lab-a) via eth1
+2026-10-11T12:05:06+0000 lab-isc dhcpd[701]: DHCPACK on 10.200.1.150 to 02:aa:bb:cc:dd:01 (lab-a) via eth1
+2026-10-11T12:06:00+0000 lab-isc dhcpd[701]: DHCPREQUEST for 10.200.1.160 from 02:aa:bb:cc:dd:03 via eth1: wrong network.
+2026-10-11T12:06:00+0000 lab-isc dhcpd[701]: DHCPNAK on 10.200.1.160 to 02:aa:bb:cc:dd:03 via eth1
+2026-10-11T12:07:00+0000 lab-isc dhcpd[701]: DHCPDECLINE of 10.200.1.151 from 02:AA:BB:CC:DD:02 via eth1: abandoned
+2026-10-11T12:08:00+0000 lab-isc dhcpd[701]: DHCPRELEASE of 10.200.1.150 from 02:aa:bb:cc:dd:01 (lab-a) via eth1 (found)

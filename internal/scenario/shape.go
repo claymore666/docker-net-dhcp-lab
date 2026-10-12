@@ -8,9 +8,11 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
@@ -58,7 +60,7 @@ func ipamDriverFor(shape Shape) string {
 // carries the docker host's own address -- that is eth0/mgmt -- so
 // enslaving it under bridge mode costs the docker host nothing, unlike
 // the host-address warning in docs/bridge-mode.md.
-const SegmentNIC = "eth1"
+const SegmentNIC = labyaml.DockerHostSegmentNIC
 
 // pluginAlias matches the alias every docker_host's cloud-init installs
 // the plugin under (cloud-init/docker-host-user-data.tmpl.yaml), the
@@ -91,20 +93,22 @@ func NetworkName(cell string, shape Shape) string {
 }
 
 // forwardRuleAdd, forwardRuleCheck and forwardRuleDel are the exact
-// recipe docs/bridge-mode.md's "Prepare a host bridge" walkthrough gives
-// (line 53): appended (-A, not CI harness's -I), -i only (no -o mirror),
-// IPv4 only. `grep -rn ip6tables docs/` in the plugin repo has zero
-// hits -- the page's only IPv6 content is the unrelated ipv6_mode
-// network option -- so this stays IPv4-only, matching what a user who
-// follows the page verbatim would actually run.
-func forwardRuleAdd(br string) string {
-	return fmt.Sprintf("sudo iptables -A FORWARD -i %s -j ACCEPT", br)
-}
-func forwardRuleCheck(br string) string {
-	return fmt.Sprintf("sudo iptables -C FORWARD -i %s -j ACCEPT", br)
-}
-func forwardRuleDel(br string) string {
-	return fmt.Sprintf("sudo iptables -D FORWARD -i %s -j ACCEPT", br)
+// recipe docs/bridge-mode.md's "build the bridge yourself" walkthrough
+// gives: appended (-A, not CI harness's -I), -i only (no -o mirror).
+// The walkthrough has no ip6tables line; the page's plugin-made-bridge
+// section says "For DHCPv6 (`ipv6_mode`), add the same rule with
+// `ip6tables`", so each has a forwardRule6 twin; the segment carries
+// DHCPv6 and RAs (#23).
+func forwardRuleAdd(br string) string   { return forwardRule("iptables", "-A", br) }
+func forwardRuleCheck(br string) string { return forwardRule("iptables", "-C", br) }
+func forwardRuleDel(br string) string   { return forwardRule("iptables", "-D", br) }
+
+func forwardRule6Add(br string) string   { return forwardRule("ip6tables", "-A", br) }
+func forwardRule6Check(br string) string { return forwardRule("ip6tables", "-C", br) }
+func forwardRule6Del(br string) string   { return forwardRule("ip6tables", "-D", br) }
+
+func forwardRule(bin, op, br string) string {
+	return fmt.Sprintf("sudo %s %s FORWARD -i %s -j ACCEPT", bin, op, br)
 }
 
 // writeRemoteFile idempotently overwrites path on r with content via a
@@ -155,7 +159,21 @@ func writeRemoteFile(ctx context.Context, r sourceadapter.Runner, path, content 
 // matches by an exact mac/address/client-id, never by counting rows.
 const bridgeNetplanPath = "/etc/netplan/60-dhcp-bridge.yaml"
 
-func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br string) error {
+// bridgeIfupdownPath is the docs' "Debian / ifupdown" bridge recipe's file
+// on a host without netplan (lab #70). /etc/network/interfaces only
+// sources interfaces.d on the Debian 11 cloud image, and source-directory
+// reads a name matching ^[a-zA-Z0-9_-]+$ only (interfaces(5)).
+const bridgeIfupdownPath = "/etc/network/interfaces.d/60-dhcp-bridge"
+
+func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, br string) error {
+	if stack == labyaml.NetStackIfupdown {
+		// docs/bridge-mode.md "Debian / ifupdown", verbatim with eth0
+		// read as the segment NIC.
+		eni := fmt.Sprintf(
+			"iface %s inet manual\n\nauto %s\niface %s inet dhcp\n    bridge_ports %s\n    bridge_stp off\n    bridge_fd 0\n",
+			SegmentNIC, br, br, SegmentNIC)
+		return writeRemoteFile(ctx, r, bridgeIfupdownPath, eni)
+	}
 	netplan := fmt.Sprintf(
 		"network:\n  version: 2\n  renderer: networkd\n  ethernets:\n    %s:\n      dhcp4: false\n      dhcp6: false\n  bridges:\n    %s:\n      interfaces: [%s]\n      dhcp4: true\n      parameters:\n        stp: false\n        forward-delay: 0\n",
 		SegmentNIC, br, SegmentNIC)
@@ -174,8 +192,31 @@ func writeBridgePersistence(ctx context.Context, r sourceadapter.Runner, br stri
 
 // bridgeConfigPaths lists the file writeBridgePersistence writes for
 // br, the single source of truth for both writing and removing it.
-func bridgeConfigPaths(br string) []string {
+func bridgeConfigPaths(stack labyaml.NetStack, br string) []string {
+	if stack == labyaml.NetStackIfupdown {
+		return []string{bridgeIfupdownPath}
+	}
 	return []string{bridgeNetplanPath}
+}
+
+// bridgeApplyCmd applies the written recipe. ifupdown has no reload: the
+// bridge is raised by name, and bridge-utils' pre-up hook creates it and
+// enslaves the port (bridge-utils 1.7 /etc/network/if-pre-up.d/bridge).
+func bridgeApplyCmd(stack labyaml.NetStack, br string) string {
+	if stack == labyaml.NetStackIfupdown {
+		return "sudo ifup " + br
+	}
+	return "sudo netplan apply"
+}
+
+// checkBridgeStack refuses a bridge shape on a host whose network stack
+// the base-image catalogue does not name: guessing netplan is the fault
+// lab #70 found on a Debian 11 host.
+func checkBridgeStack(stack labyaml.NetStack) error {
+	if stack != labyaml.NetStackNetplan && stack != labyaml.NetStackIfupdown {
+		return fmt.Errorf("docker host network stack %q is not netplan or ifupdown (internal/labyaml/baseimages.go)", stack)
+	}
+	return nil
 }
 
 // ensureIptablesPersistent installs the package docs/bridge-mode.md's
@@ -183,13 +224,19 @@ func bridgeConfigPaths(br string) []string {
 // already present -- measured live against a real cell's docker-host
 // image, which does not carry it by default (#3).
 func ensureIptablesPersistent(ctx context.Context, r sourceadapter.Runner) error {
-	if _, err := r.Run(ctx, "dpkg -s iptables-persistent >/dev/null 2>&1"); err == nil {
+	return ensurePackage(ctx, r, "iptables-persistent")
+}
+
+// ensurePackage installs one Debian package only if it is not already
+// present (#3; bridge-utils for the ifupdown recipe, lab #70).
+func ensurePackage(ctx context.Context, r sourceadapter.Runner, pkg string) error {
+	if _, err := r.Run(ctx, "dpkg -s "+pkg+" >/dev/null 2>&1"); err == nil {
 		return nil
 	}
 	cmd := "sudo DEBIAN_FRONTEND=noninteractive apt-get update && " +
-		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent"
+		"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y " + pkg
 	if _, err := r.Run(ctx, cmd); err != nil {
-		return fmt.Errorf("install iptables-persistent: %w", err)
+		return fmt.Errorf("install %s: %w", pkg, err)
 	}
 	return nil
 }
@@ -210,6 +257,9 @@ func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 	if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
 		return false
 	}
+	if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
+		return false
+	}
 	return true
 }
 
@@ -221,7 +271,7 @@ func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
 // scenario in the shape cascade-fail against a bridge that silently is
 // not there (#3). A no-op for macvlan/ipvlan, which have no host
 // bridge.
-func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) error {
+func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) error {
 	if !usesHostBridge(shape) {
 		return nil
 	}
@@ -229,7 +279,7 @@ func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell strin
 	if bridgeReady(ctx, r, br) {
 		return nil
 	}
-	if _, err := NetworkUp(ctx, r, cell, shape); err != nil {
+	if _, err := NetworkUp(ctx, r, stack, cell, shape); err != nil {
 		return fmt.Errorf("bridge %s not present and could not be rebuilt: %w", br, err)
 	}
 	if !bridgeReady(ctx, r, br) {
@@ -242,23 +292,39 @@ func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, cell strin
 // It clears any previous run's network (and, for bridge, its host
 // bridge) first: a stale leftover must never let a fresh create look
 // like a fresh lease (issue #3 defeat list).
-func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) (string, error) {
-	NetworkDown(ctx, r, cell, shape)
+func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) (string, error) {
+	if usesHostBridge(shape) {
+		if err := checkBridgeStack(stack); err != nil {
+			return "", fmt.Errorf("networkup(%s): %w", shape, err)
+		}
+	}
+	NetworkDown(ctx, r, stack, cell, shape)
 	net := NetworkName(cell, shape)
 	switch shape {
 	case ShapeBridge, ShapeBridgeIPAM:
 		br := hostBridgeName(net)
-		if err := writeBridgePersistence(ctx, r, br); err != nil {
+		if stack == labyaml.NetStackIfupdown {
+			// docs/bridge-mode.md: the ifupdown recipe "Needs bridge-utils";
+			// the Debian 11 cloud image does not carry it (lab #70).
+			if err := ensurePackage(ctx, r, "bridge-utils"); err != nil {
+				return "", fmt.Errorf("networkup(%s): %w", shape, err)
+			}
+		}
+		if err := writeBridgePersistence(ctx, r, stack, br); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
-		if _, err := r.Run(ctx, "sudo netplan apply"); err != nil {
-			return "", fmt.Errorf("networkup(%s): sudo netplan apply: %w", shape, err)
+		apply := bridgeApplyCmd(stack, br)
+		if _, err := r.Run(ctx, apply); err != nil {
+			return "", fmt.Errorf("networkup(%s): %s: %w", shape, apply, err)
 		}
 		if err := ensureIptablesPersistent(ctx, r); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
 		if _, err := r.Run(ctx, forwardRuleAdd(br)); err != nil {
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, forwardRuleAdd(br), err)
+		}
+		if _, err := r.Run(ctx, forwardRule6Add(br)); err != nil {
+			return "", fmt.Errorf("networkup(%s): %s: %w", shape, forwardRule6Add(br), err)
 		}
 		// The FORWARD rule above is the only thing standing between a
 		// clean create and a bridge that silently drops every DHCP
@@ -272,23 +338,23 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
 				shape, forwardRuleAdd(br), err)
 		}
+		if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
+			return "", fmt.Errorf(
+				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, DHCPv6); bridge shape cannot pass DHCPv6 or RAs without it: %w",
+				shape, forwardRule6Add(br), err)
+		}
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
 			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
 		}
 		if !bridgeReady(ctx, r, br) {
-			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after netplan apply", shape, br, SegmentNIC)
+			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "))
 		}
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o bridge=%s %s", driverAlias, ipamDriverFor(shape), br, net)
+		create, _ := networkCreateCmd(shape, net, br, nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, create, err)
 		}
 	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
-		mode := "macvlan"
-		if shape == ShapeIpvlan {
-			mode = "ipvlan"
-		}
-		create := fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s %s",
-			driverAlias, ipamDriverFor(shape), mode, SegmentNIC, net)
+		create, _ := networkCreateCmd(shape, net, "", nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
@@ -296,6 +362,70 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, cell string, shape S
 		return "", fmt.Errorf("networkup: unknown shape %q", shape)
 	}
 	return net, nil
+}
+
+// networkOptRE is the whole grammar of an extra network option: a
+// lower-case key that may carry digits after its first letter
+// (`ipv6_mode`, #23 group D) and a value of letters, digits and . _ : - /,
+// the slash for a CIDR such as ipv6_main_prefix's (D4m), so nothing
+// else can reach the remote shell (group B, #23).
+var networkOptRE = regexp.MustCompile(`^[a-z][a-z0-9_]*=[A-Za-z0-9._:/-]+$`)
+
+// networkCreateCmd is the one place a plugin network's create command is
+// built, for the cell's main network (opts nil) and for a group B
+// scenario's own network (opts set). br is the host bridge, used by the
+// two bridge shapes only.
+func networkCreateCmd(shape Shape, net, br string, opts []string) (string, error) {
+	extra := ""
+	for _, o := range opts {
+		if !networkOptRE.MatchString(o) {
+			return "", fmt.Errorf("network option %q is not a plain key=value", o)
+		}
+		extra += " -o " + o
+	}
+	switch shape {
+	case ShapeBridge, ShapeBridgeIPAM:
+		return fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o bridge=%s%s %s", driverAlias, ipamDriverFor(shape), br, extra, net), nil
+	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
+		mode := "macvlan"
+		if shape == ShapeIpvlan {
+			mode = "ipvlan"
+		}
+		return fmt.Sprintf("sudo docker network create -d %s --ipam-driver %s -o mode=%s -o parent=%s%s %s",
+			driverAlias, ipamDriverFor(shape), mode, SegmentNIC, extra, net), nil
+	}
+	return "", fmt.Errorf("networkup: unknown shape %q", shape)
+}
+
+// NetworkUpExtra creates a second plugin network, mainNet-suffix, beside
+// the cell's main one with extra -o options (group B, #23): one scenario
+// that needs a network option gets its own network and the main network
+// is never changed. A bridge shape reuses the main network's host bridge
+// and needs ignore_conflicts for the second network on it (plugin
+// docs/reference.md, bridge mode only). It removes a stale network of
+// that name first, so a leftover never looks like a fresh create.
+func NetworkUpExtra(ctx context.Context, r sourceadapter.Runner, mainNet string, shape Shape, suffix string, opts []string) (string, error) {
+	net := mainNet + "-" + suffix
+	NetworkDownExtra(ctx, r, mainNet, suffix)
+	br := ""
+	if usesHostBridge(shape) {
+		br = hostBridgeName(mainNet)
+		opts = append(append([]string{}, opts...), "ignore_conflicts=true")
+	}
+	create, err := networkCreateCmd(shape, net, br, opts)
+	if err != nil {
+		return "", err
+	}
+	if _, err := r.Run(ctx, create); err != nil {
+		return "", fmt.Errorf("networkupextra(%s): %s: %w", shape, create, err)
+	}
+	return net, nil
+}
+
+// NetworkDownExtra removes the network NetworkUpExtra created; best
+// effort and idempotent like NetworkDownInternal.
+func NetworkDownExtra(ctx context.Context, r sourceadapter.Runner, mainNet, suffix string) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s-%s", mainNet, suffix))
 }
 
 // NetworkUpInternal brings up an ordinary Docker bridge network with
@@ -322,7 +452,7 @@ func NetworkDownInternal(ctx context.Context, r sourceadapter.Runner, netName st
 // own style: every step tolerates the thing it removes already being
 // gone, since NetworkUp calls this first on every run including the
 // very first one.
-func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape) {
+func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) {
 	net := NetworkName(cell, shape)
 	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", net))
 	if usesHostBridge(shape) {
@@ -333,6 +463,13 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		// torn down in below; without it, every run's ACCEPT rule for
 		// its now-deleted bridge name pile up in FORWARD forever.
 		_, _ = r.Run(ctx, forwardRuleDel(br))
+		_, _ = r.Run(ctx, forwardRule6Del(br))
+		if stack == labyaml.NetStackIfupdown {
+			// While its stanza still exists: releases the bridge's lease
+			// and lets bridge-utils' post-down undo what its pre-up did,
+			// the port's disable_ipv6 among it (lab #70).
+			_, _ = r.Run(ctx, "sudo ifdown "+br)
+		}
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
 		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
 		// Symmetric with writeBridgePersistence: without removing the
@@ -341,8 +478,15 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, cell string, shape
 		// down (#3). The reapply after removing it hands
 		// eth1 back to cloud-init's own
 		// dhcp4: false stanza for that interface.
-		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(br), " "))
-		_, _ = r.Run(ctx, "sudo netplan apply")
+		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(stack, br), " "))
+		if stack == labyaml.NetStackIfupdown {
+			// bridge-utils' post-down sets the port down; --force reruns
+			// the segment NIC's own stanza, which ifupdown still records
+			// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
+			_, _ = r.Run(ctx, "sudo ifup --force "+SegmentNIC)
+		} else {
+			_, _ = r.Run(ctx, "sudo netplan apply")
+		}
 		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
 }
@@ -394,14 +538,14 @@ const isolationWaitWindow = 80 * time.Second
 // this shape's run without writing a verdict for any scenario still
 // queued behind it, the same way it already does for an undersized
 // pool (issue #3).
-func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, sleep func(time.Duration)) (net, method string, err error) {
+func IsolateIPAMNetwork(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape, sleep func(time.Duration)) (net, method string, err error) {
 	if shape != ShapeBridgeIPAM && shape != ShapeMacvlanIPAM {
 		return "", "", fmt.Errorf("isolateipamnetwork: shape %q is not an IPAM shape; the identity hold this isolates against does not exist under null-IPAM (docs/reference.md)", shape)
 	}
 	if sleep == nil {
 		sleep = time.Sleep
 	}
-	newNet, upErr := NetworkUp(ctx, r, cell, shape)
+	newNet, upErr := NetworkUp(ctx, r, stack, cell, shape)
 	if upErr == nil {
 		return newNet, "network recreated between scenarios", nil
 	}

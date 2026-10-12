@@ -1,0 +1,1 @@
+{ "arguments": { "leases": [ { "cltt": 1791568749, "duid": "00:03:00:01:02:00:00:00:23:d1", "fqdn-fwd": false, "fqdn-rev": false, "hostname": "", "hw-address": "02:00:00:00:23:d1", "iaid": 1, "ip-address": "fd42:200:0:100::101", "preferred-lft": 3600, "state": 0, "subnet-id": 1, "type": "IA_NA", "valid-lft": 7200 } ] }, "result": 0, "text": "1 IPv6 lease(s) found." }

@@ -31,12 +31,23 @@ if [ "${1:-}" = "--add-port" ]; then
 	add_port=${2:?--add-port needs an interface name}
 fi
 
+# No IPv6 on the bridge itself (#23 group D): the segment carries the
+# source's RAs, and a host-side address formed from them would put the
+# lab host on the cell's /64. Set before "up", so not even a link-local
+# or a router solicitation leaves it.
+no_ipv6() {
+	echo 1 >"/proc/sys/net/ipv6/conf/$1/disable_ipv6"
+}
+
 if [ ! -d "/sys/class/net/$bridge" ]; then
 	ip link add name "$bridge" type bridge
+	no_ipv6 "$bridge"
 	ip link set "$bridge" up
 elif [ ! -d "/sys/class/net/$bridge/bridge" ]; then
 	echo "build-bridge: $bridge exists and is not a bridge" >&2
 	exit 1
+else
+	no_ipv6 "$bridge"
 fi
 
 # Refuse on what is ALREADY enslaved, before considering any new port: a
@@ -53,6 +64,12 @@ if [ -d "/sys/class/net/$bridge/brif" ]; then
 	done
 fi
 [ "$bad" -eq 0 ] || exit 1
+
+# Hub mode (group C, #23): with the default 300 s FDB ageing the bridge
+# stops flooding a unicast frame once it has learned the destination, so
+# the observer port never sees a T1 renewal REQUEST or its ACK. Ageing 0
+# floods every frame to every port; the segment carries lab devices only.
+ip link set dev "$bridge" type bridge ageing_time 0
 
 if [ -n "$add_port" ]; then
 	if ! is_allowed_port "$add_port"; then

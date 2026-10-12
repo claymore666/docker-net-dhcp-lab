@@ -58,7 +58,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
 	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
-	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md)")
+	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md | --pinned vX.Y.Z) [--regen]")
+	fmt.Fprintln(os.Stderr, "       labctl coverage pin --plugin-tree <dir> --tag vX.Y.Z")
 	os.Exit(2)
 }
 
@@ -135,19 +136,115 @@ func cmdResolve(args []string) {
 		}
 		sourceImage = &si
 	}
+	relayImage, relayCfg, err := resolveRelay(cell)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl resolve:", err)
+		os.Exit(1)
+	}
 	out := struct {
 		Management      labyaml.Management `json:"management"`
 		ULAPrefix       string             `json:"ula_prefix"`
 		Cell            *labyaml.Cell      `json:"cell"`
 		DockerHostImage labyaml.BaseImage  `json:"docker_host_image"`
 		SourceImage     *labyaml.BaseImage `json:"source_image"`
-	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage}
+		RelayImage      *labyaml.BaseImage `json:"relay_image"`
+		RelayFiles      *relayFiles        `json:"relay_files"`
+		SourceServesV6  bool               `json:"source_serves_v6"`
+		SegNICSetup     string             `json:"docker_host_seg_nic_setup"`
+	}{cfg.Management, cfg.ULAPrefix, cell, dockerHostImage, sourceImage, relayImage, relayCfg,
+		cell.Source != nil && labyaml.SourceServesV6(cell.Source.Type), dockerHostImage.SegmentNICSetup()}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
 		fmt.Fprintln(os.Stderr, "labctl resolve: encode:", err)
 		os.Exit(1)
 	}
+}
+
+// relayFiles are the relay VM's two config files, rendered by the same
+// Go code its Ready check compares against (#11), so up-relay.sh never
+// keeps a second copy.
+type relayFiles struct {
+	Defaults string `json:"defaults"`
+	Nft      string `json:"nft"`
+}
+
+func resolveRelay(cell *labyaml.Cell) (*labyaml.BaseImage, *relayFiles, error) {
+	if cell.Relay == nil {
+		return nil, nil, nil
+	}
+	img, err := labyaml.LookupBaseImage(cell.Relay.BaseImage)
+	if err != nil {
+		return nil, nil, err
+	}
+	defaults, err := sourceadapter.RenderRelayDefaults(relayParams(cell))
+	if err != nil {
+		return nil, nil, err
+	}
+	return &img, &relayFiles{Defaults: defaults, Nft: sourceadapter.RelayNftRuleset}, nil
+}
+
+// relayParams maps a relay cell's lab.yaml addresses onto WithRelay (#11).
+func relayParams(cell *labyaml.Cell) sourceadapter.RelayParams {
+	return sourceadapter.RelayParams{
+		ClientAddr:   cell.Relay.ClientAddress,
+		ServerAddr:   cell.Relay.ServerAddress,
+		SourceAddr:   hostPart(cell.Source.SegAddress),
+		ClientSubnet: cell.Segment.Subnet,
+		PoolStart:    cell.Source.PoolStart,
+		AgentOptions: cell.Relay.AgentOptions,
+	}
+}
+
+func hostPart(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
+
+// cellEnv builds the cell half of a run's Env: the source adapter, wrapped
+// with the relay's Ready checks and Recover in a relay cell, and the router,
+// source, relay and second-capture fields (#11). dial opens a runner on a
+// management address; cmdRun fills the shape half.
+func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
+	// One runner per host, so the adapter and the relay's source probes
+	// share the primary's retry state.
+	sourceHost := hostPart(cell.Source.MgmtAddress)
+	sourceRunner := dial(sourceHost)
+	source, err := newCellSourceAdapter(cell.Source, func(mgmt string) sourceadapter.Runner {
+		if hostPart(mgmt) == sourceHost {
+			return sourceRunner
+		}
+		return dial(hostPart(mgmt))
+	})
+	if err != nil {
+		return scenario.Env{}, err
+	}
+	env := scenario.Env{
+		Cell:      cellName,
+		RepoRoot:  repoRoot,
+		WorkDir:   workDir,
+		SegSubnet: cell.Segment.Subnet,
+		Subnet6:   cell.Segment.Subnet6,
+		PoolStart: cell.Source.PoolStart,
+		PoolEnd:   cell.Source.PoolEnd,
+		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
+	}
+	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
+	if err != nil {
+		return scenario.Env{}, err
+	}
+	env.HostNetStack = hostImage.NetStack
+	env.SegGateway, env.SourceAddr = segAddresses(cell)
+	if cell.Relay != nil {
+		relayRunner := dial(hostPart(cell.Relay.MgmtAddress))
+		p := relayParams(cell)
+		p.Source = sourceRunner
+		source = sourceadapter.WithRelay(source, relayRunner, p)
+		if env.RelayClientMAC, env.RelayServerMAC, err = sourceadapter.RelayMACs(ctx, relayRunner); err != nil {
+			return scenario.Env{}, err
+		}
+		env.ServerPCAP = filepath.Join(workDir, "srv", "observer.pcap")
+		env.ServerCapture = scenario.ObserverCapture{Cell: cellName + "-srv", RepoRoot: repoRoot}
+	}
+	env.Source = source
+	return env, nil
 }
 
 // newSourceAdapter is the one place that maps a lab.yaml source.type to
@@ -161,8 +258,38 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.ISCDHCPAdapter{Runner: runner}, nil
 	case "dnsmasq":
 		return &sourceadapter.DnsmasqAdapter{Runner: runner}, nil
+	case "udhcpd":
+		return &sourceadapter.UdhcpdAdapter{Runner: runner}, nil
+	case "pihole":
+		return &sourceadapter.PiholeAdapter{Runner: runner}, nil
+	case "routeros":
+		return &sourceadapter.RouterOSAdapter{Runner: runner}, nil
+	case "openwrt":
+		return &sourceadapter.OpenwrtAdapter{Runner: runner}, nil
+	case "fritzbox":
+		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
+	}
+}
+
+// newCellSourceAdapter returns the cell's source adapter: the single
+// adapter, or a PairAdapter over both peers when source.partner is set
+// (lab #12), each peer reached by its own runner.
+func newCellSourceAdapter(src *labyaml.Source, runnerFor func(mgmtAddress string) sourceadapter.Runner) (sourceadapter.Adapter, error) {
+	if src.Partner == nil {
+		return newSourceAdapter(src.Type, runnerFor(src.MgmtAddress))
+	}
+	ip := func(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
+	switch src.Type {
+	case "kea":
+		return sourceadapter.NewKeaPair(runnerFor(src.MgmtAddress), runnerFor(src.Partner.MgmtAddress),
+			ip(src.SegAddress), ip(src.Partner.SegAddress)), nil
+	case "isc-dhcp":
+		return sourceadapter.NewISCPair(runnerFor(src.MgmtAddress), runnerFor(src.Partner.MgmtAddress),
+			ip(src.SegAddress), ip(src.Partner.SegAddress)), nil
+	default:
+		return nil, fmt.Errorf("source type %q cannot run as a failover pair", src.Type)
 	}
 }
 
@@ -332,15 +459,18 @@ func cmdRun(args []string) int {
 	knownHosts := filepath.Join(workDir, "known_hosts")
 	keyPath := os.ExpandEnv("$HOME/.ssh/id_ed25519_lab")
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
-	sourceMgmtIP := strings.SplitN(cell.Source.MgmtAddress, "/", 2)[0]
-
-	hostRunner := sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
-	sourceRunner := sourceadapter.SSHRunner{Host: sourceMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}
-	source, err := newSourceAdapter(cell.Source.Type, sourceRunner)
+	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
+	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
+		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", err)
 		return 1
 	}
+	source := env.Source
 
 	gitSHA, err := gitRevParseHEAD(repoRoot)
 	if err != nil {
@@ -416,7 +546,7 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl run: Leases after reset:", err)
 		return 1
 	}
-	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.MinPoolAddresses); !ok {
+	if ok, reason := poolHasCapacityFor(capacity, len(heldLeases), scenario.PoolDemand(scenariosToRun, source)); !ok {
 		reason = "pool cannot cover this shape's run: " + reason
 		for _, s := range scenariosToRun {
 			v := scenario.Verdict{
@@ -434,29 +564,51 @@ func cmdRun(args []string) int {
 		return labErrorExitCode
 	}
 
-	net, err := scenario.NetworkUp(ctx, hostRunner, cellName, shape)
+	// The previous shape's macvlan/ipvlan network can still hold the
+	// parent NIC when this process starts, and the plugin then refuses
+	// every container with "would not accept another child" (23 kea
+	// FAILs in the first six-cell run, lab#38). Wait, bounded, for a
+	// clean parent and keep the wait in the evidence bundle; a parent
+	// that never clears is plugin evidence, so the shape is BLOCKED and
+	// names the leftover link. No scenario is ever retried. A bridge shape
+	// cannot take a NIC with a child as its port, so this runs before every shape.
+	blockedReason, perr := scenario.ParentReady(ctx, hostRunner, cellName, shape, evidenceDir, scenario.ParentCleanWindow, scenario.ParentCleanPoll)
+	if perr != nil {
+		fmt.Fprintln(os.Stderr, "labctl run:", perr)
+		return 1
+	}
+	if blockedReason != "" {
+		for _, s := range scenariosToRun {
+			v := scenario.Verdict{
+				Scenario: s.Name, Cell: cellName, Shape: shape,
+				Result: scenario.BLOCKED, Reason: blockedReason,
+				GitSHA: gitSHA, Timestamp: time.Now(), Host: hi,
+			}
+			if werr := scenario.Write(evidenceDir, v); werr != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, werr)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+		}
+		return 0
+	}
+
+	net, err := scenario.NetworkUp(ctx, hostRunner, env.HostNetStack, cellName, shape)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)
 		return 1
 	}
-	defer scenario.NetworkDown(ctx, hostRunner, cellName, shape)
+	defer scenario.NetworkDown(ctx, hostRunner, env.HostNetStack, cellName, shape)
 
-	env := scenario.Env{
-		Host:              hostRunner,
-		Source:            source,
-		Cell:              cellName,
-		Shape:             shape,
-		Network:           net,
-		PCAP:              pcap,
-		RepoRoot:          repoRoot,
-		WorkDir:           workDir,
-		EvidenceDir:       evidenceDir,
-		PluginTag:         cell.DockerHost.PluginTag,
-		PreviousPluginTag: cell.DockerHost.PreviousPluginTag,
-		GitSHA:            gitSHA,
-		SegGateway:        strings.SplitN(cell.Source.SegAddress, "/", 2)[0],
-		HostInfo:          hi,
-	}
+	env.Host = hostRunner
+	env.Shape = shape
+	env.Network = net
+	env.PCAP = pcap
+	env.EvidenceDir = evidenceDir
+	env.PluginTag = cell.DockerHost.PluginTag
+	env.PreviousPluginTag = cell.DockerHost.PreviousPluginTag
+	env.GitSHA = gitSHA
+	env.HostInfo = hi
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a
 	// minute and hand it to whichever container starts next on the same
@@ -480,11 +632,21 @@ func cmdRun(args []string) int {
 		defer isolationLog.Close()
 	}
 
-	failed := 0
 	isolationMethod := ""
-	for i, s := range scenariosToRun {
-		if isolateBetweenScenarios && i > 0 {
-			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, cellName, shape, nil)
+	// Scenarios the shape alone answers (the ipam shapes' N/A) are written
+	// here and never reach RunOne or the isolation below (#79).
+	staticNA := staticNAFor(scenariosToRun, env)
+	failed, err := runScenarios(scenariosToRun, staticNA, isolateBetweenScenarios, scenarioSteps{
+		static: func(v scenario.Verdict) error {
+			if err := scenario.Write(evidenceDir, v); err != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, v.Scenario, err)
+				return err
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, v.Scenario, v.Result, v.Reason)
+			return nil
+		},
+		isolate: func(s scenario.Scenario) error {
+			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, env.HostNetStack, cellName, shape, nil)
 			if err != nil {
 				// A failed isolation is a lab error, never a scenario
 				// result: returning here writes no verdict at all for
@@ -493,7 +655,7 @@ func cmdRun(args []string) int {
 				// against) a network that IsolateIPAMNetwork itself
 				// found gone (issue #3).
 				fmt.Fprintln(os.Stderr, "labctl run: IsolateIPAMNetwork:", err)
-				return 1
+				return err
 			}
 			env.Network = newNet
 			isolationMethod = method
@@ -501,28 +663,88 @@ func cmdRun(args []string) int {
 			fmt.Print(line)
 			if _, err := isolationLog.WriteString(line); err != nil {
 				fmt.Fprintln(os.Stderr, "labctl run: could not write isolation.log:", err)
-				return 1
+				return err
 			}
-		}
-		v := scenario.RunOne(ctx, s, env)
-		// Recorded in the verdict itself, not only in isolation.log, so
-		// a read of one verdict file says how its network was isolated
-		// without needing the sibling log (issue #3).
-		v.IsolationMethod = isolationMethod
-		if err := scenario.Write(evidenceDir, v); err != nil {
-			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
-			return 1
-		}
-		fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
-		if v.Result == scenario.FAIL {
-			failed++
-		}
+			return nil
+		},
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			v := scenario.RunOne(ctx, s, env)
+			// Recorded in the verdict itself, not only in isolation.log, so
+			// a read of one verdict file says how its network was isolated
+			// without needing the sibling log (issue #3).
+			v.IsolationMethod = isolationMethod
+			if err := scenario.Write(evidenceDir, v); err != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
+				return v, err
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+			return v, nil
+		},
+	})
+	if err != nil {
+		return 1
 	}
 	if failed > 0 {
 		fmt.Printf("labctl run: %d/%d scenarios FAILed on %s/%s; see verdicts\n",
 			failed, len(scenariosToRun), cellName, shape)
 	}
 	return 0
+}
+
+// scenarioSteps are the three things the run loop does for a scenario;
+// cmdRun supplies the real ones and the tests count calls through fakes.
+type scenarioSteps struct {
+	static  func(v scenario.Verdict) error
+	isolate func(before scenario.Scenario) error
+	run     func(s scenario.Scenario) (scenario.Verdict, error)
+}
+
+// runScenarios is the loop cmdRun runs: a scenario in static is written
+// without the wrapper or an isolation, every other one is isolated from
+// the previous wrapper run when isolating is set, then run. It returns the
+// FAIL count, or the first step error with nothing run behind it (#79).
+func runScenarios(list []scenario.Scenario, static map[string]scenario.Verdict, isolating bool, st scenarioSteps) (int, error) {
+	failed, ran := 0, 0
+	for _, s := range list {
+		if v, ok := static[s.Name]; ok {
+			if err := st.static(v); err != nil {
+				return failed, err
+			}
+			continue
+		}
+		if isolating && needsIsolation(ran) {
+			if err := st.isolate(s); err != nil {
+				return failed, err
+			}
+		}
+		ran++
+		v, err := st.run(s)
+		if err != nil {
+			return failed, err
+		}
+		if v.Result == scenario.FAIL {
+			failed++
+		}
+	}
+	return failed, nil
+}
+
+// needsIsolation is true for every scenario that goes through RunOne
+// after the first: the isolation exists so one scenario's container
+// cannot take over the identity the previous one left on the network,
+// and a scenario answered statically leaves nothing behind (#79).
+func needsIsolation(ran int) bool { return ran > 0 }
+
+// staticNAFor is the verdicts, by scenario name, of the scenarios in list
+// that scenario.StaticNA answers for this env.
+func staticNAFor(list []scenario.Scenario, env scenario.Env) map[string]scenario.Verdict {
+	out := map[string]scenario.Verdict{}
+	for _, s := range list {
+		if v, ok := scenario.StaticNA(s, env); ok {
+			out[s.Name] = v
+		}
+	}
+	return out
 }
 
 // poolCapacity returns the number of addresses in an IPv4 pool,
@@ -569,4 +791,15 @@ func gitRevParseHEAD(repoRoot string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// segAddresses is the router and the source address a cell's Env carries;
+// without a relay both are seg_address stripped of its CIDR suffix, behind
+// a relay the router is the relay's client leg (#11).
+func segAddresses(cell *labyaml.Cell) (segGateway, sourceAddr string) {
+	sourceAddr = hostPart(cell.Source.SegAddress)
+	if cell.Relay != nil {
+		return hostPart(cell.Relay.ClientAddress), sourceAddr
+	}
+	return sourceAddr, sourceAddr
 }

@@ -1,0 +1,113 @@
+#cloud-config
+# ISC dhcpd failover pair (lab #12): the isc-dhcp template plus the lines # lab-fo
+# that end in the lab-fo marker; the template diff test strips them # lab-fo
+# and expects the isc-dhcp template byte for byte. scripts/up-source.sh # lab-fo
+# fills the role (primary|secondary), the two segment addresses and # lab-fo
+# the primary-only mark (empty on the primary, a comment mark on the # lab-fo
+# secondary): mclt and split may not be given on the secondary (dhcpd.conf(5)). # lab-fo
+# omapi-port opens the read-only failover-state query HAState falls back to. # lab-fo
+# ISC dhcpd source cell (issue #2). Placeholders are substituted by
+# scripts/up-source.sh from lab.yaml via `labctl resolve`. Everything
+# happens in runcmd, in order, so the stock config is always captured
+# before this cell's own config ever overwrites it.
+hostname: lab-isc-dhcp-source
+manage_etc_hosts: true
+users:
+  - name: lab
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+runcmd:
+  # noninteractive: the kea cell hit a debconf prompt that hung apt-get
+  # with no frontend (issue #2, measured live 2026-09-25); same guard
+  # here in case any future isc-dhcp-server package version adds one.
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server radvd dnsmasq-base iputils-arping
+  - mkdir -p /root/lab-stock-config
+  - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
+  - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock
+  - touch /etc/dhcp/lab-reservations.conf /var/lib/dhcp/dhcpd6.leases
+  - |
+    cat >/etc/dhcp/dhcpd.conf <<'DHCPDEOF'
+    default-lease-time 600;
+    max-lease-time 7200;
+    authoritative;
+    class "b5" {
+      match if option vendor-class-identifier = "lab-class-b5";
+    }
+    omapi-port 7911; # lab-fo
+    failover peer "lab" { # lab-fo
+      __FO_ROLE__; # lab-fo
+      address __FO_OWN_SEG__; # lab-fo
+      port 647; # lab-fo
+      peer address __FO_PEER_SEG__; # lab-fo
+      peer port 647; # lab-fo
+      max-response-delay 30; # lab-fo
+      max-unacked-updates 10; # lab-fo
+      load balance max seconds 3; # lab-fo
+      __FO_PRIMARY_ONLY__mclt 60; # lab-fo
+      __FO_PRIMARY_ONLY__split 128; # lab-fo
+    } # lab-fo
+    subnet __SEG_NETWORK__ netmask __SEG_NETMASK__ {
+      pool {
+        failover peer "lab"; # lab-fo
+        deny members of "b5";
+        range __POOL_START__ __POOL_END__;
+      }
+      pool {
+        failover peer "lab"; # lab-fo
+        allow members of "b5";
+        range __CLASS_POOL_START__ __CLASS_POOL_END__;
+      }
+      option routers __SEG_GATEWAY__;
+    }
+    include "/etc/dhcp/lab-reservations.conf";
+    DHCPDEOF
+  # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the rapid commit
+  # and temporary address features uncomment; the init script runs -4 and -6 together.
+  - |
+    cat >/etc/dhcp/dhcpd6.conf <<'DHCPDEOF'
+    default-lease-time 7200;
+    preferred-lifetime 3600;
+    #lab-rapid-commit option dhcp6.rapid-commit;
+    subnet6 __SEG_SUBNET6__ {
+      range6 __POOL6_START__ __POOL6_END__;
+      #lab-temporary range6 __TEMP6_POOL__ temporary;
+    }
+    DHCPDEOF
+  # IPv6 RA for the segment (#23 group D): M=1 A=1, router lifetime 1800,
+  # the cell's /64. radvd needs no forwarding (measured with forwarding 0).
+  - |
+    cat >/etc/radvd.conf <<'RADVDEOF'
+    interface eth1 {
+      AdvSendAdvert on;
+      MinRtrAdvInterval 3;
+      MaxRtrAdvInterval 10;
+      AdvManagedFlag on;
+      AdvOtherConfigFlag off;
+      AdvDefaultLifetime 1800;
+      prefix __SEG_SUBNET6__ {
+        AdvOnLink on;
+        AdvAutonomous on;
+        AdvValidLifetime 7200;
+        AdvPreferredLifetime 3600;
+      };
+    };
+    RADVDEOF
+  - |
+    cat >/etc/default/isc-dhcp-server <<'DHCPDEOF'
+    INTERFACESv4="eth1"
+    INTERFACESv6="eth1"
+    DHCPDEOF
+  # The primary alone serves v6: two unpaired DHCPv6 servers would share # lab-fo
+  # one pool and hand out each address twice (lab #12). # lab-fo
+  - '[ "__HA_THIS__" = primary ] || sed -i "s/^INTERFACESv6=.*/INTERFACESv6=\"\"/" /etc/default/isc-dhcp-server' # lab-fo
+  # restart, not enable --now: the kea cell found that apt-get's postinst
+  # can already have started the service against a stock config, making
+  # enable --now a no-op that leaves the stock config running instead of
+  # ours (issue #2, measured live 2026-09-25).
+  - systemctl enable isc-dhcp-server radvd
+  - systemctl restart isc-dhcp-server radvd
+  - '[ "__HA_THIS__" = primary ] || systemctl disable --now radvd' # lab-fo
+  - touch /var/lib/cloud/lab-bootstrap-done

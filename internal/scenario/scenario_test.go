@@ -32,6 +32,69 @@ type fakeAdapter struct {
 	resetErr    error
 	shortened   bool
 	restored    bool
+
+	reserveErr  error
+	dnsErr      error
+	reservedMAC []string
+	reservedID  []string
+	dnsSet      string
+	dnsRestored bool
+
+	// group C (#23): readyErrs is consumed one per Ready call, nil after.
+	readyErrs      []error
+	readyCalls     int
+	recoverErr     error
+	recovered      int
+	stopErr        error
+	startErr       error
+	stops, starts  int
+	impairErr      error
+	impaired       []string
+	impairRestored int
+	resets         int
+	// onStop/onStart/onReset let a test change the table at that call.
+	onStop, onStart, onReset func()
+
+	// group F (#20): features is the order EnableFeature was called in,
+	// featureRestores counts restores run, onFeatureRestore runs inside
+	// each restore (a test cancels or fails there).
+	featureErr       error
+	featureRestoreEr error
+	features         []sourceadapter.Feature
+	featureParams    []sourceadapter.FeatureParams
+	featureRestores  int
+	// featureRestoreCtx is ctx.Err() as the last restore saw it: a
+	// cancelled scenario context must not reach the restore.
+	featureRestoreCtx error
+
+	// F8-forcerenew (#21): forceRenews records each SendForceRenew; onForceRenew,
+	// when set, answers it (a test adds the frame to its fake capture).
+	forceRenews  []sourceadapter.ForceRenewParams
+	onForceRenew func(sourceadapter.ForceRenewParams) (string, error)
+
+	// Group C actors and rewrites (#23): each call is recorded, each
+	// on* hook runs after it (a test edits its fake capture or lease
+	// table there), each stop or restore is counted.
+	squats, rogues, narrows, renumbers                    []string
+	squatErr, rogueErr, narrowErr, renumberErr            error
+	squatStops, rogueStops, narrowRestores, renumberRests int
+	onSquat, onRogue, onNarrow, onRenumber                func()
+	onNarrowRestore, onRenumberRestore                    func()
+	rogueLeases                                           []sourceadapter.Lease
+
+	// group D (#23): leases6 is the DHCPv6 table, leases6Fn overrides it
+	// per call; raOffs and raRestores count SetRA and its restores.
+	leases6    []sourceadapter.Lease6
+	leases6Fn  func() ([]sourceadapter.Lease6, error)
+	leases6Err error
+	raErr      error
+	raOffs     int
+	raRestores int
+	raParams   []sourceadapter.RAParams
+	// v6Stops and v6StopRestores count StopV6Server and its restores.
+	v6StopErr      error
+	v6Stops        int
+	v6StopRestores int
 }
 
 func (f *fakeAdapter) Capabilities() []sourceadapter.Capability { return f.caps }
@@ -42,12 +105,135 @@ func (f *fakeAdapter) Leases(_ context.Context) ([]sourceadapter.Lease, error) {
 	}
 	return f.leases, f.err
 }
-func (f *fakeAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
-func (f *fakeAdapter) ResetLeases(_ context.Context) error             { return f.resetErr }
-func (f *fakeAdapter) Restart(_ context.Context) error                 { return nil }
-func (f *fakeAdapter) Stop(_ context.Context) error                    { return nil }
-func (f *fakeAdapter) Start(_ context.Context) error                   { return nil }
-func (f *fakeAdapter) Reachable(_ context.Context, _ string) error     { return f.reachErr }
+func (f *fakeAdapter) ReserveMAC(_ context.Context, mac, ip string) error {
+	f.reservedMAC = append(f.reservedMAC, mac+"="+ip)
+	return f.reserveErr
+}
+func (f *fakeAdapter) ReserveClientID(_ context.Context, id, ip string) error {
+	f.reservedID = append(f.reservedID, id+"="+ip)
+	return f.reserveErr
+}
+func (f *fakeAdapter) SetDNSOption(_ context.Context, addr string) (func(context.Context) error, error) {
+	if f.dnsErr != nil {
+		return nil, f.dnsErr
+	}
+	f.dnsSet = addr
+	return func(context.Context) error { f.dnsRestored = true; return nil }, nil
+}
+func (f *fakeAdapter) ResetLeases(_ context.Context) error {
+	f.resets++
+	if f.onReset != nil {
+		f.onReset()
+	}
+	return f.resetErr
+}
+func (f *fakeAdapter) Restart(_ context.Context) error { return nil }
+func (f *fakeAdapter) Stop(_ context.Context) error {
+	f.stops++
+	if f.onStop != nil {
+		f.onStop()
+	}
+	return f.stopErr
+}
+func (f *fakeAdapter) Start(_ context.Context) error {
+	f.starts++
+	if f.onStart != nil {
+		f.onStart()
+	}
+	return f.startErr
+}
+func (f *fakeAdapter) Ready(_ context.Context) error {
+	f.readyCalls++
+	if len(f.readyErrs) > 0 {
+		err := f.readyErrs[0]
+		f.readyErrs = f.readyErrs[1:]
+		return err
+	}
+	return nil
+}
+func (f *fakeAdapter) Recover(_ context.Context) error { f.recovered++; return f.recoverErr }
+func (f *fakeAdapter) Impair(_ context.Context, delay time.Duration, loss int) (func(context.Context) error, error) {
+	if f.impairErr != nil {
+		return nil, f.impairErr
+	}
+	f.impaired = append(f.impaired, fmt.Sprintf("%s/%d", delay, loss))
+	return func(context.Context) error { f.impairRestored++; return nil }, nil
+}
+func (f *fakeAdapter) EnableFeature(_ context.Context, ft sourceadapter.Feature, p sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	if f.featureErr != nil {
+		return nil, f.featureErr
+	}
+	f.features = append(f.features, ft)
+	f.featureParams = append(f.featureParams, p)
+	return func(ctx context.Context) error {
+		f.featureRestores++
+		f.featureRestoreCtx = ctx.Err()
+		return f.featureRestoreEr
+	}, nil
+}
+func (f *fakeAdapter) Reachable(_ context.Context, _ string) error { return f.reachErr }
+func fakeActor(log *[]string, entry string, err error, on func(), stops *int, onStop func()) (func(context.Context) error, error) {
+	if err != nil {
+		return nil, err
+	}
+	*log = append(*log, entry)
+	if on != nil {
+		on()
+	}
+	return func(context.Context) error {
+		*stops++
+		if onStop != nil {
+			onStop()
+		}
+		return nil
+	}, nil
+}
+func (f *fakeAdapter) Squat(_ context.Context, addr string, announce bool) (func(context.Context) error, error) {
+	return fakeActor(&f.squats, fmt.Sprintf("%s/%t", addr, announce), f.squatErr, f.onSquat, &f.squatStops, nil)
+}
+func (f *fakeAdapter) StartRogue(_ context.Context, srv, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.rogues, srv+" "+first+"-"+last, f.rogueErr, f.onRogue, &f.rogueStops, nil)
+}
+func (f *fakeAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return f.rogueLeases, nil
+}
+func (f *fakeAdapter) NarrowPool(_ context.Context, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.narrows, first+"-"+last, f.narrowErr, f.onNarrow, &f.narrowRestores, f.onNarrowRestore)
+}
+func (f *fakeAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
+func (f *fakeAdapter) Renumber(_ context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
+	return fakeActor(&f.renumbers, subnet+" "+addr+" "+first+"-"+last, f.renumberErr, f.onRenumber, &f.renumberRests, f.onRenumberRestore)
+}
+func (f *fakeAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error) {
+	if f.leases6Fn != nil {
+		return f.leases6Fn()
+	}
+	return f.leases6, f.leases6Err
+}
+func (f *fakeAdapter) SetRA(_ context.Context, p sourceadapter.RAParams) (func(context.Context) error, error) {
+	if f.raErr != nil {
+		return nil, f.raErr
+	}
+	f.raOffs++
+	f.raParams = append(f.raParams, p)
+	return func(context.Context) error { f.raRestores++; return nil }, nil
+}
+func (f *fakeAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	if f.v6StopErr != nil {
+		return nil, f.v6StopErr
+	}
+	f.v6Stops++
+	return func(context.Context) error { f.v6StopRestores++; return nil }, nil
+}
+func (f *fakeAdapter) SendForceRenew(_ context.Context, _ []byte, p sourceadapter.ForceRenewParams) (string, error) {
+	f.forceRenews = append(f.forceRenews, p)
+	if f.onForceRenew != nil {
+		return f.onForceRenew(p)
+	}
+	return fmt.Sprintf("forcerenew mode=%s xid=0x%08x", p.Mode, len(f.forceRenews)), nil
+}
 func (f *fakeAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	if f.shortenErr != nil {
 		return nil, f.shortenErr

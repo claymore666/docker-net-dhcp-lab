@@ -1,0 +1,5 @@
+# Pinned checksum for the MikroTik CHR 7.24.5 raw disk image zip (issue #9).
+# MikroTik publishes no checksum file next to the download, so this is the
+# sum of the first fetch, pinned by hand (trust on first use).
+# fetch-base-image.sh refuses any later download that does not match.
+16f07222a3213352c9c4fbea4f4dec6a8ffb78fdc0fa5e398c23103ed357c6eb  chr-7.24.5.img.zip

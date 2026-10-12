@@ -1,0 +1,158 @@
+# Cell declarations for the lab controller (labctl). Every address here
+# stays inside 10.200.0.0/16 (IPv4) or the ULA /48 below (RFC 4193): both
+# are ours to publish. No cell may declare a subnet outside these ranges;
+# `labctl validate` refuses one that does (issue #1).
+management:
+  # Nested VMs reach the internet through this libvirt network only, for
+  # apt and image pulls. No DHCP server runs on it: the address below is
+  # rendered into each VM's cloud-init network-config instead.
+  libvirt_network: net-mgmt
+  subnet: 10.200.255.0/24
+  gateway: 10.200.255.1
+
+ula_prefix: "fd42:200::/48"
+
+cells:
+  - name: kea
+    description: >
+      Kea 2.6, apt install, stock config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-kea
+      subnet: 10.200.1.0/24
+      subnet6: "fd42:200:0:100::/64"
+    source:
+      type: kea
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.21/24
+      seg_address: 10.200.1.2/24
+      pool_start: 10.200.1.100
+      pool_end: 10.200.1.200
+      seg_address6: "fd42:200:0:100::2/64"
+      pool6_start: "fd42:200:0:100::100"
+      pool6_end: "fd42:200:0:100::1ff"
+      temp6_pool: "fd42:200:0:100::200/120"
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.20/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: isc-dhcp
+    description: >
+      ISC dhcpd 4.4, apt install, stock config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-isc-dhcp
+      subnet: 10.200.2.0/24
+      subnet6: "fd42:200:0:200::/64"
+    source:
+      type: isc-dhcp
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.31/24
+      seg_address: 10.200.2.2/24
+      pool_start: 10.200.2.100
+      pool_end: 10.200.2.200
+      seg_address6: "fd42:200:0:200::2/64"
+      pool6_start: "fd42:200:0:200::100"
+      pool6_end: "fd42:200:0:200::1ff"
+      temp6_pool: "fd42:200:0:200::200/120"
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.30/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: dnsmasq
+    description: >
+      dnsmasq 2.91, apt install, default config plus a pool. Issue #2.
+    segment:
+      bridge: lab-br-dnsmasq
+      subnet: 10.200.3.0/24
+      subnet6: "fd42:200:0:300::/64"
+    source:
+      type: dnsmasq
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.41/24
+      seg_address: 10.200.3.2/24
+      pool_start: 10.200.3.100
+      pool_end: 10.200.3.200
+      seg_address6: "fd42:200:0:300::2/64"
+      pool6_start: "fd42:200:0:300::100"
+      pool6_end: "fd42:200:0:300::1ff"
+      temp6_pool: "fd42:200:0:300::200/120"
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.40/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: udhcpd
+    description: >
+      busybox udhcpd 1.37, apt install, one pool. It keys leases by MAC
+      only, so ipvlan children that share a parent MAC meet the same
+      lease. Issue #10.
+    segment:
+      bridge: lab-br-udhcpd
+      subnet: 10.200.12.0/24
+    source:
+      type: udhcpd
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.121/24
+      seg_address: 10.200.12.2/24
+      pool_start: 10.200.12.100
+      pool_end: 10.200.12.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.120/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
+  - name: pihole
+    description: >
+      Pi-hole 6 (FTL, an embedded dnsmasq), installed by its own unattended
+      installer on Debian 13; scenario edits go to a lab-owned file under
+      /etc/dnsmasq.d. Issue #10.
+    segment:
+      bridge: lab-br-pihole
+      subnet: 10.200.13.0/24
+    source:
+      type: pihole
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.131/24
+      seg_address: 10.200.13.2/24
+      pool_start: 10.200.13.100
+      pool_end: 10.200.13.200
+      vcpus: 1
+      memory_mib: 1024
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.130/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

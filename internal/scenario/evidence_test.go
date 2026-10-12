@@ -23,11 +23,15 @@ func (a *countingReachAdapter) Capabilities() []sourceadapter.Capability { retur
 func (a *countingReachAdapter) Leases(_ context.Context) ([]sourceadapter.Lease, error) {
 	return nil, nil
 }
-func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error { return nil }
-func (a *countingReachAdapter) ResetLeases(_ context.Context) error             { return nil }
-func (a *countingReachAdapter) Restart(_ context.Context) error                 { return nil }
-func (a *countingReachAdapter) Stop(_ context.Context) error                    { return nil }
-func (a *countingReachAdapter) Start(_ context.Context) error                   { return nil }
+func (a *countingReachAdapter) ReserveMAC(_ context.Context, _, _ string) error      { return nil }
+func (a *countingReachAdapter) ResetLeases(_ context.Context) error                  { return nil }
+func (a *countingReachAdapter) Restart(_ context.Context) error                      { return nil }
+func (a *countingReachAdapter) Stop(_ context.Context) error                         { return nil }
+func (a *countingReachAdapter) Start(_ context.Context) error                        { return nil }
+func (a *countingReachAdapter) ReserveClientID(_ context.Context, _, _ string) error { return nil }
+func (a *countingReachAdapter) SetDNSOption(_ context.Context, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
 func (a *countingReachAdapter) ShortenLeaseTime(_ context.Context, _ int) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
@@ -79,4 +83,44 @@ func TestReachableWithRetryDoesNotPassAfterTheWindowElapses(t *testing.T) {
 	if want := int(reachabilityWindow / time.Second); secs <= want {
 		t.Fatalf("want the reported seconds to reflect the real elapsed time (> %ds), got %d", want, secs)
 	}
+}
+
+func (a *countingReachAdapter) Ready(_ context.Context) error   { return nil }
+func (a *countingReachAdapter) Recover(_ context.Context) error { return nil }
+func (a *countingReachAdapter) SendForceRenew(_ context.Context, _ []byte, _ sourceadapter.ForceRenewParams) (string, error) {
+	return "", nil
+}
+func (a *countingReachAdapter) EnableFeature(_ context.Context, _ sourceadapter.Feature, _ sourceadapter.FeatureParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) Impair(_ context.Context, _ time.Duration, _ int) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) Squat(_ context.Context, _ string, _ bool) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) StartRogue(_ context.Context, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) RogueLeases(_ context.Context) ([]sourceadapter.Lease, error) {
+	return nil, nil
+}
+func (a *countingReachAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
+func (a *countingReachAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+
+func (a *countingReachAdapter) Leases6(_ context.Context) ([]sourceadapter.Lease6, error) {
+	return nil, nil
+}
+func (a *countingReachAdapter) SetRA(_ context.Context, _ sourceadapter.RAParams) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
+}
+func (a *countingReachAdapter) StopV6Server(context.Context) (func(context.Context) error, error) {
+	return func(context.Context) error { return nil }, nil
 }

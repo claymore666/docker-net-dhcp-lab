@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,6 +18,10 @@ import (
 // maxIfnameLen is IFNAMSIZ-1: the kernel's Linux network interface name
 // limit (16 bytes including a terminating NUL).
 const maxIfnameLen = 15
+
+// bridgePrefix is lab-seg-firewall.sh's `lab-br+` match (#11): bridged
+// traffic on any other bridge is not forwarded.
+const bridgePrefix = "lab-br-"
 
 // Every field also carries a json tag, matching the yaml name: `labctl
 // resolve` emits JSON and the provisioning shell scripts read it with jq
@@ -25,9 +32,16 @@ type Management struct {
 	Gateway        string `yaml:"gateway" json:"gateway"`
 }
 
+// Subnet6 is the cell's IPv6 /64 inside ula_prefix; a cell without it has
+// no IPv6 segment (#23 group D).
 type Segment struct {
-	Bridge string `yaml:"bridge" json:"bridge"`
-	Subnet string `yaml:"subnet" json:"subnet"`
+	Bridge  string `yaml:"bridge" json:"bridge"`
+	Subnet  string `yaml:"subnet" json:"subnet"`
+	Subnet6 string `yaml:"subnet6,omitempty" json:"subnet6,omitempty"`
+	// Uplink is the host NIC a physical source hangs off, enslaved into
+	// the cell's bridge by up-cell.sh. Only a fritzbox cell sets it, and
+	// only from uplinkRE (lab #13).
+	Uplink string `yaml:"uplink,omitempty" json:"uplink,omitempty"`
 }
 
 type DockerHost struct {
@@ -57,24 +71,96 @@ type DockerHost struct {
 // the pool this source hands to ordinary clients; the adapter's
 // ReserveMAC keeps a separate per-MAC reservation outside that range.
 type Source struct {
-	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq
+	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd | pihole | routeros | openwrt | fritzbox
 	BaseImage   string `yaml:"base_image" json:"base_image"`
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
 	PoolStart   string `yaml:"pool_start" json:"pool_start"`
 	PoolEnd     string `yaml:"pool_end" json:"pool_end"`
+	// The IPv6 side, required exactly when the cell has segment.subnet6:
+	// eth1's static address, the DHCPv6 IA_NA range, and the prefix the
+	// isc-dhcp template serves IA_TA from (#23 group D).
+	SegAddress6 string `yaml:"seg_address6,omitempty" json:"seg_address6,omitempty"`
+	Pool6Start  string `yaml:"pool6_start,omitempty" json:"pool6_start,omitempty"`
+	Pool6End    string `yaml:"pool6_end,omitempty" json:"pool6_end,omitempty"`
+	Temp6Pool   string `yaml:"temp6_pool,omitempty" json:"temp6_pool,omitempty"`
 	VCPUs       int    `yaml:"vcpus" json:"vcpus"`
 	MemoryMiB   int    `yaml:"memory_mib" json:"memory_mib"`
 	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
+	// Partner, when set, makes the source a failover pair (lab #12).
+	Partner *Peer `yaml:"partner" json:"partner,omitempty"`
+	// Device names the physical box behind a fritzbox source; the VM at
+	// mgmt_address is only the probe that reaches it (lab #13).
+	Device *Device `yaml:"device,omitempty" json:"device,omitempty"`
 }
 
-var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true}
+// Device is the real DHCP server of a fritzbox cell. Address is the box
+// and equals source.seg_address, the address the scenarios judge against;
+// ProbeAddress is the probe VM's own address on the segment. The password
+// is never in lab.yaml: PasswordEnv names an environment variable on the
+// lab host (lab #13).
+type Device struct {
+	Address      string `yaml:"address" json:"address"`
+	ProbeAddress string `yaml:"probe_address" json:"probe_address"`
+	TR064User    string `yaml:"tr064_user" json:"tr064_user"`
+	PasswordEnv  string `yaml:"password_env" json:"password_env"`
+}
+
+// Peer is the second server of a failover pair: same type, image and
+// pool as its primary, its own management and segment address.
+type Peer struct {
+	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
+	SegAddress  string `yaml:"seg_address" json:"seg_address"`
+	SegAddress6 string `yaml:"seg_address6,omitempty" json:"seg_address6,omitempty"`
+}
+
+// pairTypes are the source types with a failover mode (lab #12).
+var pairTypes = map[string]bool{"kea": true, "isc-dhcp": true}
+
+// Host octets the group B scenarios (#23) hand out on every segment: the
+// per-MAC reservations from 211, the class pool up to 230, the DNS option
+// value at 253. internal/scenario pins them to its own constants.
+const (
+	GroupBBandFirstHost = 211
+	GroupBBandLastHost  = 230
+	DNSOptionHost       = 253
+)
+
+var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true, "pihole": true, "routeros": true, "openwrt": true, "fritzbox": true}
+
+// v4OnlySources are the source types whose server has no DHCPv6 (lab #10:
+// busybox udhcpd) or whose cell leaves it out (lab #9: OpenWrt, whose
+// odhcpd the image disables). Their cells carry no IPv6 block, and every
+// other type must (#23 group D). The adapter's own CapV6 absence is the
+// other half.
+var v4OnlySources = map[string]bool{"udhcpd": true, "pihole": true, "routeros": true, "openwrt": true}
+
+// SourceServesV6 reports whether a source of this type serves DHCPv6, so a
+// cell of that type needs the IPv6 block; up-source.sh reads it from
+// `labctl resolve`.
+func SourceServesV6(sourceType string) bool { return !v4OnlySources[sourceType] }
+
+// Relay is a DHCP relay VM between the cell's segment (the Docker host's
+// side) and a second, server-side segment that holds the source (#11).
+// ClientAddress is the giaddr and the router the source advertises.
+type Relay struct {
+	BaseImage     string  `yaml:"base_image" json:"base_image"`
+	MgmtAddress   string  `yaml:"mgmt_address" json:"mgmt_address"`
+	ClientAddress string  `yaml:"client_address" json:"client_address"`
+	ServerAddress string  `yaml:"server_address" json:"server_address"`
+	ServerSegment Segment `yaml:"server_segment" json:"server_segment"`
+	AgentOptions  bool    `yaml:"agent_options" json:"agent_options"`
+	VCPUs         int     `yaml:"vcpus" json:"vcpus"`
+	MemoryMiB     int     `yaml:"memory_mib" json:"memory_mib"`
+	DiskGiB       int     `yaml:"disk_gib" json:"disk_gib"`
+}
 
 type Cell struct {
 	Name        string     `yaml:"name" json:"name"`
 	Description string     `yaml:"description" json:"description"`
 	Segment     Segment    `yaml:"segment" json:"segment"`
 	Source      *Source    `yaml:"source" json:"source"` // null when the cell has no IP source (issue #1)
+	Relay       *Relay     `yaml:"relay" json:"relay"`   // null unless the source sits behind a relay (#11)
 	DockerHost  DockerHost `yaml:"docker_host" json:"docker_host"`
 }
 
@@ -119,9 +205,17 @@ func (c *Config) Validate() error {
 	if len(c.Cells) == 0 {
 		return fmt.Errorf("at least one cell is required")
 	}
+	var ula netip.Prefix
+	if c.ULAPrefix != "" {
+		if ula, err = parseULA(c.ULAPrefix); err != nil {
+			return fmt.Errorf("ula_prefix: %w", err)
+		}
+	}
+	var seen6 []netip.Prefix
 	seenBridge := map[string]bool{}
-	seenSubnet := map[string]bool{}
+	var seenSubnets []netip.Prefix
 	seenMgmt := map[string]bool{}
+	seenUplink := map[string]string{}
 	for i, cell := range c.Cells {
 		if cell.Name == "" {
 			return fmt.Errorf("cells[%d]: name is required", i)
@@ -136,6 +230,9 @@ func (c *Config) Validate() error {
 		if len(cell.Segment.Bridge) > maxIfnameLen {
 			return fmt.Errorf("cell %s: segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", cell.Name, cell.Segment.Bridge, len(cell.Segment.Bridge), maxIfnameLen)
 		}
+		if !strings.HasPrefix(cell.Segment.Bridge, bridgePrefix) {
+			return fmt.Errorf("cell %s: segment.bridge %q does not start with %s, the only bridges lab-seg-firewall.sh forwards", cell.Name, cell.Segment.Bridge, bridgePrefix)
+		}
 		if seenBridge[cell.Segment.Bridge] {
 			return fmt.Errorf("cell %s: bridge %s reused by another cell", cell.Name, cell.Segment.Bridge)
 		}
@@ -147,18 +244,40 @@ func (c *Config) Validate() error {
 		if err := mustBeLabRange(segPrefix); err != nil {
 			return fmt.Errorf("cell %s: segment.subnet: %w", cell.Name, err)
 		}
-		if seenSubnet[segPrefix.String()] {
-			return fmt.Errorf("cell %s: subnet %s reused by another cell", cell.Name, segPrefix)
+		if err := checkSubnetFree(segPrefix, mgmtPrefix, seenSubnets); err != nil {
+			return fmt.Errorf("cell %s: segment.subnet %w", cell.Name, err)
 		}
-		seenSubnet[segPrefix.String()] = true
-		if overlaps(segPrefix, mgmtPrefix) {
-			return fmt.Errorf("cell %s: segment.subnet overlaps the management subnet", cell.Name)
+		seenSubnets = append(seenSubnets, segPrefix)
+		if err := validateUplink(&cell, seenUplink); err != nil {
+			return err
+		}
+		var seg6 netip.Prefix
+		if cell.Segment.Subnet6 != "" {
+			if !ula.IsValid() {
+				return fmt.Errorf("cell %s: segment.subnet6 needs ula_prefix", cell.Name)
+			}
+			if seg6, err = netip.ParsePrefix(cell.Segment.Subnet6); err != nil {
+				return fmt.Errorf("cell %s: segment.subnet6: %w", cell.Name, err)
+			}
+			if err := mustBeLabRange6(seg6, ula); err != nil {
+				return fmt.Errorf("cell %s: segment.subnet6: %w", cell.Name, err)
+			}
+			for _, o := range seen6 {
+				if overlaps(seg6, o) {
+					return fmt.Errorf("cell %s: segment.subnet6 %s overlaps %s of another cell", cell.Name, seg6, o)
+				}
+			}
+			seen6 = append(seen6, seg6)
 		}
 		if cell.DockerHost.BaseImage == "" {
 			return fmt.Errorf("cell %s: docker_host.base_image is required", cell.Name)
 		}
-		if _, err := LookupBaseImage(cell.DockerHost.BaseImage); err != nil {
+		dhImage, err := LookupBaseImage(cell.DockerHost.BaseImage)
+		if err != nil {
 			return fmt.Errorf("cell %s: docker_host.base_image: %w", cell.Name, err)
+		}
+		if dhImage.NetStack != NetStackNetplan && dhImage.NetStack != NetStackIfupdown {
+			return fmt.Errorf("cell %s: docker_host.base_image %s has no net_stack in internal/labyaml/baseimages.go", cell.Name, dhImage.Name)
 		}
 		if cell.DockerHost.PluginTag == "" {
 			return fmt.Errorf("cell %s: docker_host.plugin_tag is required", cell.Name)
@@ -175,21 +294,208 @@ func (c *Config) Validate() error {
 		}
 		seenMgmt[mgmtAddr.Addr().String()] = true
 
-		if cell.Source != nil {
-			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, seenMgmt); err != nil {
+		// Behind a relay the source's own address lives on the server
+		// segment while its pool stays on the client segment (#11).
+		addrPrefix, addrField := segPrefix, "segment.subnet"
+		if cell.Relay != nil {
+			p, err := validateRelay(&cell, mgmtPrefix, segPrefix, seenBridge, &seenSubnets, seenMgmt)
+			if err != nil {
 				return err
 			}
+			addrPrefix, addrField = p, "relay.server_segment.subnet"
+		}
+		if cell.Source != nil {
+			if err := validateSource(cell.Name, cell.Source, mgmtPrefix, segPrefix, addrPrefix, addrField, seenMgmt); err != nil {
+				return err
+			}
+			if err := validateSource6(cell.Name, cell.Source, seg6); err != nil {
+				return err
+			}
+			if cell.Source.Partner != nil {
+				if err := validatePartner6(cell.Name, cell.Source, seg6); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return validateC9Targets(c.Cells)
+}
+
+// C9OctetShift is how far scenario C9 (Renumber) moves the third octet of
+// a cell's segment (#23). internal/scenario takes its shift from here so
+// the collision check below cannot drift from what C9 does.
+const C9OctetShift = 100
+
+// validateC9Targets refuses a cell whose C9 target, its segment with the
+// third octet raised by C9OctetShift, is another cell's segment: the
+// renumbered source would then share a bridge with an unrelated cell
+// (DESIGN-910 D18).
+func validateC9Targets(cells []Cell) error {
+	owner := map[netip.Prefix]string{}
+	for _, cell := range cells {
+		if p, err := netip.ParsePrefix(cell.Segment.Subnet); err == nil {
+			owner[p.Masked()] = cell.Name
+		}
+	}
+	for _, cell := range cells {
+		p, err := netip.ParsePrefix(cell.Segment.Subnet)
+		if err != nil || !p.Addr().Is4() {
+			continue
+		}
+		b := p.Addr().As4()
+		if int(b[2])+C9OctetShift > 254 {
+			continue
+		}
+		b[2] += C9OctetShift
+		target := netip.PrefixFrom(netip.AddrFrom4(b), p.Bits()).Masked()
+		if other, ok := owner[target]; ok {
+			return fmt.Errorf("cell %s: its C9 renumber target %s is the segment of cell %s", cell.Name, target, other)
 		}
 	}
 	return nil
 }
 
+// checkSubnetFree refuses a subnet that overlaps management or any
+// segment subnet seen so far, of either kind: an exact-match check let
+// a /23 swallow a sibling /24 (#11).
+func checkSubnetFree(p, mgmtPrefix netip.Prefix, seen []netip.Prefix) error {
+	if overlaps(p, mgmtPrefix) {
+		return fmt.Errorf("overlaps the management subnet")
+	}
+	for _, q := range seen {
+		if overlaps(p, q) {
+			return fmt.Errorf("%s overlaps segment subnet %s", p, q)
+		}
+	}
+	return nil
+}
+
+// validateRelay checks a cell's relay block and returns its server
+// segment's prefix. The client address is the giaddr and the router, so
+// it must sit on the client segment, outside the pool and outside the
+// host octets groups B, C and F claim at run time (ReservedGroupHost, #11).
+func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge map[string]bool, seenSubnets *[]netip.Prefix, seenMgmt map[string]bool) (netip.Prefix, error) {
+	r := cell.Relay
+	fail := func(format string, a ...any) (netip.Prefix, error) {
+		return netip.Prefix{}, fmt.Errorf("cell %s: relay.%s", cell.Name, fmt.Sprintf(format, a...))
+	}
+	if cell.Source == nil {
+		return fail("needs a source behind it")
+	}
+	if cell.Source.Type != "kea" {
+		return fail("is only built for a kea source; isc-dhcp needs an empty server-segment subnet stanza first")
+	}
+	if r.BaseImage == "" {
+		return fail("base_image is required")
+	}
+	if _, err := LookupBaseImage(r.BaseImage); err != nil {
+		return fail("base_image: %v", err)
+	}
+	if r.ServerSegment.Uplink != "" {
+		return fail("server_segment.uplink is not supported")
+	}
+	b := r.ServerSegment.Bridge
+	if b == "" {
+		return fail("server_segment.bridge is required")
+	}
+	if len(b) > maxIfnameLen {
+		return fail("server_segment.bridge %q is %d characters, longer than the kernel's %d-character interface name limit", b, len(b), maxIfnameLen)
+	}
+	if !strings.HasPrefix(b, bridgePrefix) {
+		return fail("server_segment.bridge %q does not start with %s, the only bridges lab-seg-firewall.sh forwards", b, bridgePrefix)
+	}
+	if seenBridge[b] {
+		return fail("server_segment.bridge %s reused by another segment", b)
+	}
+	seenBridge[b] = true
+	srvPrefix, err := netip.ParsePrefix(r.ServerSegment.Subnet)
+	if err != nil {
+		return fail("server_segment.subnet: %v", err)
+	}
+	if err := mustBeLabRange(srvPrefix); err != nil {
+		return fail("server_segment.subnet: %v", err)
+	}
+	if err := checkSubnetFree(srvPrefix, mgmtPrefix, *seenSubnets); err != nil {
+		return fail("server_segment.subnet %v", err)
+	}
+	*seenSubnets = append(*seenSubnets, srvPrefix)
+
+	mgmtAddr, err := netip.ParsePrefix(r.MgmtAddress)
+	if err != nil {
+		return fail("mgmt_address: %v", err)
+	}
+	if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+		return fail("mgmt_address is not inside management.subnet")
+	}
+	if seenMgmt[mgmtAddr.Addr().String()] {
+		return fail("mgmt_address %s reused by another host in lab.yaml", mgmtAddr.Addr())
+	}
+	seenMgmt[mgmtAddr.Addr().String()] = true
+
+	client, err := legAddress(r.ClientAddress, segPrefix)
+	if err != nil {
+		return fail("client_address: %v", err)
+	}
+	start, err1 := netip.ParseAddr(cell.Source.PoolStart)
+	end, err2 := netip.ParseAddr(cell.Source.PoolEnd)
+	if err1 == nil && err2 == nil && client.Compare(start) >= 0 && client.Compare(end) <= 0 {
+		return fail("client_address %s lies inside the source pool", client)
+	}
+	if ReservedGroupHost(int(client.As4()[3])) {
+		return fail("client_address %s is a host octet group B, C or F reserves", client)
+	}
+	server, err := legAddress(r.ServerAddress, srvPrefix)
+	if err != nil {
+		return fail("server_address: %v", err)
+	}
+	if seg, err := netip.ParsePrefix(cell.Source.SegAddress); err == nil && seg.Addr() == server {
+		return fail("server_address %s is also source.seg_address", server)
+	}
+	return srvPrefix, nil
+}
+
+// legAddress parses one relay leg's address: a host inside its segment
+// (not the network or broadcast address) with the segment's prefix
+// length, because netplan gets it as is (#11).
+func legAddress(s string, seg netip.Prefix) (netip.Addr, error) {
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	if !seg.Contains(p.Addr()) {
+		return netip.Addr{}, fmt.Errorf("%s is not inside %s", p.Addr(), seg)
+	}
+	if p.Bits() != seg.Bits() {
+		return netip.Addr{}, fmt.Errorf("prefix length /%d differs from its segment's /%d", p.Bits(), seg.Bits())
+	}
+	network := seg.Masked().Addr().As4()
+	bcast := network
+	for i := range bcast {
+		hostBits := 8 - max(0, min(8, seg.Bits()-8*i))
+		bcast[i] |= byte(1<<hostBits - 1)
+	}
+	if a := p.Addr().As4(); a == network || a == bcast {
+		return netip.Addr{}, fmt.Errorf("%s is the network or broadcast address of %s", p.Addr(), seg.Masked())
+	}
+	return p.Addr(), nil
+}
+
+// ReservedGroupHost reports whether a /24 host octet is one group B, C or
+// F claims at run time: 201-202 C8's narrowed pool, 203-210 user-class
+// pool, 211-220 reservations, 221-230 class pool, 231-235 C6's squat
+// targets, 240-250 C7's rogue server and its pool, 253 DNS option.
+// internal/scenario owns the numbers; TestRelayReservedHostsMatchTheGroups
+// keeps them equal (#11, #23).
+func ReservedGroupHost(host int) bool {
+	return (host >= 201 && host <= 235) || (host >= 240 && host <= 250) || host == 253
+}
+
 // validateSource checks one cell's IP source: it must sit inside the
 // cell's own segment (never management.subnet, issue #2), and its pool
 // must be a real range inside that same segment.
-func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
+func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefix netip.Prefix, addrField string, seenMgmt map[string]bool) error {
 	if !sourceTypes[s.Type] {
-		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq", cellName, s.Type)
+		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd, pihole, routeros, openwrt, fritzbox", cellName, s.Type)
 	}
 	if s.BaseImage == "" {
 		return fmt.Errorf("cell %s: source.base_image is required", cellName)
@@ -213,8 +519,8 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 	if err != nil {
 		return fmt.Errorf("cell %s: source.seg_address: %w", cellName, err)
 	}
-	if !segPrefix.Contains(segAddr.Addr()) {
-		return fmt.Errorf("cell %s: source.seg_address is not inside segment.subnet", cellName)
+	if !addrPrefix.Contains(segAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.seg_address is not inside %s", cellName, addrField)
 	}
 
 	start, err := netip.ParseAddr(s.PoolStart)
@@ -231,8 +537,142 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix netip.Pref
 	if start.Compare(end) >= 0 {
 		return fmt.Errorf("cell %s: source.pool_start must be lower than source.pool_end", cellName)
 	}
-	if start == segAddr.Addr() || end == segAddr.Addr() {
+	// The whole range, not its two ends: a pool that merely spans the
+	// address would lease it to a container (lab #13).
+	if a := segAddr.Addr(); start.Compare(a) <= 0 && a.Compare(end) <= 0 {
 		return fmt.Errorf("cell %s: source pool overlaps the source's own seg_address", cellName)
+	}
+	if err := validateDevice(cellName, s, segPrefix, segAddr, start, end); err != nil {
+		return err
+	}
+	if s.Partner != nil {
+		return validatePartner(cellName, s, segAddr.Addr(), start, end, mgmtPrefix, segPrefix, seenMgmt)
+	}
+	return nil
+}
+
+// uplinkRE is the exact allow-list of host NICs a cell may enslave: the
+// lab NIC, one VLAN of it (1-4094, no leading zero) and the Fritz.Box
+// leg. Never eth0 or any other NIC (lab #13).
+var uplinkRE = regexp.MustCompile(`^(lab0|lab1|lab0\.([1-9][0-9]{0,3}))$`)
+
+func validUplink(u string) bool {
+	m := uplinkRE.FindStringSubmatch(u)
+	if m == nil {
+		return false
+	}
+	if m[2] != "" {
+		n, _ := strconv.Atoi(m[2])
+		return n <= 4094
+	}
+	return true
+}
+
+// validateUplink ties segment.uplink to a fritzbox source, refuses a NIC
+// outside the allow-list and a NIC two cells would both enslave.
+func validateUplink(cell *Cell, seen map[string]string) error {
+	u := cell.Segment.Uplink
+	box := cell.Source != nil && cell.Source.Type == "fritzbox"
+	switch {
+	case u == "" && box:
+		return fmt.Errorf("cell %s: segment.uplink is required for source.type fritzbox", cell.Name)
+	case u == "":
+		return nil
+	case !box:
+		return fmt.Errorf("cell %s: segment.uplink is only for source.type fritzbox", cell.Name)
+	case !validUplink(u):
+		return fmt.Errorf("cell %s: segment.uplink %q is not one of lab0, lab0.N (N 1-4094) or lab1", cell.Name, u)
+	}
+	if other, ok := seen[u]; ok {
+		return fmt.Errorf("cell %s: segment.uplink %s is already enslaved by cell %s", cell.Name, u, other)
+	}
+	seen[u] = cell.Name
+	return nil
+}
+
+var passwordEnvRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+// validateDevice checks the fritzbox block: present exactly for that
+// type, the box at seg_address, the probe beside it, both outside the
+// pool, and a password given only as an environment variable name.
+func validateDevice(cellName string, s *Source, segPrefix netip.Prefix, segAddr netip.Prefix, start, end netip.Addr) error {
+	d := s.Device
+	if s.Type != "fritzbox" {
+		if d != nil {
+			return fmt.Errorf("cell %s: source.device is only for source.type fritzbox", cellName)
+		}
+		return nil
+	}
+	if d == nil {
+		return fmt.Errorf("cell %s: source.device is required for source.type fritzbox", cellName)
+	}
+	box, err := legAddress(d.Address, segPrefix)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.device.address: %w", cellName, err)
+	}
+	if box != segAddr.Addr() || segAddr.Bits() != segPrefix.Bits() {
+		return fmt.Errorf("cell %s: source.device.address %s differs from source.seg_address %s", cellName, d.Address, s.SegAddress)
+	}
+	probe, err := legAddress(d.ProbeAddress, segPrefix)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.device.probe_address: %w", cellName, err)
+	}
+	if probe == box {
+		return fmt.Errorf("cell %s: source.device.probe_address %s is the box's own address", cellName, probe)
+	}
+	for _, a := range []netip.Addr{box, probe} {
+		if start.Compare(a) <= 0 && a.Compare(end) <= 0 {
+			return fmt.Errorf("cell %s: source pool covers %s, an address of the box or its probe", cellName, a)
+		}
+	}
+	if d.TR064User == "" {
+		return fmt.Errorf("cell %s: source.device.tr064_user is required", cellName)
+	}
+	if !passwordEnvRE.MatchString(d.PasswordEnv) {
+		return fmt.Errorf("cell %s: source.device.password_env must name an environment variable (upper case, digits, underscore), never the password itself", cellName)
+	}
+	return nil
+}
+
+// validatePartner checks a failover pair's second server: an address of
+// its own below the source pool, clear of every scenario band (#12).
+func validatePartner(cellName string, s *Source, primarySeg, start, end netip.Addr, mgmtPrefix, segPrefix netip.Prefix, seenMgmt map[string]bool) error {
+	p := s.Partner
+	if !pairTypes[s.Type] {
+		return fmt.Errorf("cell %s: source.partner needs source.type kea or isc-dhcp, not %q", cellName, s.Type)
+	}
+	mgmtAddr, err := netip.ParsePrefix(p.MgmtAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address: %w", cellName, err)
+	}
+	if !mgmtPrefix.Contains(mgmtAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address is not inside management.subnet", cellName)
+	}
+	if seenMgmt[mgmtAddr.Addr().String()] {
+		return fmt.Errorf("cell %s: source.partner.mgmt_address %s reused by another host in lab.yaml", cellName, mgmtAddr.Addr())
+	}
+	seenMgmt[mgmtAddr.Addr().String()] = true
+	segAddr, err := netip.ParsePrefix(p.SegAddress)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.seg_address: %w", cellName, err)
+	}
+	a := segAddr.Addr()
+	if !segPrefix.Contains(a) {
+		return fmt.Errorf("cell %s: source.partner.seg_address is not inside segment.subnet", cellName)
+	}
+	if a == primarySeg {
+		return fmt.Errorf("cell %s: source.partner.seg_address equals source.seg_address", cellName)
+	}
+	if a.Compare(start) >= 0 && a.Compare(end) <= 0 {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is inside the source pool", cellName, a)
+	}
+	host := int(a.As4()[3])
+	if (host >= GroupBBandFirstHost && host <= GroupBBandLastHost) || host == DNSOptionHost {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is in the group B host band (.%d-.%d, .%d)",
+			cellName, a, GroupBBandFirstHost, GroupBBandLastHost, DNSOptionHost)
+	}
+	if a.Compare(end) > 0 {
+		return fmt.Errorf("cell %s: source.partner.seg_address %s is above the source pool, where the group C and F scenarios place their own addresses", cellName, a)
 	}
 	return nil
 }
@@ -252,6 +692,137 @@ func mustBeLabRange(p netip.Prefix) error {
 		return fmt.Errorf("%s is outside the lab's published range 10.200.0.0/16", p)
 	}
 	return nil
+}
+
+// validateSource6 checks the source's IPv6 fields against the cell's
+// segment.subnet6 (invalid when the cell has none, and then every v6 field
+// must be empty).
+func validateSource6(cellName string, s *Source, seg6 netip.Prefix) error {
+	if !SourceServesV6(s.Type) && seg6.IsValid() {
+		return fmt.Errorf("cell %s: source.type %s is DHCPv4 only, so the cell cannot carry segment.subnet6", cellName, s.Type)
+	}
+	fields := []struct{ name, v string }{
+		{"seg_address6", s.SegAddress6}, {"pool6_start", s.Pool6Start},
+		{"pool6_end", s.Pool6End}, {"temp6_pool", s.Temp6Pool},
+	}
+	for _, f := range fields {
+		if !seg6.IsValid() && f.v != "" {
+			return fmt.Errorf("cell %s: source.%s set on a cell with no segment.subnet6", cellName, f.name)
+		}
+		if seg6.IsValid() && f.v == "" {
+			return fmt.Errorf("cell %s: source.%s is required with segment.subnet6", cellName, f.name)
+		}
+	}
+	if !seg6.IsValid() {
+		return nil
+	}
+	segAddr, err := netip.ParsePrefix(s.SegAddress6)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.seg_address6: %w", cellName, err)
+	}
+	if segAddr.Bits() != seg6.Bits() || !seg6.Contains(segAddr.Addr()) {
+		return fmt.Errorf("cell %s: source.seg_address6 is not an address of segment.subnet6 with its prefix length", cellName)
+	}
+	start, err := netip.ParseAddr(s.Pool6Start)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool6_start: %w", cellName, err)
+	}
+	end, err := netip.ParseAddr(s.Pool6End)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.pool6_end: %w", cellName, err)
+	}
+	if !seg6.Contains(start) || !seg6.Contains(end) {
+		return fmt.Errorf("cell %s: source IPv6 pool is not inside segment.subnet6", cellName)
+	}
+	if start.Compare(end) >= 0 {
+		return fmt.Errorf("cell %s: source.pool6_start must be lower than source.pool6_end", cellName)
+	}
+	own := segAddr.Addr()
+	if start.Compare(own) <= 0 && own.Compare(end) <= 0 {
+		return fmt.Errorf("cell %s: source IPv6 pool contains the source's own seg_address6", cellName)
+	}
+	temp, err := netip.ParsePrefix(s.Temp6Pool)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.temp6_pool: %w", cellName, err)
+	}
+	if temp != temp.Masked() || temp.Bits() <= seg6.Bits() || !seg6.Contains(temp.Addr()) {
+		return fmt.Errorf("cell %s: source.temp6_pool is not a network prefix inside segment.subnet6", cellName)
+	}
+	last := lastAddr(temp)
+	if temp.Contains(own) || !(end.Less(temp.Addr()) || last.Less(start)) {
+		return fmt.Errorf("cell %s: source.temp6_pool overlaps the IPv6 pool or seg_address6", cellName)
+	}
+	return nil
+}
+
+// validatePartner6 checks the partner's own IPv6 address: the primary
+// alone serves v6 on a pair, so the partner sits below the v6 pool and
+// clear of the temporary pool, as its v4 address sits below the v4 pool (#12).
+func validatePartner6(cellName string, s *Source, seg6 netip.Prefix) error {
+	v := s.Partner.SegAddress6
+	if !seg6.IsValid() {
+		if v != "" {
+			return fmt.Errorf("cell %s: source.partner.seg_address6 set on a cell with no segment.subnet6", cellName)
+		}
+		return nil
+	}
+	if v == "" {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 is required with segment.subnet6", cellName)
+	}
+	a, err := netip.ParsePrefix(v)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.partner.seg_address6: %w", cellName, err)
+	}
+	if a.Bits() != seg6.Bits() || !seg6.Contains(a.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 is not an address of segment.subnet6 with its prefix length", cellName)
+	}
+	own := netip.MustParsePrefix(s.SegAddress6).Addr()
+	if a.Addr() == own {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 equals source.seg_address6", cellName)
+	}
+	start := netip.MustParseAddr(s.Pool6Start)
+	temp := netip.MustParsePrefix(s.Temp6Pool)
+	if a.Addr().Compare(start) >= 0 || temp.Contains(a.Addr()) {
+		return fmt.Errorf("cell %s: source.partner.seg_address6 %s is not below the source IPv6 pool and clear of temp6_pool", cellName, a.Addr())
+	}
+	return nil
+}
+
+// parseULA accepts a prefix inside fd00::/8, the locally assigned half of
+// the unique local range (RFC 4193 section 3.1).
+func parseULA(v string) (netip.Prefix, error) {
+	p, err := netip.ParsePrefix(v)
+	if err != nil {
+		return p, err
+	}
+	local := netip.MustParsePrefix("fd00::/8")
+	if !p.Addr().Is6() || p.Addr().Is4In6() || p != p.Masked() || p.Bits() < local.Bits() || !local.Contains(p.Addr()) {
+		return p, fmt.Errorf("%s is not a network prefix inside fd00::/8", v)
+	}
+	return p, nil
+}
+
+// mustBeLabRange6 refuses any IPv6 subnet that is not a network prefix
+// inside the lab's ula_prefix.
+func mustBeLabRange6(p, ula netip.Prefix) error {
+	if !p.Addr().Is6() || p.Addr().Is4In6() {
+		return fmt.Errorf("%s is not IPv6", p)
+	}
+	if p != p.Masked() {
+		return fmt.Errorf("%s has host bits set", p)
+	}
+	if p.Bits() < ula.Bits() || !ula.Contains(p.Addr()) {
+		return fmt.Errorf("%s is outside the lab's ula_prefix %s", p, ula)
+	}
+	return nil
+}
+
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().As16()
+	for i := p.Bits(); i < 128; i++ {
+		b[i/8] |= 1 << (7 - uint(i%8))
+	}
+	return netip.AddrFrom16(b)
 }
 
 func overlaps(a, b netip.Prefix) bool {

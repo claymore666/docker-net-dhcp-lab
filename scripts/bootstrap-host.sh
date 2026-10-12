@@ -14,7 +14,7 @@ apt-get update
 apt-get install -y --no-install-recommends \
 	qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients \
 	virtinst ovmf swtpm genisoimage cloud-image-utils \
-	docker.io tcpdump jq curl ca-certificates
+	docker.io tcpdump jq curl ca-certificates unzip bzip2
 
 # libvirt's default network runs its own dnsmasq DHCP server bridged to
 # the host: it must not exist here, at all, ever -- a second DHCP server

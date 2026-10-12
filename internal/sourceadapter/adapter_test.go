@@ -93,7 +93,7 @@ func TestReserveMACSendsNormalizedValues(t *testing.T) {
 // reach the runner at all, across
 // every adapter, not just one.
 func TestReachableRejectsInjectionBeforeAnySSH(t *testing.T) {
-	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fd42:200::1", ""}
+	bad := []string{"10.200.1.100; reboot", "not-an-ip", "fe80::1%eth1", "::ffff:10.200.1.1", ""}
 	adapters := map[string]Adapter{
 		"kea":      &KeaAdapter{},
 		"isc-dhcp": &ISCDHCPAdapter{},
@@ -373,20 +373,42 @@ func TestDnsmasqStarClientIDIsEmpty(t *testing.T) {
 }
 
 // Preservation: every adapter's declared capabilities are a fixed, known
-// set -- a change here is a deliberate claim, not an accident.
+// set -- a change here is a deliberate claim, not an accident. Group B
+// (#23) added four; only dnsmasq serves DNS from its own leases. Group C
+// (#23) adds CapImpair to all three; none declares a failover pair or a
+// relay, so C5 and C12 stay N/A. Group F (#20) adds the three feature
+// capabilities (rapid commit only on dnsmasq).
+// #21 adds CapForceRenewNonce to all three (each nonce snippet passed the
+// daemon's own syntax check and a local wire exchange). Group C PR 2
+// (#23) adds the four hostile-segment capabilities to all three: the
+// actors are shared netns helpers, the rewrites per-adapter renderers.
+// Group D (#23) adds CapV6 and CapRapidCommit6 to all three and
+// CapTemporary6 to ISC and dnsmasq only: Kea 2.6.3 grants no IA_TA,
+// so the temporary address row judges its fallback. Group D part 2
+// (#23) adds CapPD, CapPref64 and CapV6ServerStop to Kea and ISC, whose
+// radvd carries PREF64 and whose DHCPv6 daemon stops on its own.
 func TestDeclaredCapabilities(t *testing.T) {
-	want := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease}
-	for name, caps := range map[string][]Capability{
-		"kea":      (&KeaAdapter{}).Capabilities(),
-		"isc-dhcp": (&ISCDHCPAdapter{}).Capabilities(),
-		"dnsmasq":  (&DnsmasqAdapter{}).Capabilities(),
-	} {
-		if len(caps) != len(want) {
-			t.Fatalf("%s: want %d capabilities, got %d (%v)", name, len(want), len(caps), caps)
+	base := []Capability{CapV4, CapReserveMAC, CapRestart, CapShortLease, CapReserveClientID}
+	cases := map[string]struct {
+		got  []Capability
+		want []Capability
+	}{
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapServerEvents)},
+	}
+	for name, c := range cases {
+		if len(c.got) != len(c.want) {
+			t.Fatalf("%s: want %d capabilities, got %d (%v)", name, len(c.want), len(c.got), c.got)
 		}
-		for i := range want {
-			if caps[i] != want[i] {
-				t.Fatalf("%s: capability %d = %s, want %s", name, i, caps[i], want[i])
+		for i := range c.want {
+			if c.got[i] != c.want[i] {
+				t.Fatalf("%s: capability %d = %s, want %s", name, i, c.got[i], c.want[i])
+			}
+		}
+		for _, have := range c.got {
+			if have == CapFailoverPair || have == CapRelay {
+				t.Fatalf("%s declares %s, which needs a cell that does not exist yet", name, have)
 			}
 		}
 	}

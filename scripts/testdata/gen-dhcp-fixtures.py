@@ -91,11 +91,18 @@ def frame_s2c(server: str, mac: str, dhcp_payload: bytes) -> bytes:
     return eth("ff:ff:ff:ff:ff:ff", "52:54:00:aa:bb:cc",
                ipv4(server, "255.255.255.255", udp(67, 68, dhcp_payload)))
 
-def write_pcap(path: str, frames: list[bytes]) -> None:
+def write_pcap(path: str, frames: list) -> None:
+    """frames: bytes (timestamp 0) or (seconds, bytes) for group C's
+    timing rules (#23)."""
     with open(path, "wb") as f:
         f.write(struct.pack("<IHHIIII", PCAP_MAGIC, 2, 4, 0, 0, 262144, 1))
         for fr in frames:
-            f.write(struct.pack("<IIII", 0, 0, len(fr), len(fr)))
+            ts = 0.0
+            if isinstance(fr, tuple):
+                ts, fr = fr
+            sec = int(ts)
+            usec = int(round((ts - sec) * 1e6))
+            f.write(struct.pack("<IIII", sec, usec, len(fr), len(fr)))
             f.write(fr)
 
 MAC = "da:b6:45:5b:ef:fe"
@@ -132,4 +139,299 @@ write_pcap("dhcp-ends-in-nak.pcap", [
 # complete exchange in the capture" (issue #2).
 write_pcap("dhcp-wrong-mac.pcap", full_exchange(OTHER_MAC, OTHER_XID))
 
-print("wrote 4 fixtures")
+# Group C (#23) fixtures for dhcp_message_log, with real timestamps.
+PARENT = "52:54:00:12:34:56"
+CID = bytes.fromhex("000102030405060708")
+OTHER_CID = bytes.fromhex("00aabbccddeeff0011")
+ROGUE = "10.200.1.240"
+MSG_DECLINE = 4
+
+def with_cid(payload: bytes, cid: bytes) -> bytes:
+    # option 61 goes before the end option dhcp() appended
+    return payload[:-1] + opt(61, cid) + b"\xff"
+
+def renew(mac: str, xid: int, ciaddr: str) -> bytes:
+    return dhcp(1, xid, 0, ciaddr, "0.0.0.0", mac, opt_msgtype(MSG_REQUEST))
+
+def decline(mac: str, xid: int, addr: str, server: str) -> bytes:
+    body = opt_msgtype(MSG_DECLINE) + opt(50, socket.inet_aton(addr)) + opt(54, socket.inet_aton(server))
+    return dhcp(1, xid, 0, "0.0.0.0", "0.0.0.0", mac, body)
+
+def unicast_c2s(mac: str, src: str, dst: str, payload: bytes) -> bytes:
+    return eth("52:54:00:aa:bb:cc", mac, ipv4(src, dst, udp(68, 67, payload)))
+
+# Client-id identity behind a shared parent MAC (ipvlan): three DISCOVERs
+# 4.2 s and 7.9 s apart, an OFFER and ACK that carry no option 61 (tied by
+# xid), and a second client on the same parent MAC that must not match.
+X1, X2 = 0x0c100001, 0x0c100002
+write_pcap("dhcp-c-retransmit.pcap", [
+    (100.0, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (101.0, frame_c2s(PARENT, with_cid(discover(PARENT, X2), OTHER_CID))),
+    (104.2, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (112.1, frame_c2s(PARENT, with_cid(discover(PARENT, X1), CID))),
+    (114.3, frame_s2c(SERVER, PARENT, offer(PARENT, X1, LEASED, SERVER))),
+    (114.4, frame_c2s(PARENT, with_cid(request(PARENT, X1, LEASED, SERVER), CID))),
+    (114.5, frame_s2c(SERVER, PARENT, ack(PARENT, X1, LEASED, SERVER))),
+])
+
+# MAC identity: bound at 1000.5, a unicast renewal at 1060 with no answer
+# (source down), a broadcast rebind at 1105 answered by an ACK.
+X3, X4, X5 = 0x0c200001, 0x0c200002, 0x0c200003
+write_pcap("dhcp-c-unanswered-request.pcap", [
+    (1000.0, frame_c2s(MAC, discover(MAC, X3))),
+    (1000.2, frame_s2c(SERVER, MAC, offer(MAC, X3, LEASED, SERVER))),
+    (1000.3, frame_c2s(MAC, request(MAC, X3, LEASED, SERVER))),
+    (1000.5, frame_s2c(SERVER, MAC, ack(MAC, X3, LEASED, SERVER))),
+    (1060.0, unicast_c2s(MAC, LEASED, SERVER, renew(MAC, X4, LEASED))),
+    (1105.0, frame_c2s(MAC, renew(MAC, X5, LEASED))),
+    (1105.1, frame_s2c(SERVER, MAC, ack(MAC, X5, LEASED, SERVER))),
+])
+
+# Two servers offer, the client declines the address it was given and a
+# later REQUEST is NAKed.
+X6, X7 = 0x0c300001, 0x0c300002
+write_pcap("dhcp-c-decline-nak.pcap", [
+    (10.0, frame_c2s(MAC, discover(MAC, X6))),
+    (10.1, frame_s2c(SERVER, MAC, offer(MAC, X6, LEASED, SERVER))),
+    (10.2, frame_s2c(ROGUE, MAC, offer(MAC, X6, "10.200.1.241", ROGUE))),
+    (10.3, frame_c2s(MAC, request(MAC, X6, LEASED, SERVER))),
+    (10.4, frame_s2c(SERVER, MAC, ack(MAC, X6, LEASED, SERVER))),
+    (11.5, frame_c2s(MAC, decline(MAC, X6, LEASED, SERVER))),
+    (12.0, frame_c2s(MAC, request(MAC, X7, LEASED, SERVER))),
+    (12.1, frame_s2c(SERVER, MAC, nak(MAC, X7, SERVER))),
+])
+
+# A copy taken while tcpdump was writing: the good exchange with its last
+# record cut short.
+write_pcap("dhcp-c-partial.pcap", full_exchange(MAC, XID))
+with open("dhcp-c-partial.pcap", "r+b") as f:
+    f.seek(0, 2)
+    f.truncate(f.tell() - 100)
+
+# Group F (#20): the option bytes group F reads. tcpdump prints 80 as SLP-NA
+# and 77, 108 and type 9 as Unknown, so the helper keys on the code.
+MSG_FORCERENEW = 9
+F_MAC = "02:f1:00:00:00:01"
+F_OTHER = "02:f1:00:00:00:02"
+UC = bytes([9]) + b"lab-uc-f1"       # RFC 3004: length byte, then the text
+OPT108 = struct.pack("!I", 1800)     # 00 00 07 08
+PRL = bytes([1, 3, 6])
+
+def plus(payload: bytes, *extra: bytes) -> bytes:
+    # options go before the end option dhcp() appended
+    return payload[:-1] + b"".join(extra) + b"\xff"
+
+def f_discover(mac, xid, *extra, prl=PRL):
+    return plus(dhcp(1, xid, 0x8000, "0.0.0.0", "0.0.0.0", mac,
+                     opt_msgtype(MSG_DISCOVER) + opt(55, prl)), *extra)
+
+def f_request(mac, xid, *extra, prl=PRL):
+    return plus(dhcp(1, xid, 0x8000, "0.0.0.0", "0.0.0.0", mac,
+                     opt_msgtype(MSG_REQUEST) + opt(50, socket.inet_aton(LEASED))
+                     + opt(54, socket.inet_aton(SERVER)) + opt(55, prl)), *extra)
+
+def f_offer(mac, xid, yi, *extra):
+    return plus(offer(mac, xid, yi, SERVER), *extra)
+
+def f_ack(mac, xid, yi, *extra):
+    return plus(ack(mac, xid, yi, SERVER), *extra)
+
+# User class: option 77 in every DISCOVER and REQUEST of the identity; a second
+# client sends no class and is answered from the main pool.
+FX1, FX2 = 0x0f100001, 0x0f100002
+write_pcap("dhcp-f1-userclass.pcap", [
+    (10.0, frame_c2s(F_MAC, f_discover(F_MAC, FX1, opt(77, UC)))),
+    (10.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX1, "10.200.1.203"))),
+    (10.2, frame_c2s(F_MAC, f_request(F_MAC, FX1, opt(77, UC)))),
+    (10.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX1, "10.200.1.203"))),
+    (11.0, frame_c2s(F_OTHER, f_discover(F_OTHER, FX2))),
+    (11.1, frame_s2c(SERVER, F_OTHER, f_offer(F_OTHER, FX2, LEASED))),
+])
+
+# F2b: 108 forced into the OFFER and ACK of one identity, never asked for
+# in its PRL; the other identity gets none. F2a-asked: the same client
+# with 108 in its PRL (the lab's table says "absent" but the wire says
+# otherwise).
+FX3, FX4, FX5 = 0x0f200001, 0x0f200002, 0x0f200003
+write_pcap("dhcp-f2-forced108.pcap", [
+    (20.0, frame_c2s(F_MAC, f_discover(F_MAC, FX3))),
+    (20.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX3, LEASED, opt(108, OPT108)))),
+    (20.2, frame_c2s(F_MAC, f_request(F_MAC, FX3))),
+    (20.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX3, LEASED, opt(108, OPT108)))),
+    (21.0, frame_c2s(F_OTHER, f_discover(F_OTHER, FX4))),
+    (21.1, frame_s2c(SERVER, F_OTHER, f_offer(F_OTHER, FX4, "10.200.1.101"))),
+])
+write_pcap("dhcp-f2-asked108.pcap", [
+    (30.0, frame_c2s(F_MAC, f_discover(F_MAC, FX5, prl=PRL + bytes([108])))),
+    (30.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX5, LEASED, opt(108, OPT108)))),
+])
+
+# Rapid commit: dnsmasq answers a DISCOVER carrying 80 with an ACK carrying 80 (two
+# messages); Kea and ISC answer OFFER without 80 and carry on (four).
+FX6, FX7 = 0x0f300001, 0x0f300002
+write_pcap("dhcp-f3-rapid-commit.pcap", [
+    (40.0, frame_c2s(F_MAC, f_discover(F_MAC, FX6, opt(80, b"")))),
+    (40.1, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX6, LEASED, opt(80, b"")))),
+])
+write_pcap("dhcp-f3-fallback.pcap", [
+    (50.0, frame_c2s(F_MAC, f_discover(F_MAC, FX7, opt(80, b"")))),
+    (50.1, frame_s2c(SERVER, F_MAC, f_offer(F_MAC, FX7, LEASED))),
+    (50.2, frame_c2s(F_MAC, f_request(F_MAC, FX7))),
+    (50.3, frame_s2c(SERVER, F_MAC, f_ack(F_MAC, FX7, LEASED))),
+])
+
+# DHCPFORCERENEW (type 9): unicast from the server to the client.
+write_pcap("dhcp-f-forcerenew.pcap", [
+    (60.0, frame_s2c(SERVER, F_MAC, dhcp(2, 0x0f400001, 0, "0.0.0.0", "0.0.0.0", F_MAC,
+                                         opt_msgtype(MSG_FORCERENEW) + opt(54, socket.inet_aton(SERVER))))),
+])
+
+# ---- IPv6 (#23 group D): what the real captures under v6/ do not hold.
+def eth6(dst: str, src: str, payload: bytes) -> bytes:
+    return mac_b(dst) + mac_b(src) + struct.pack("!H", 0x86dd) + payload
+
+def ipv6(src: str, dst: str, nh: int, payload: bytes) -> bytes:
+    return (struct.pack("!IHBB", 0x60000000, len(payload), nh, 255)
+            + socket.inet_pton(socket.AF_INET6, src) + socket.inet_pton(socket.AF_INET6, dst) + payload)
+
+def udp6(sport: int, dport: int, payload: bytes) -> bytes:
+    return struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
+
+def o6(code: int, val: bytes) -> bytes:
+    return struct.pack("!HH", code, len(val)) + val
+
+def iaaddr(addr: str, pref: int, valid: int) -> bytes:
+    return o6(5, socket.inet_pton(socket.AF_INET6, addr) + struct.pack("!II", pref, valid))
+
+def iaprefix(prefix: str, plen: int, pref: int, valid: int) -> bytes:
+    return o6(26, struct.pack("!IIB", pref, valid, plen) + socket.inet_pton(socket.AF_INET6, prefix))
+
+def dhcp6(mt: int, xid: int, opts: bytes) -> bytes:
+    return struct.pack("!I", (mt << 24) | xid) + opts
+
+SRV6_MAC, SRV6_LL = "02:00:00:00:06:01", "fe80::6:1"
+C6_MAC = "02:00:00:00:06:02"
+DUID_A = bytes.fromhex("00030001020000000602")
+DUID_B = bytes.fromhex("000300010200000006ff")
+SDUID = bytes.fromhex("00030001020000000601")
+
+def c2s6(ll: str, payload: bytes, mac: str = C6_MAC) -> bytes:
+    return eth6("33:33:00:01:00:02", mac, ipv6(ll, "ff02::1:2", 17, udp6(546, 547, payload)))
+
+def s2c6(ll: str, payload: bytes, mac: str = C6_MAC) -> bytes:
+    return eth6(mac, SRV6_MAC, ipv6(SRV6_LL, ll, 17, udp6(547, 546, payload)))
+
+def ra6(flags: int, life: int, opts: bytes) -> bytes:
+    body = struct.pack("!BBHBBHII", 134, 0, 0, 64, flags, life, 0, 0) + opts
+    return eth6("33:33:00:00:00:01", SRV6_MAC, ipv6(SRV6_LL, "ff02::1", 58, body))
+
+def pio(prefix: str, plen: int, flags: int, valid: int, pref: int) -> bytes:
+    return struct.pack("!BBBBIII", 3, 4, plen, flags, valid, pref, 0) + socket.inet_pton(socket.AF_INET6, prefix)
+
+def pref64(prefix: str, plc: int, lifetime: int) -> bytes:
+    return struct.pack("!BBH", 38, 2, (lifetime // 8) << 3 | plc) + socket.inet_pton(socket.AF_INET6, prefix)[:12]
+
+# Two PIOs (one without A) and a PREF64 /96 with 600 s (RFC 8781 4).
+# Two clients behind one MAC as on ipvlan; only DUID_A's link-local is
+# the ident, so B's Solicit, its Reply and a Reply to A's other xid
+# that never matched must not print. A UDP packet behind a hop-by-hop
+# header is skipped, and so is a Relay-forward. A Reply with an IA_PD.
+LL_A, LL_B = "fe80::6:2", "fe80::6:3"
+hbh = bytes([17, 0, 5, 2, 0, 0, 1, 0])
+write_pcap("v6/synth-mixed.pcap", [
+    (70.0, ra6(0xc0, 1800, pio("fd42:200:0:900::", 64, 0xc0, 7200, 3600)
+                            + pio("fd42:200:0:901::", 64, 0x80, 600, 300)
+                            + pref64("64:ff9b::", 0, 600))),
+    (70.1, c2s6(LL_B, dhcp6(1, 0x0b0001, o6(1, DUID_B) + o6(3, struct.pack("!III", 7, 0, 0)))) ),
+    (70.2, s2c6(LL_B, dhcp6(7, 0x0b0001, o6(1, DUID_B) + o6(2, SDUID)
+                            + o6(3, struct.pack("!III", 7, 0, 0) + iaaddr("fd42:200:0:900::1b", 3600, 7200))))),
+    (70.3, c2s6(LL_A, dhcp6(1, 0x0a0001, o6(1, DUID_A) + o6(14, b"")
+                            + o6(3, struct.pack("!III", 1, 0, 0)) + o6(4, struct.pack("!I", 2))
+                            + o6(25, struct.pack("!III", 3, 0, 0))))),
+    (70.4, s2c6(LL_A, dhcp6(7, 0x0a0001, o6(1, DUID_A) + o6(2, SDUID) + o6(14, b"")
+                            + o6(3, struct.pack("!III", 1, 0, 0) + iaaddr("fd42:200:0:900::1a", 3600, 7200))
+                            + o6(4, struct.pack("!I", 2) + o6(13, struct.pack("!H", 2)))
+                            + o6(25, struct.pack("!III", 3, 0, 0) + iaprefix("fd42:200:0:9f0::", 60, 1800, 3600))))),
+    (70.5, s2c6(LL_A, dhcp6(7, 0x0c0001, o6(2, SDUID)))),
+    (70.6, eth6("33:33:00:01:00:02", C6_MAC, ipv6(LL_A, "ff02::1:2", 0, hbh + udp6(546, 547, dhcp6(1, 0x0a0002, o6(1, DUID_A)))))),
+    (70.7, c2s6(LL_A, dhcp6(12, 0x000000, o6(1, DUID_A)))),
+])
+
+# A Reply that carries no Client Identifier, so only the xid of A's
+# matched Information-request ties it to the ident.
+write_pcap("v6/synth-xid.pcap", [
+    (80.0, c2s6(LL_A, dhcp6(11, 0x0a0003, o6(1, DUID_A)))),
+    (80.1, s2c6(LL_A, dhcp6(7, 0x0a0003, o6(2, SDUID)))),
+])
+
+# Relay fixtures (lab #11): hand-assembled twins of the captures in
+# relay/real-*.pcap, for what a real run does not produce on demand
+# (a T2 rebind, a relayed DISCOVER with no option 82, two sub-options).
+def dhcp_r(op, xid, flags, ci, yi, gi, chaddr, options, secs=0):
+    hdr = struct.pack(
+        "!BBBBI HH 4s4s4s4s 16s64s128s4s",
+        op, 1, 6, 1 if gi != "0.0.0.0" and op == 1 else 0, xid, secs, flags,
+        socket.inet_aton(ci), socket.inet_aton(yi),
+        socket.inet_aton("0.0.0.0"), socket.inet_aton(gi),
+        mac_b(chaddr).ljust(16, b"\x00"), b"\x00" * 64, b"\x00" * 128,
+        bytes([0x63, 0x82, 0x53, 0x63]),
+    )
+    return hdr + options + b"\xff"
+
+def rframe(smac, dmac, sip, dip, sport, dport, payload):
+    return eth(dmac, smac, ipv4(sip, dip, udp(sport, dport, payload)))
+
+R_CLI, R_SRV = "02:11:00:00:00:01", "02:11:00:00:00:02"
+S_MAC, C_MAC = "02:11:00:00:00:20", "02:11:00:00:00:10"
+R_GI, S_IP, C_IP = "10.200.10.1", "10.200.11.2", "10.200.10.100"
+R_SIP = "10.200.11.1"
+A82 = opt(82, opt(1, b"eth1") + opt(2, b"rly"))
+RX = 0x5a5a0001
+
+def rdiscover(xid, fl, o82=A82, gi=R_GI, secs=0):
+    return dhcp_r(1, xid, fl, "0.0.0.0", "0.0.0.0", gi, C_MAC, opt_msgtype(MSG_DISCOVER) + o82, secs)
+
+def roffer(xid, fl, o82=A82, gi=R_GI):
+    return dhcp_r(2, xid, fl, "0.0.0.0", C_IP, gi, C_MAC,
+                  opt_msgtype(MSG_OFFER) + opt(54, socket.inet_aton(S_IP)) + opt(51, struct.pack("!I", 120)) + o82)
+
+# Server leg: relayed DISCOVER with two sub-options, and the OFFER
+# echoing them, flag clear.
+write_pcap("dhcp-relay-server-leg.pcap", [
+    (10.0, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67, rdiscover(RX, 0))),
+    (10.1, rframe(S_MAC, R_SRV, S_IP, R_GI, 67, 67, roffer(RX, 0))),
+])
+# The same DISCOVER with no option 82 (a relay run without -a).
+write_pcap("dhcp-relay-no82.pcap", [
+    (10.0, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67, rdiscover(RX, 0, b""))),
+])
+# Client leg: OFFER delivered by broadcast (flag set) and the same
+# OFFER delivered unicast to chaddr (flag clear).
+write_pcap("dhcp-relay-deliver.pcap", [
+    (20.0, rframe(R_CLI, "ff:ff:ff:ff:ff:ff", R_GI, "255.255.255.255", 67, 68, roffer(RX, 0x8000, b"", "0.0.0.0"))),
+    (21.0, rframe(R_CLI, C_MAC, R_GI, C_IP, 67, 68, roffer(RX + 1, 0, b"", "0.0.0.0"))),
+])
+# T1 unicast renewal through the relay (client pcap), unanswered; then
+# the T2 broadcast rebind (secs 3, ciaddr set, flag clear).
+def rrenew(xid, secs=0):
+    return dhcp_r(1, xid, 0, C_IP, "0.0.0.0", "0.0.0.0", C_MAC,
+                  opt_msgtype(MSG_REQUEST), secs)
+write_pcap("dhcp-relay-rebind.pcap", [
+    (60.0, rframe(C_MAC, R_CLI, C_IP, S_IP, 68, 67, rrenew(RX + 2))),
+    (105.0, rframe(C_MAC, "ff:ff:ff:ff:ff:ff", C_IP, "255.255.255.255", 68, 67, rrenew(RX + 3, 3))),
+])
+# Unicast renewal on the client leg and its routed copy on the server
+# leg (IP src = the client, giaddr 0, no option 82), another client's
+# renewal with the same xid, and the relayed copy with giaddr set.
+O_MAC = "02:11:00:00:00:11"
+def rrenew_c(xid, mac, ip):
+    return dhcp_r(1, xid, 0, ip, "0.0.0.0", "0.0.0.0", mac, opt_msgtype(MSG_REQUEST))
+write_pcap("dhcp-relay-renewal.pcap", [
+    (60.0, rframe(C_MAC, R_CLI, C_IP, S_IP, 68, 67, rrenew_c(RX + 4, C_MAC, C_IP))),
+    (60.0, rframe(R_SRV, S_MAC, C_IP, S_IP, 68, 67, rrenew_c(RX + 4, C_MAC, C_IP))),
+    (60.1, rframe(R_SRV, S_MAC, R_SIP, S_IP, 67, 67,
+                  dhcp_r(1, RX + 4, 0, C_IP, "0.0.0.0", R_GI, C_MAC, opt_msgtype(MSG_REQUEST) + A82))),
+    (61.0, rframe(O_MAC, R_CLI, "10.200.10.101", S_IP, 68, 67, rrenew_c(RX + 4, O_MAC, "10.200.10.101"))),
+])
+
+print("wrote 21 fixtures")

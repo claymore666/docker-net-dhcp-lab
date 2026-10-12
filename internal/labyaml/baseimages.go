@@ -17,7 +17,90 @@ type BaseImage struct {
 	Suite  string `json:"suite"`  // trixie, bullseye, noble, ...
 	// OSVariant is virt-install's --os-variant value.
 	OSVariant string `json:"os_variant"`
+	// AptSourcesFix is a one-line shell command that rewrites
+	// /etc/apt/sources.list for a release whose pool left the regular
+	// mirrors; empty (the default) leaves the image's own sources alone.
+	// The docker-host template runs it from bootcmd, which cloud-init
+	// executes before package-update-upgrade-install (issue #27).
+	AptSourcesFix string `json:"apt_sources_fix"`
+	// Kind is how fetch-base-image.sh turns URL into a qcow2 (#9):
+	// qcow2 is fetched as is, archive is a .zip/.gz/.bz2 holding a raw
+	// disk, built is a build script's output with no URL. ChecksumURL is
+	// an archive's upstream sums file, when the vendor publishes one.
+	Kind        string `json:"kind"`
+	ChecksumURL string `json:"checksum_url,omitempty"`
+	// Seed is up-source.sh's seed hook and ready probe: cloud-init, qga
+	// (the QEMU guest agent) or baked (the image carries its own seed).
+	Seed string `json:"seed"`
+	// Firmware is empty for OVMF, up-source.sh's default, or bios for
+	// SeaBIOS: OVMF found no boot entry on the CHR 7.24.5 raw image and
+	// SeaBIOS booted it (M3, 2026-10-10, lab #9).
+	Firmware string `json:"firmware,omitempty"`
+	// NetStack is what manages the network on a docker host booted from
+	// this image; empty on an image no cell runs a docker host on.
+	NetStack NetStack `json:"net_stack,omitempty"`
 }
+
+// NetStack picks the host bridge recipe of the plugin's docs/bridge-mode.md
+// and how the segment NIC is kept up across a reboot (lab #70).
+type NetStack string
+
+const (
+	NetStackNetplan  NetStack = "netplan"
+	NetStackIfupdown NetStack = "ifupdown"
+)
+
+// DockerHostSegmentNIC is the name cloud-init/network-config.tmpl.yaml
+// gives the docker host's segment NIC.
+const DockerHostSegmentNIC = "eth1"
+
+// SegmentNICStanzaPath is where SegmentNICSetup writes the docs' ifupdown
+// stanza; source-directory skips a name outside ^[a-zA-Z0-9_-]+$
+// (interfaces(5), ifupdown 0.8.36).
+const SegmentNICStanzaPath = "/etc/network/interfaces.d/60-lab-" + DockerHostSegmentNIC
+
+// SegmentNICSetup is the docker host template's bootcmd line for this
+// image, empty when cloud-init's own network config keeps the segment NIC
+// up. cloud-init 20.4.1's eni renderer writes the address-less segment NIC
+// as `iface eth1 inet manual` with no `auto` line, so nothing raises it
+// after a reboot (lab #70, rendered from the 20.4.1 tag). The line writes
+// the plugin docs' "Debian / ifupdown" spare-NIC stanza once and raises it
+// once; bootcmd runs after networking.service, so every later boot it is
+// networking.service that raises the NIC. No '#', '&', backslash or
+// newline: the renderer substitutes it with sed.
+func (b BaseImage) SegmentNICSetup() string {
+	if b.NetStack != NetStackIfupdown {
+		return ""
+	}
+	nic := DockerHostSegmentNIC
+	return "[ -e " + SegmentNICStanzaPath + " ] || {" +
+		" { echo 'auto " + nic + "';" +
+		" echo 'iface " + nic + " inet manual';" +
+		" echo '    pre-up sysctl -qw net.ipv6.conf." + nic + ".accept_ra=0';" +
+		" echo '    up ip link set " + nic + " up'; } > " + SegmentNICStanzaPath + ";" +
+		" ifup " + nic + "; }"
+}
+
+// archiveAptSourcesFix returns the AptSourcesFix command that points a
+// Debian suite and its updates/security pockets at archive.debian.org.
+// No '#', '&' or backslash in the result: scripts/render-docker-host-user-data.sh
+// substitutes it with sed. check-valid-until=no guards a Release file that
+// gains an expiry; none of the three carries one today (issue #27).
+func archiveAptSourcesFix(suite string) string {
+	const opt = "[check-valid-until=no] http://archive.debian.org/"
+	return "{ echo 'deb " + opt + "debian " + suite + " main';" +
+		" echo 'deb " + opt + "debian " + suite + "-updates main';" +
+		" echo 'deb " + opt + "debian-security " + suite + "-security main'; }" +
+		" > /etc/apt/sources.list"
+}
+
+// ImageKinds and SeedKinds are the values fetch-base-image.sh and
+// up-source.sh dispatch on; any other value is refused there too.
+var (
+	ImageKinds = []string{"qcow2", "archive", "built"}
+	SeedKinds  = []string{"cloud-init", "qga", "baked", "windows"}
+	Firmwares  = []string{"", "bios"}
+)
 
 var baseImages = map[string]BaseImage{
 	"debian-13-generic-amd64": {
@@ -26,6 +109,10 @@ var baseImages = map[string]BaseImage{
 		Distro:    "debian",
 		Suite:     "trixie",
 		OSVariant: "debian13",
+		Kind:      "qcow2",
+		Seed:      "cloud-init",
+		// netplan.io 1.1.2 and no ifupdown on the image (lab #70).
+		NetStack: NetStackNetplan,
 	},
 	// The plugin's oldest supported engine target (issue #27): an older
 	// distro so docker-ce's own version pin below resolves against a repo
@@ -37,6 +124,14 @@ var baseImages = map[string]BaseImage{
 		Distro:    "debian",
 		Suite:     "bullseye",
 		OSVariant: "debian11",
+		// Debian 11 left LTS on 2026-08-31: its security pool files 404
+		// on the regular mirrors while the Release file is still served
+		// (issue #27, measured 2026-10-09).
+		AptSourcesFix: archiveAptSourcesFix("bullseye"),
+		Kind:          "qcow2",
+		Seed:          "cloud-init",
+		// ifupdown 0.8.36, no netplan, no bridge-utils (lab #70).
+		NetStack: NetStackIfupdown,
 	},
 	"ubuntu-24.04-server-cloudimg-amd64": {
 		Name:      "ubuntu-24.04-server-cloudimg-amd64",
@@ -44,6 +139,38 @@ var baseImages = map[string]BaseImage{
 		Distro:    "ubuntu",
 		Suite:     "noble",
 		OSVariant: "ubuntu24.04",
+		Kind:      "qcow2",
+		Seed:      "cloud-init",
+		NetStack:  NetStackNetplan,
+	},
+	// MikroTik CHR, the vendor's stable 7.24.5 raw disk in a zip. No sums
+	// file is published beside it (404, DESIGN-910 3.3), so the first
+	// fetch pins the archive's sha256 (lab #9). osinfo has no RouterOS.
+	"chr-7.24.5": {
+		Name:      "chr-7.24.5",
+		URL:       "https://download.mikrotik.com/routeros/7.24.5/chr-7.24.5.img.zip",
+		OSVariant: "linux2020",
+		Kind:      "archive",
+		Seed:      "qga",
+		Firmware:  "bios",
+	},
+	// Built by scripts/build-openwrt-image.sh, which bakes the cell's
+	// addresses and the lab user into the image (lab #9).
+	"openwrt-25.12.5-x86-64": {
+		Name:      "openwrt-25.12.5-x86-64",
+		Distro:    "openwrt",
+		Suite:     "25.12.5",
+		OSVariant: "linux2022",
+		Kind:      "built",
+		Seed:      "baked",
+	},
+	// Windows Server 2025 evaluation, installed once by
+	// scripts/build-windows-image.sh from an ISO placed by hand (lab #14).
+	"windows-2025-eval": {
+		Name:      "windows-2025-eval",
+		OSVariant: "win2k25",
+		Kind:      "built",
+		Seed:      "windows",
 	},
 }
 

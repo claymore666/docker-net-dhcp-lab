@@ -100,19 +100,19 @@ func Write(dir string, v Verdict) error {
 	fmt.Fprintf(&b, "cell: %s\n", v.Cell)
 	fmt.Fprintf(&b, "shape: %s\n", v.Shape)
 	fmt.Fprintf(&b, "result: %s\n", v.Result)
-	fmt.Fprintf(&b, "reason: %s\n", v.Reason)
+	fmt.Fprintf(&b, "reason: %s\n", oneLine(v.Reason))
 	fmt.Fprintf(&b, "git_sha: %s\n", v.GitSHA)
 	if v.IsolationMethod != "" {
 		fmt.Fprintf(&b, "isolation: %s\n", v.IsolationMethod)
 	}
 	if v.Host.Distro != "" {
-		fmt.Fprintf(&b, "host.distro: %s\n", v.Host.Distro)
+		fmt.Fprintf(&b, "host.distro: %s\n", oneLine(v.Host.Distro))
 	}
 	if v.Host.Kernel != "" {
-		fmt.Fprintf(&b, "host.kernel: %s\n", v.Host.Kernel)
+		fmt.Fprintf(&b, "host.kernel: %s\n", oneLine(v.Host.Kernel))
 	}
 	if v.Host.DockerVersion != "" {
-		fmt.Fprintf(&b, "host.docker_version: %s\n", v.Host.DockerVersion)
+		fmt.Fprintf(&b, "host.docker_version: %s\n", oneLine(v.Host.DockerVersion))
 	}
 	fmt.Fprintf(&b, "timestamp: %s\n", v.Timestamp.UTC().Format(time.RFC3339))
 	labels := make([]string, 0, len(v.Evidence))
@@ -135,6 +135,13 @@ func Write(dir string, v Verdict) error {
 		fmt.Fprintf(&b, "evidence.%s: %s\n", label, filepath.ToSlash(rel))
 	}
 	return os.WriteFile(dir+"/"+v.FileName(), []byte(b.String()), 0o644)
+}
+
+// oneLine folds every CR and LF into a space so a free-text value stays one "key: value" line.
+func oneLine(s string) string {
+	// #38: ssh's own stderr ends its lines in "\r\n", and a reason that
+	// carried one made labctl remaining reject the whole verdict file.
+	return strings.TrimRight(strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(s), " ")
 }
 
 // ReadVerdict parses one file Write produced. It never looks at path's

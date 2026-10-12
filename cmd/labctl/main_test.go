@@ -1,9 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net/netip"
+	"path/filepath"
+	"slices"
 	"testing"
 
+	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // The pre-shape pool capacity check exists because the plugin's own
@@ -55,18 +62,42 @@ func TestPoolCapacityRejectsBadInput(t *testing.T) {
 	}
 }
 
-// TestPoolHasCapacityForMatchesMinPoolAddresses pins the check against
-// scenario.MinPoolAddresses's own value (38, catalog.go) rather than a
-// number restated here: a pool exhausted by four prior shapes' worth of
-// held leases must abort the fifth, and a fresh 101-address pool must
-// clear every shape (five shapes x 38 is exactly the case that
-// exhausted the pool on A15/A16 before this fix, #3).
-func TestPoolHasCapacityForMatchesMinPoolAddresses(t *testing.T) {
-	const need = 38 // scenario.MinPoolAddresses
-
-	if ok, reason := poolHasCapacityFor(101, 0, need); !ok {
-		t.Fatalf("a fresh 101-address pool must cover one shape's run: %s", reason)
+// Every lab.yaml cell's fresh pool must cover one shape's run of what its
+// own source can run (scenario.PoolDemand, #3); the C5 family counts only
+// on the failover pair, where it fits beside the rest (lab #12).
+func TestPoolHasCapacityForEveryLabCell(t *testing.T) {
+	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	need, pairs := 0, 0
+	for _, c := range cfg.Cells {
+		if c.Source == nil {
+			continue
+		}
+		src, err := newCellSourceAdapter(c.Source, runnerFor)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		if slices.Contains(src.Capabilities(), sourceadapter.CapFailoverPair) {
+			pairs++
+		}
+		capacity, err := poolCapacity(c.Source.PoolStart, c.Source.PoolEnd)
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		demand := scenario.PoolDemand(scenario.Catalog, src)
+		need = max(need, demand)
+		if ok, reason := poolHasCapacityFor(capacity, 0, demand); !ok {
+			t.Errorf("%s: a fresh pool must cover one shape's run: %s", c.Name, reason)
+		}
+	}
+	if pairs == 0 {
+		t.Fatal("lab.yaml holds no failover pair, so the C5 family's demand went unchecked")
+	}
+
+	// The edges, at the largest demand any cell has.
 	if ok, _ := poolHasCapacityFor(101, 4*need, need); ok {
 		t.Fatalf("a pool already holding four shapes' worth of leases must not clear a fifth")
 	}
@@ -156,5 +187,211 @@ func TestRemainingScenarioNamesAllDoneReturnsEmpty(t *testing.T) {
 	got := remainingScenarioNames(catalog, map[string]bool{"A1": true, "A2": true})
 	if len(got) != 0 {
 		t.Fatalf("got %v, want empty", got)
+	}
+}
+
+// Every lab.yaml cell without a relay has its router and its source on
+// the same seg_address without the CIDR suffix (#11, #23).
+func TestSegAddressesAreEqualWithoutARelay(t *testing.T) {
+	cfg, err := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for name, c := range cfg.Cells {
+		if c.Source == nil || c.Relay != nil {
+			continue
+		}
+		seen++
+		gw, src := segAddresses(&c)
+		p, err := netip.ParsePrefix(c.Source.SegAddress)
+		if err != nil || gw != p.Addr().String() || gw != src {
+			t.Errorf("%v: router %q, source %q from seg_address %q", name, gw, src, c.Source.SegAddress)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("lab.yaml holds no cell with a source")
+	}
+}
+
+type mgmtRunner string
+
+func (r mgmtRunner) Run(context.Context, string) (string, error) { return "", nil }
+
+// A source with a partner (lab #12) gets one PairAdapter whose peers
+// each run on their own mgmt address and carry their seg address as
+// the server-id; without one, the single adapter as before.
+func TestNewCellSourceAdapterPair(t *testing.T) {
+	runnerFor := func(m string) sourceadapter.Runner { return mgmtRunner(m) }
+	src := &labyaml.Source{Type: "kea", MgmtAddress: "10.200.255.91/24", SegAddress: "10.200.8.2/24"}
+	a, err := newCellSourceAdapter(src, runnerFor)
+	if k, ok := a.(*sourceadapter.KeaAdapter); err != nil || !ok || k.Runner != mgmtRunner("10.200.255.91/24") {
+		t.Fatalf("single source: %#v, %v", a, err)
+	}
+	src.Partner = &labyaml.Peer{MgmtAddress: "10.200.255.92/24", SegAddress: "10.200.8.3/24"}
+	a, err = newCellSourceAdapter(src, runnerFor)
+	p, ok := a.(*sourceadapter.PairAdapter)
+	if err != nil || !ok {
+		t.Fatalf("pair: %#v, %v", a, err)
+	}
+	want := [2][3]string{{"primary", "10.200.255.91/24", "10.200.8.2"}, {"partner", "10.200.255.92/24", "10.200.8.3"}}
+	for i, w := range want {
+		peer := p.Peers[i]
+		k, _ := peer.Adapter.(*sourceadapter.KeaAdapter)
+		if peer.Name != w[0] || k == nil || k.Runner != mgmtRunner(w[1]) || peer.ServerID != w[2] {
+			t.Errorf("peer %d = %s runner %v id %s, want %v", i, peer.Name, k, peer.ServerID, w)
+		}
+	}
+	src.Type = "isc-dhcp"
+	a, err = newCellSourceAdapter(src, runnerFor)
+	p, ok = a.(*sourceadapter.PairAdapter)
+	if err != nil || !ok {
+		t.Fatalf("isc-dhcp pair: %#v, %v", a, err)
+	}
+	for i, w := range want {
+		peer := p.Peers[i]
+		d, _ := peer.Adapter.(*sourceadapter.ISCDHCPAdapter)
+		if peer.Name != w[0] || d == nil || d.Runner != mgmtRunner(w[1]) || peer.ServerID != w[2] || d.V4Only != (i == 1) || !d.Failover {
+			t.Errorf("isc peer %d = %s adapter %+v id %s, want %v", i, peer.Name, d, peer.ServerID, w)
+		}
+	}
+	src.Type = "dnsmasq"
+	if _, err := newCellSourceAdapter(src, runnerFor); err == nil {
+		t.Error("a dnsmasq pair built an adapter")
+	}
+}
+
+// The shipped fritzbox cell reaches an adapter through the same mapping as
+// every other source type (lab #13).
+func TestNewSourceAdapterFritzbox(t *testing.T) {
+	a, err := newSourceAdapter("fritzbox", mgmtRunner("10.200.255.171/24"))
+	if f, ok := a.(*sourceadapter.FritzboxAdapter); err != nil || !ok || f.Runner != mgmtRunner("10.200.255.171/24") {
+		t.Fatalf("fritzbox: %#v, %v", a, err)
+	}
+}
+
+// The per-scenario wrapper (plugin and bridge checks, source readiness,
+// and on the ipam shapes a fresh network before every scenario after the
+// first) runs once per scenario the shape does not already answer (#79).
+// The counts are for a source declaring every capability: the catalog
+// size on the null-IPAM shapes, and the catalog minus the shape-static
+// N/A rows on the two ipam shapes.
+func TestStaticNAForCountsTheWrapperCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	static := 0
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		calls := len(scenario.Catalog) - len(na)
+		ipam := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		switch {
+		case !ipam && len(na) != 0:
+			t.Errorf("%s: %d scenarios skipped on a shape without the ipam refusal", shape, len(na))
+		case ipam && len(na) == 0:
+			t.Errorf("%s: no scenario skipped", shape)
+		}
+		if ipam {
+			static = len(na)
+		}
+		t.Logf("%s: %d scenarios, %d wrapper calls, %d answered statically", shape, len(scenario.Catalog), calls, len(na))
+		for name, v := range na {
+			if v.Result != scenario.NA || v.Scenario != name || v.Shape != shape || v.Cell != "kea" {
+				t.Errorf("%s/%s: skipped verdict %+v", shape, name, v)
+			}
+		}
+	}
+	if static == 0 {
+		t.Fatal("no ipam shape was counted")
+	}
+}
+
+// A scenario answered without the wrapper leaves no identity behind on
+// the network, so the first scenario that does run starts on the network
+// NetworkUp made and each later one gets a fresh one.
+func TestNeedsIsolationKeysOnScenariosThatRan(t *testing.T) {
+	for ran, want := range []bool{false, true, true} {
+		if got := needsIsolation(ran); got != want {
+			t.Errorf("needsIsolation(%d) = %v, want %v", ran, got, want)
+		}
+	}
+}
+
+// The loop cmdRun runs, driven with fake steps on every shape: the ipam
+// shapes send only the scenarios the shape does not answer through the
+// wrapper, isolate before each of them but the first, and write the rest
+// without either; the other shapes send the whole catalog through (#79).
+func TestRunScenariosCountsWrapperAndIsolationCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		isolating := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		var ran, isolated, written []string
+		failed, err := runScenarios(scenario.Catalog, na, isolating, scenarioSteps{
+			static: func(v scenario.Verdict) error { written = append(written, v.Scenario); return nil },
+			isolate: func(s scenario.Scenario) error {
+				isolated = append(isolated, s.Name)
+				return nil
+			},
+			run: func(s scenario.Scenario) (scenario.Verdict, error) {
+				ran = append(ran, s.Name)
+				return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+			},
+		})
+		if err != nil || failed != 0 {
+			t.Fatalf("%s: failed=%d err=%v", shape, failed, err)
+		}
+		if len(ran) != len(scenario.Catalog)-len(na) || len(written) != len(na) {
+			t.Errorf("%s: %d wrapper runs, %d static writes; want %d and %d", shape, len(ran), len(written), len(scenario.Catalog)-len(na), len(na))
+		}
+		wantIso := 0
+		if isolating && len(ran) > 0 {
+			wantIso = len(ran) - 1
+		}
+		if len(isolated) != wantIso {
+			t.Errorf("%s: %d isolations for %d wrapper runs, want %d", shape, len(isolated), len(ran), wantIso)
+		}
+		if isolating && len(ran) > 1 && isolated[0] != ran[1] {
+			t.Errorf("%s: first isolation is before %s, want before %s", shape, isolated[0], ran[1])
+		}
+		t.Logf("%s: %d wrapper runs, %d isolations, %d static writes", shape, len(ran), len(isolated), len(written))
+	}
+}
+
+// A step error ends the loop: nothing behind it is written or run, and a
+// FAIL verdict counts.
+func TestRunScenariosStopsOnAStepErrorAndCountsFails(t *testing.T) {
+	list := []scenario.Scenario{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	var ran []string
+	failed, err := runScenarios(list, nil, false, scenarioSteps{
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			ran = append(ran, s.Name)
+			if s.Name == "b" {
+				return scenario.Verdict{}, errors.New("disk")
+			}
+			return scenario.Verdict{Result: scenario.FAIL}, nil
+		},
+	})
+	if err == nil || failed != 1 || len(ran) != 2 {
+		t.Fatalf("failed=%d err=%v ran=%v", failed, err, ran)
+	}
+}
+
+// A resumed run can start its list with a scenario the shape answers: the
+// first scenario that really runs still starts on the network NetworkUp
+// made and gets no isolation (#79).
+func TestRunScenariosListStartingWithAStaticRowIsolatesLater(t *testing.T) {
+	list := []scenario.Scenario{{Name: "s"}, {Name: "a"}, {Name: "b"}}
+	na := map[string]scenario.Verdict{"s": {Scenario: "s", Result: scenario.NA}}
+	var isolated []string
+	_, err := runScenarios(list, na, true, scenarioSteps{
+		static:  func(scenario.Verdict) error { return nil },
+		isolate: func(s scenario.Scenario) error { isolated = append(isolated, s.Name); return nil },
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+		},
+	})
+	if err != nil || len(isolated) != 1 || isolated[0] != "b" {
+		t.Fatalf("isolated before %v (err %v), want only b", isolated, err)
 	}
 }

@@ -3,6 +3,7 @@ package scenario
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,5 +140,56 @@ func TestReadVerdictRejectsMissingRequiredField(t *testing.T) {
 	}
 	if _, err := ReadVerdict(path); err == nil {
 		t.Fatal("expected an error for a missing scenario field, got nil")
+	}
+}
+
+// The reasons the #38 -j 6 run wrote across several lines: ssh's own
+// "\r\n" inside the reason, and a nested reason ending in "\n)".
+func TestWriteKeepsAReasonWithLineBreaksOnOneLine(t *testing.T) {
+	for _, reason := range []string{
+		"plugin not installed under alias net-dhcp-under-test: ssh lab@10.200.255.20: exit status 255: Connection timed out during banner exchange\r\nConnection to 10.200.255.20 port 22 timed out\r\n",
+		"plugin never became ready: (plugin log capture also failed: ssh lab@10.200.255.40: exit status 255: Connection refused\n)",
+		"bare\rcarriage return",
+	} {
+		dir := t.TempDir()
+		v := Verdict{Scenario: NameA10, Cell: "kea", Shape: ShapeBridge, Result: BLOCKED,
+			Reason: reason, GitSHA: "abc123", Timestamp: time.Date(2026, 10, 9, 12, 38, 10, 0, time.UTC),
+			Host: HostInfo{Distro: "Debian GNU/Linux 13 (trixie)\n", Kernel: "6.12\r\n", DockerVersion: "29.9.0"}}
+		if err := Write(dir, v); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "\r") {
+			t.Fatalf("verdict file still carries a CR: %q", data)
+		}
+		got, err := ReadVerdict(filepath.Join(dir, v.FileName()))
+		if err != nil {
+			t.Fatalf("ReadVerdict on a reason with line breaks: %v", err)
+		}
+		first, rest, _ := strings.Cut(strings.NewReplacer("\r", "\n").Replace(reason), "\n")
+		rest = strings.Trim(strings.TrimLeft(rest, "\n"), "\n")
+		if !strings.Contains(got.Reason, first) || !strings.Contains(got.Reason, rest) {
+			t.Fatalf("folded reason lost text: got %q from %q", got.Reason, reason)
+		}
+	}
+}
+
+// The reader stays strict: a continuation line is still refused.
+func TestReadVerdictRejectsAReasonSplitAcrossLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kea-bridge-A10-kill-restart-policy.verdict")
+	body := "scenario: A10-kill-restart-policy\ncell: kea\nshape: bridge\nresult: BLOCKED\n" +
+		"reason: ssh lab@10.200.255.20: exit status 255: Connection timed out during banner exchange\r\n" +
+		"Connection to 10.200.255.20 port 22 timed out\r\n" +
+		"git_sha: abc123\ntimestamp: 2026-10-09T12:38:10Z\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadVerdict(path)
+	if err == nil || !strings.Contains(err.Error(), ":6:") {
+		t.Fatalf("expected the continuation at line 6 to be refused, got %v", err)
 	}
 }

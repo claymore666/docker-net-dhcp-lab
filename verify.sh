@@ -37,6 +37,30 @@ go run ./cmd/labctl validate lab.yaml
 echo "== cloud-init network-config seed file stays valid (MAC quoting, no network: wrapper) =="
 ./scripts/cloud-init-mac-quote-test.sh
 
+echo "== up-source.sh: the IPv6 gate follows the source type (lab #10) =="
+./scripts/up-source-test.sh
+
+echo "== Docker host user-data carries the Debian 11 archive rewrite, and only there (issue #27) =="
+./scripts/cloud-init-docker-host-test.sh
+
+echo "== up-source.sh: the five cloud-init sources render as pinned; seed and image kinds dispatch =="
+./scripts/up-source-golden-test.sh
+
+echo "== seed-chr.sh: a seeded CHR is left alone, a stock one is seeded once, failures map to poll or stop (lab #9) =="
+./scripts/seed-chr-test.sh
+
+echo "== fetch-base-image.sh: archives decompress and convert, a mismatching sum is refused =="
+./scripts/fetch-base-image-kinds-test.sh
+
+echo "== source-types.sh: per-type version and config reads; every schema type has an arm =="
+./scripts/source-types-test.sh
+
+echo "== build-openwrt-image.sh: the overlay has no br-lan, odhcpd off, an id that follows the cell (lab #9) =="
+./scripts/build-openwrt-image-test.sh
+
+echo "== build-windows-image.sh: the answer file and first logon render, every refusal comes before a VM, the second boot is the proof (lab #14) =="
+./scripts/build-windows-image-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.
@@ -139,6 +163,17 @@ echo "== lab segment firewall refusal/idempotency tests =="
 
 echo "== down-cell refusal and pcap-preservation tests =="
 ./scripts/down-cell-test.sh
+
+echo "== run-cells.sh pool, duplicate and signal tests (issue #38) =="
+./scripts/run-cells-test.sh
+
+echo "== fetch-base-image.sh download lock tests (issue #38) =="
+./scripts/fetch-base-image-test.sh
+
+echo "== relay cell: source network-config, probe, run-cell abort (#11) =="
+./scripts/render-source-network-config-test.sh
+./scripts/relay-probe-test.sh
+./scripts/run-cell-relay-test.sh
 
 echo "== capture-start/capture-stop orchestration and sudo -n tests =="
 ./scripts/capture-lifecycle-test.sh
@@ -325,6 +360,9 @@ echo "== pack fixture tests =="
 
 echo "== commit-message check fixture tests =="
 ./scripts/commit-message-check-test.sh
+
+echo "== issue state label sync: parser and reconciler tests (#41) =="
+./scripts/test-sync-issue-state-labels.sh
 
 echo "== no AI attribution =="
 if git rev-parse --verify origin/dev >/dev/null 2>&1; then
