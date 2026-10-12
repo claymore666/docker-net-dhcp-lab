@@ -471,3 +471,43 @@ cells:
       vcpus: 2
       memory_mib: 2048
       disk_gib: 8
+
+  - name: fritzbox
+    description: >
+      A physical Fritz.Box as the DHCP server on its own segment, renumbered
+      to the address below. Nothing else runs a DHCP server there: the VM at
+      mgmt_address is a probe that reaches the box, and the box is cabled to
+      the lab NIC lab1. Its credentials come from the environment variable
+      named in password_env on the lab host. Issue #13.
+    segment:
+      bridge: lab-br-fritzbox
+      subnet: 10.200.17.0/24
+      subnet6: "fd42:200:0:1100::/64"
+      uplink: lab1
+    source:
+      type: fritzbox
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.171/24
+      seg_address: 10.200.17.1/24
+      pool_start: 10.200.17.100
+      pool_end: 10.200.17.200
+      seg_address6: "fd42:200:0:1100::1/64"
+      pool6_start: "fd42:200:0:1100::100"
+      pool6_end: "fd42:200:0:1100::1ff"
+      temp6_pool: "fd42:200:0:1100::200/120"
+      device:
+        address: 10.200.17.1/24
+        probe_address: 10.200.17.2/24
+        tr064_user: lab
+        password_env: LAB_FRITZBOX_PASSWORD
+      vcpus: 1
+      memory_mib: 512
+      disk_gib: 6
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.170/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8

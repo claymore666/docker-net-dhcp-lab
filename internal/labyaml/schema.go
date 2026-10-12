@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,6 +38,10 @@ type Segment struct {
 	Bridge  string `yaml:"bridge" json:"bridge"`
 	Subnet  string `yaml:"subnet" json:"subnet"`
 	Subnet6 string `yaml:"subnet6,omitempty" json:"subnet6,omitempty"`
+	// Uplink is the host NIC a physical source hangs off, enslaved into
+	// the cell's bridge by up-cell.sh. Only a fritzbox cell sets it, and
+	// only from uplinkRE (lab #13).
+	Uplink string `yaml:"uplink,omitempty" json:"uplink,omitempty"`
 }
 
 type DockerHost struct {
@@ -65,7 +71,7 @@ type DockerHost struct {
 // the pool this source hands to ordinary clients; the adapter's
 // ReserveMAC keeps a separate per-MAC reservation outside that range.
 type Source struct {
-	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd | pihole | routeros
+	Type        string `yaml:"type" json:"type"` // kea | isc-dhcp | dnsmasq | udhcpd | pihole | routeros | openwrt | fritzbox
 	BaseImage   string `yaml:"base_image" json:"base_image"`
 	MgmtAddress string `yaml:"mgmt_address" json:"mgmt_address"`
 	SegAddress  string `yaml:"seg_address" json:"seg_address"`
@@ -83,6 +89,21 @@ type Source struct {
 	DiskGiB     int    `yaml:"disk_gib" json:"disk_gib"`
 	// Partner, when set, makes the source a failover pair (lab #12).
 	Partner *Peer `yaml:"partner" json:"partner,omitempty"`
+	// Device names the physical box behind a fritzbox source; the VM at
+	// mgmt_address is only the probe that reaches it (lab #13).
+	Device *Device `yaml:"device,omitempty" json:"device,omitempty"`
+}
+
+// Device is the real DHCP server of a fritzbox cell. Address is the box
+// and equals source.seg_address, the address the scenarios judge against;
+// ProbeAddress is the probe VM's own address on the segment. The password
+// is never in lab.yaml: PasswordEnv names an environment variable on the
+// lab host (lab #13).
+type Device struct {
+	Address      string `yaml:"address" json:"address"`
+	ProbeAddress string `yaml:"probe_address" json:"probe_address"`
+	TR064User    string `yaml:"tr064_user" json:"tr064_user"`
+	PasswordEnv  string `yaml:"password_env" json:"password_env"`
 }
 
 // Peer is the second server of a failover pair: same type, image and
@@ -105,7 +126,7 @@ const (
 	DNSOptionHost       = 253
 )
 
-var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true, "pihole": true, "routeros": true, "openwrt": true}
+var sourceTypes = map[string]bool{"kea": true, "isc-dhcp": true, "dnsmasq": true, "udhcpd": true, "pihole": true, "routeros": true, "openwrt": true, "fritzbox": true}
 
 // v4OnlySources are the source types whose server has no DHCPv6 (lab #10:
 // busybox udhcpd) or whose cell leaves it out (lab #9: OpenWrt, whose
@@ -194,6 +215,7 @@ func (c *Config) Validate() error {
 	seenBridge := map[string]bool{}
 	var seenSubnets []netip.Prefix
 	seenMgmt := map[string]bool{}
+	seenUplink := map[string]string{}
 	for i, cell := range c.Cells {
 		if cell.Name == "" {
 			return fmt.Errorf("cells[%d]: name is required", i)
@@ -226,6 +248,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("cell %s: segment.subnet %w", cell.Name, err)
 		}
 		seenSubnets = append(seenSubnets, segPrefix)
+		if err := validateUplink(&cell, seenUplink); err != nil {
+			return err
+		}
 		var seg6 netip.Prefix
 		if cell.Segment.Subnet6 != "" {
 			if !ula.IsValid() {
@@ -366,6 +391,9 @@ func validateRelay(cell *Cell, mgmtPrefix, segPrefix netip.Prefix, seenBridge ma
 	if _, err := LookupBaseImage(r.BaseImage); err != nil {
 		return fail("base_image: %v", err)
 	}
+	if r.ServerSegment.Uplink != "" {
+		return fail("server_segment.uplink is not supported")
+	}
 	b := r.ServerSegment.Bridge
 	if b == "" {
 		return fail("server_segment.bridge is required")
@@ -467,7 +495,7 @@ func ReservedGroupHost(host int) bool {
 // must be a real range inside that same segment.
 func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefix netip.Prefix, addrField string, seenMgmt map[string]bool) error {
 	if !sourceTypes[s.Type] {
-		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd, pihole, routeros, openwrt", cellName, s.Type)
+		return fmt.Errorf("cell %s: source.type %q is not one of kea, isc-dhcp, dnsmasq, udhcpd, pihole, routeros, openwrt, fritzbox", cellName, s.Type)
 	}
 	if s.BaseImage == "" {
 		return fmt.Errorf("cell %s: source.base_image is required", cellName)
@@ -509,11 +537,99 @@ func validateSource(cellName string, s *Source, mgmtPrefix, segPrefix, addrPrefi
 	if start.Compare(end) >= 0 {
 		return fmt.Errorf("cell %s: source.pool_start must be lower than source.pool_end", cellName)
 	}
-	if start == segAddr.Addr() || end == segAddr.Addr() {
+	// The whole range, not its two ends: a pool that merely spans the
+	// address would lease it to a container (lab #13).
+	if a := segAddr.Addr(); start.Compare(a) <= 0 && a.Compare(end) <= 0 {
 		return fmt.Errorf("cell %s: source pool overlaps the source's own seg_address", cellName)
+	}
+	if err := validateDevice(cellName, s, segPrefix, segAddr, start, end); err != nil {
+		return err
 	}
 	if s.Partner != nil {
 		return validatePartner(cellName, s, segAddr.Addr(), start, end, mgmtPrefix, segPrefix, seenMgmt)
+	}
+	return nil
+}
+
+// uplinkRE is the exact allow-list of host NICs a cell may enslave: the
+// lab NIC, one VLAN of it (1-4094, no leading zero) and the Fritz.Box
+// leg. Never eth0 or any other NIC (lab #13).
+var uplinkRE = regexp.MustCompile(`^(lab0|lab1|lab0\.([1-9][0-9]{0,3}))$`)
+
+func validUplink(u string) bool {
+	m := uplinkRE.FindStringSubmatch(u)
+	if m == nil {
+		return false
+	}
+	if m[2] != "" {
+		n, _ := strconv.Atoi(m[2])
+		return n <= 4094
+	}
+	return true
+}
+
+// validateUplink ties segment.uplink to a fritzbox source, refuses a NIC
+// outside the allow-list and a NIC two cells would both enslave.
+func validateUplink(cell *Cell, seen map[string]string) error {
+	u := cell.Segment.Uplink
+	box := cell.Source != nil && cell.Source.Type == "fritzbox"
+	switch {
+	case u == "" && box:
+		return fmt.Errorf("cell %s: segment.uplink is required for source.type fritzbox", cell.Name)
+	case u == "":
+		return nil
+	case !box:
+		return fmt.Errorf("cell %s: segment.uplink is only for source.type fritzbox", cell.Name)
+	case !validUplink(u):
+		return fmt.Errorf("cell %s: segment.uplink %q is not one of lab0, lab0.N (N 1-4094) or lab1", cell.Name, u)
+	}
+	if other, ok := seen[u]; ok {
+		return fmt.Errorf("cell %s: segment.uplink %s is already enslaved by cell %s", cell.Name, u, other)
+	}
+	seen[u] = cell.Name
+	return nil
+}
+
+var passwordEnvRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+// validateDevice checks the fritzbox block: present exactly for that
+// type, the box at seg_address, the probe beside it, both outside the
+// pool, and a password given only as an environment variable name.
+func validateDevice(cellName string, s *Source, segPrefix netip.Prefix, segAddr netip.Prefix, start, end netip.Addr) error {
+	d := s.Device
+	if s.Type != "fritzbox" {
+		if d != nil {
+			return fmt.Errorf("cell %s: source.device is only for source.type fritzbox", cellName)
+		}
+		return nil
+	}
+	if d == nil {
+		return fmt.Errorf("cell %s: source.device is required for source.type fritzbox", cellName)
+	}
+	box, err := legAddress(d.Address, segPrefix)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.device.address: %w", cellName, err)
+	}
+	if box != segAddr.Addr() || segAddr.Bits() != segPrefix.Bits() {
+		return fmt.Errorf("cell %s: source.device.address %s differs from source.seg_address %s", cellName, d.Address, s.SegAddress)
+	}
+	probe, err := legAddress(d.ProbeAddress, segPrefix)
+	if err != nil {
+		return fmt.Errorf("cell %s: source.device.probe_address: %w", cellName, err)
+	}
+	if probe == box {
+		return fmt.Errorf("cell %s: source.device.probe_address %s is the box's own address", cellName, probe)
+	}
+	for _, a := range []netip.Addr{box, probe} {
+		if start.Compare(a) <= 0 && a.Compare(end) <= 0 {
+			return fmt.Errorf("cell %s: source pool covers %s, an address of the box or its probe", cellName, a)
+		}
+	}
+	if d.TR064User == "" {
+		return fmt.Errorf("cell %s: source.device.tr064_user is required", cellName)
+	}
+	if !passwordEnvRE.MatchString(d.PasswordEnv) {
+		return fmt.Errorf("cell %s: source.device.password_env must name an environment variable (upper case, digits, underscore), never the password itself", cellName)
 	}
 	return nil
 }

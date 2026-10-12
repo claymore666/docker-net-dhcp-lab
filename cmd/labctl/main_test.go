@@ -259,3 +259,12 @@ func TestNewCellSourceAdapterPair(t *testing.T) {
 		t.Error("a dnsmasq pair built an adapter")
 	}
 }
+
+// The shipped fritzbox cell reaches an adapter through the same mapping as
+// every other source type (lab #13).
+func TestNewSourceAdapterFritzbox(t *testing.T) {
+	a, err := newSourceAdapter("fritzbox", mgmtRunner("10.200.255.171/24"))
+	if f, ok := a.(*sourceadapter.FritzboxAdapter); err != nil || !ok || f.Runner != mgmtRunner("10.200.255.171/24") {
+		t.Fatalf("fritzbox: %#v, %v", a, err)
+	}
+}

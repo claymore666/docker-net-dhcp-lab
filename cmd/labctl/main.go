@@ -266,6 +266,8 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.RouterOSAdapter{Runner: runner}, nil
 	case "openwrt":
 		return &sourceadapter.OpenwrtAdapter{Runner: runner}, nil
+	case "fritzbox":
+		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}
