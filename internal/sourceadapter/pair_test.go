@@ -85,6 +85,9 @@ func (f *fakePeer) RogueLeases(context.Context) ([]Lease, error) { return nil, f
 func (f *fakePeer) NarrowPool(context.Context, string, string) (func(context.Context) error, error) {
 	return f.restorable("NarrowPool")
 }
+func (f *fakePeer) ServerEvents(context.Context, time.Time, string) ([]ServerEvent, error) {
+	return nil, f.rec("ServerEvents")
+}
 func (f *fakePeer) Renumber(context.Context, string, string, string, string) (func(context.Context) error, error) {
 	return f.restorable("Renumber")
 }

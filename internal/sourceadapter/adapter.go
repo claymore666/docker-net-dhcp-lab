@@ -88,6 +88,10 @@ const (
 	// CapV6ServerStop declares StopV6Server: DHCPv6 silent while the RA
 	// keeps asking for it (D3c, #23).
 	CapV6ServerStop Capability = "v6-server-stop"
+	// CapServerEvents declares ServerEvents: the source's own journal read
+	// back as DHCPv4 events (lab #15). Declared by the Debian cells only;
+	// the appliances and the failover pairs report it absent with a reason.
+	CapServerEvents Capability = "server-events"
 )
 
 // Lease is one entry from a source's own table, normalized across the
@@ -218,6 +222,13 @@ type Adapter interface {
 	// current lease time; restore puts eth1's addresses and the config
 	// back byte for byte and restarts (C9, #23).
 	Renumber(ctx context.Context, subnet, addr, first, last string) (restore func(ctx context.Context) error, err error)
+	// ServerEvents returns the DHCPv4 messages the source's own journal
+	// logged for mac (every client when mac is empty) since the given
+	// time, in the journal's order (lab #15). It fails when the journal
+	// dropped lines or a line of a known shape does not parse; a source
+	// that keeps no readable log refuses and does not declare
+	// CapServerEvents.
+	ServerEvents(ctx context.Context, since time.Time, mac string) ([]ServerEvent, error)
 }
 
 // Runner executes one command on the source VM's own management

@@ -650,6 +650,9 @@ func (a *sequencedLeaseAdapter) RogueLeases(_ context.Context) ([]sourceadapter.
 func (a *sequencedLeaseAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *sequencedLeaseAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
 func (a *sequencedLeaseAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }

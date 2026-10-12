@@ -35,6 +35,7 @@ var routerosNAReasons = map[Capability]string{
 	CapRapidCommit4:    "RouterOS 7.24.5's /ip dhcp-server has no rapid-commit setting (M3, #9).",
 	CapDNSRegistration: "the CHR's resolver refuses remote queries in its stock config (allow-remote-requests=no, M3) and the lab keeps it that way.",
 	CapV6:              rosV6Reason,
+	CapServerEvents:    serverEventsNA,
 }
 
 // NAReason names why a capability is absent (DESIGN-910 5.2, #9).
@@ -587,6 +588,10 @@ func (a *RouterOSAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
 
 func (a *RouterOSAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {
 	return "", a.host().needPortable("SendForceRenew")
+}
+
+func (a *RouterOSAdapter) ServerEvents(ctx context.Context, since time.Time, mac string) ([]ServerEvent, error) {
+	return serverEventsRefused("routeros")
 }
 
 var _ Adapter = (*RouterOSAdapter)(nil)

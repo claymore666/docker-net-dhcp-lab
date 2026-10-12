@@ -35,6 +35,7 @@ var openwrtNAReasons = map[Capability]string{
 	CapSquatter:        openwrtNAReason,
 	CapRogueServer:     openwrtNAReason,
 	CapForceRenewNonce: openwrtNAReason,
+	CapServerEvents:    serverEventsNA,
 	CapV6:              openwrtV6Reason,
 }
 
@@ -377,6 +378,10 @@ func (a *OpenwrtAdapter) StartRogue(ctx context.Context, serverAddr, first, last
 
 func (a *OpenwrtAdapter) RogueLeases(ctx context.Context) ([]Lease, error) {
 	return a.host().rogueLeases(ctx, a.Runner)
+}
+
+func (a *OpenwrtAdapter) ServerEvents(ctx context.Context, since time.Time, mac string) ([]ServerEvent, error) {
+	return serverEventsRefused("openwrt")
 }
 
 func (a *OpenwrtAdapter) SendForceRenew(ctx context.Context, script []byte, p ForceRenewParams) (string, error) {

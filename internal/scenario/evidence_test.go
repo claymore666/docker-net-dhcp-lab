@@ -108,6 +108,9 @@ func (a *countingReachAdapter) RogueLeases(_ context.Context) ([]sourceadapter.L
 func (a *countingReachAdapter) NarrowPool(_ context.Context, _, _ string) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
+func (a *countingReachAdapter) ServerEvents(_ context.Context, _ time.Time, _ string) ([]sourceadapter.ServerEvent, error) {
+	return nil, nil
+}
 func (a *countingReachAdapter) Renumber(_ context.Context, _, _, _, _ string) (func(context.Context) error, error) {
 	return func(context.Context) error { return nil }, nil
 }
