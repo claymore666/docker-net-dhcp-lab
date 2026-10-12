@@ -268,3 +268,49 @@ func TestNewSourceAdapterFritzbox(t *testing.T) {
 		t.Fatalf("fritzbox: %#v, %v", a, err)
 	}
 }
+
+// The per-scenario wrapper (plugin and bridge checks, source readiness,
+// and on the ipam shapes a fresh network before every scenario after the
+// first) runs once per scenario the shape does not already answer (#79).
+// The counts are for a source declaring every capability: the catalog
+// size on the null-IPAM shapes, and the catalog minus the shape-static
+// N/A rows on the two ipam shapes.
+func TestStaticNAForCountsTheWrapperCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	static := 0
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		calls := len(scenario.Catalog) - len(na)
+		ipam := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		switch {
+		case !ipam && len(na) != 0:
+			t.Errorf("%s: %d scenarios skipped on a shape without the ipam refusal", shape, len(na))
+		case ipam && len(na) == 0:
+			t.Errorf("%s: no scenario skipped", shape)
+		}
+		if ipam {
+			static = len(na)
+		}
+		t.Logf("%s: %d scenarios, %d wrapper calls, %d answered statically", shape, len(scenario.Catalog), calls, len(na))
+		for name, v := range na {
+			if v.Result != scenario.NA || v.Scenario != name || v.Shape != shape || v.Cell != "kea" {
+				t.Errorf("%s/%s: skipped verdict %+v", shape, name, v)
+			}
+		}
+	}
+	if static == 0 {
+		t.Fatal("no ipam shape was counted")
+	}
+}
+
+// A scenario answered without the wrapper leaves no identity behind on
+// the network, so the first scenario that does run starts on the network
+// NetworkUp made and each later one gets a fresh one.
+func TestNeedsIsolationKeysOnScenariosThatRan(t *testing.T) {
+	for ran, want := range []bool{false, true, true} {
+		if got := needsIsolation(ran); got != want {
+			t.Errorf("needsIsolation(%d) = %v, want %v", ran, got, want)
+		}
+	}
+}

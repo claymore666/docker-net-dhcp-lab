@@ -634,8 +634,20 @@ func cmdRun(args []string) int {
 
 	failed := 0
 	isolationMethod := ""
-	for i, s := range scenariosToRun {
-		if isolateBetweenScenarios && i > 0 {
+	// Scenarios the shape alone answers (the ipam shapes' N/A) are written
+	// here and never reach RunOne or the isolation below (#79).
+	staticNA := staticNAFor(scenariosToRun, env)
+	ran := 0
+	for _, s := range scenariosToRun {
+		if v, ok := staticNA[s.Name]; ok {
+			if err := scenario.Write(evidenceDir, v); err != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
+				return 1
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+			continue
+		}
+		if isolateBetweenScenarios && needsIsolation(ran) {
 			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, env.HostNetStack, cellName, shape, nil)
 			if err != nil {
 				// A failed isolation is a lab error, never a scenario
@@ -656,6 +668,7 @@ func cmdRun(args []string) int {
 				return 1
 			}
 		}
+		ran++
 		v := scenario.RunOne(ctx, s, env)
 		// Recorded in the verdict itself, not only in isolation.log, so
 		// a read of one verdict file says how its network was isolated
@@ -675,6 +688,24 @@ func cmdRun(args []string) int {
 			failed, len(scenariosToRun), cellName, shape)
 	}
 	return 0
+}
+
+// needsIsolation is true for every scenario that goes through RunOne
+// after the first: the isolation exists so one scenario's container
+// cannot take over the identity the previous one left on the network,
+// and a scenario answered statically leaves nothing behind (#79).
+func needsIsolation(ran int) bool { return ran > 0 }
+
+// staticNAFor is the verdicts, by scenario name, of the scenarios in list
+// that scenario.StaticNA answers for this env.
+func staticNAFor(list []scenario.Scenario, env scenario.Env) map[string]scenario.Verdict {
+	out := map[string]scenario.Verdict{}
+	for _, s := range list {
+		if v, ok := scenario.StaticNA(s, env); ok {
+			out[s.Name] = v
+		}
+	}
+	return out
 }
 
 // poolCapacity returns the number of addresses in an IPv4 pool,
