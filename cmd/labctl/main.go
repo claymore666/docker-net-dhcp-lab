@@ -632,22 +632,20 @@ func cmdRun(args []string) int {
 		defer isolationLog.Close()
 	}
 
-	failed := 0
 	isolationMethod := ""
 	// Scenarios the shape alone answers (the ipam shapes' N/A) are written
 	// here and never reach RunOne or the isolation below (#79).
 	staticNA := staticNAFor(scenariosToRun, env)
-	ran := 0
-	for _, s := range scenariosToRun {
-		if v, ok := staticNA[s.Name]; ok {
+	failed, err := runScenarios(scenariosToRun, staticNA, isolateBetweenScenarios, scenarioSteps{
+		static: func(v scenario.Verdict) error {
 			if err := scenario.Write(evidenceDir, v); err != nil {
-				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
-				return 1
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, v.Scenario, err)
+				return err
 			}
-			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
-			continue
-		}
-		if isolateBetweenScenarios && needsIsolation(ran) {
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, v.Scenario, v.Result, v.Reason)
+			return nil
+		},
+		isolate: func(s scenario.Scenario) error {
 			newNet, method, err := scenario.IsolateIPAMNetwork(ctx, hostRunner, env.HostNetStack, cellName, shape, nil)
 			if err != nil {
 				// A failed isolation is a lab error, never a scenario
@@ -657,7 +655,7 @@ func cmdRun(args []string) int {
 				// against) a network that IsolateIPAMNetwork itself
 				// found gone (issue #3).
 				fmt.Fprintln(os.Stderr, "labctl run: IsolateIPAMNetwork:", err)
-				return 1
+				return err
 			}
 			env.Network = newNet
 			isolationMethod = method
@@ -665,29 +663,70 @@ func cmdRun(args []string) int {
 			fmt.Print(line)
 			if _, err := isolationLog.WriteString(line); err != nil {
 				fmt.Fprintln(os.Stderr, "labctl run: could not write isolation.log:", err)
-				return 1
+				return err
 			}
-		}
-		ran++
-		v := scenario.RunOne(ctx, s, env)
-		// Recorded in the verdict itself, not only in isolation.log, so
-		// a read of one verdict file says how its network was isolated
-		// without needing the sibling log (issue #3).
-		v.IsolationMethod = isolationMethod
-		if err := scenario.Write(evidenceDir, v); err != nil {
-			fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
-			return 1
-		}
-		fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
-		if v.Result == scenario.FAIL {
-			failed++
-		}
+			return nil
+		},
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			v := scenario.RunOne(ctx, s, env)
+			// Recorded in the verdict itself, not only in isolation.log, so
+			// a read of one verdict file says how its network was isolated
+			// without needing the sibling log (issue #3).
+			v.IsolationMethod = isolationMethod
+			if err := scenario.Write(evidenceDir, v); err != nil {
+				fmt.Fprintf(os.Stderr, "labctl run: %s/%s/%s: could not write verdict: %v\n", cellName, shape, s.Name, err)
+				return v, err
+			}
+			fmt.Printf("%s %s %s: %s (%s)\n", cellName, shape, s.Name, v.Result, v.Reason)
+			return v, nil
+		},
+	})
+	if err != nil {
+		return 1
 	}
 	if failed > 0 {
 		fmt.Printf("labctl run: %d/%d scenarios FAILed on %s/%s; see verdicts\n",
 			failed, len(scenariosToRun), cellName, shape)
 	}
 	return 0
+}
+
+// scenarioSteps are the three things the run loop does for a scenario;
+// cmdRun supplies the real ones and the tests count calls through fakes.
+type scenarioSteps struct {
+	static  func(v scenario.Verdict) error
+	isolate func(before scenario.Scenario) error
+	run     func(s scenario.Scenario) (scenario.Verdict, error)
+}
+
+// runScenarios is the loop cmdRun runs: a scenario in static is written
+// without the wrapper or an isolation, every other one is isolated from
+// the previous wrapper run when isolating is set, then run. It returns the
+// FAIL count, or the first step error with nothing run behind it (#79).
+func runScenarios(list []scenario.Scenario, static map[string]scenario.Verdict, isolating bool, st scenarioSteps) (int, error) {
+	failed, ran := 0, 0
+	for _, s := range list {
+		if v, ok := static[s.Name]; ok {
+			if err := st.static(v); err != nil {
+				return failed, err
+			}
+			continue
+		}
+		if isolating && needsIsolation(ran) {
+			if err := st.isolate(s); err != nil {
+				return failed, err
+			}
+		}
+		ran++
+		v, err := st.run(s)
+		if err != nil {
+			return failed, err
+		}
+		if v.Result == scenario.FAIL {
+			failed++
+		}
+	}
+	return failed, nil
 }
 
 // needsIsolation is true for every scenario that goes through RunOne

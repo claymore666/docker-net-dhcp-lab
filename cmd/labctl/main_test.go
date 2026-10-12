@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -312,5 +313,66 @@ func TestNeedsIsolationKeysOnScenariosThatRan(t *testing.T) {
 		if got := needsIsolation(ran); got != want {
 			t.Errorf("needsIsolation(%d) = %v, want %v", ran, got, want)
 		}
+	}
+}
+
+// The loop cmdRun runs, driven with fake steps on every shape: the ipam
+// shapes send only the scenarios the shape does not answer through the
+// wrapper, isolate before each of them but the first, and write the rest
+// without either; the other shapes send the whole catalog through (#79).
+func TestRunScenariosCountsWrapperAndIsolationCallsPerShape(t *testing.T) {
+	src := &sourceadapter.KeaAdapter{}
+	for _, shape := range scenario.Shapes {
+		env := scenario.Env{Source: src, Cell: "kea", Shape: shape, GitSHA: "abc1234"}
+		na := staticNAFor(scenario.Catalog, env)
+		isolating := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
+		var ran, isolated, written []string
+		failed, err := runScenarios(scenario.Catalog, na, isolating, scenarioSteps{
+			static: func(v scenario.Verdict) error { written = append(written, v.Scenario); return nil },
+			isolate: func(s scenario.Scenario) error {
+				isolated = append(isolated, s.Name)
+				return nil
+			},
+			run: func(s scenario.Scenario) (scenario.Verdict, error) {
+				ran = append(ran, s.Name)
+				return scenario.Verdict{Scenario: s.Name, Result: scenario.PASS}, nil
+			},
+		})
+		if err != nil || failed != 0 {
+			t.Fatalf("%s: failed=%d err=%v", shape, failed, err)
+		}
+		if len(ran) != len(scenario.Catalog)-len(na) || len(written) != len(na) {
+			t.Errorf("%s: %d wrapper runs, %d static writes; want %d and %d", shape, len(ran), len(written), len(scenario.Catalog)-len(na), len(na))
+		}
+		wantIso := 0
+		if isolating && len(ran) > 0 {
+			wantIso = len(ran) - 1
+		}
+		if len(isolated) != wantIso {
+			t.Errorf("%s: %d isolations for %d wrapper runs, want %d", shape, len(isolated), len(ran), wantIso)
+		}
+		if isolating && len(ran) > 1 && isolated[0] != ran[1] {
+			t.Errorf("%s: first isolation is before %s, want before %s", shape, isolated[0], ran[1])
+		}
+		t.Logf("%s: %d wrapper runs, %d isolations, %d static writes", shape, len(ran), len(isolated), len(written))
+	}
+}
+
+// A step error ends the loop: nothing behind it is written or run, and a
+// FAIL verdict counts.
+func TestRunScenariosStopsOnAStepErrorAndCountsFails(t *testing.T) {
+	list := []scenario.Scenario{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	var ran []string
+	failed, err := runScenarios(list, nil, false, scenarioSteps{
+		run: func(s scenario.Scenario) (scenario.Verdict, error) {
+			ran = append(ran, s.Name)
+			if s.Name == "b" {
+				return scenario.Verdict{}, errors.New("disk")
+			}
+			return scenario.Verdict{Result: scenario.FAIL}, nil
+		},
+	})
+	if err == nil || failed != 1 || len(ran) != 2 {
+		t.Fatalf("failed=%d err=%v ran=%v", failed, err, ran)
 	}
 }

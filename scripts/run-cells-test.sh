@@ -880,6 +880,18 @@ LAB_DISK_WAIT=0 cells "$e" -j 1 a
 [ "$(started "$e")" -eq 0 ] || bad "case 21h: a skipped cell was started by the retry pass"
 [ -f "$e/root/evidence/a/old.verdict" ] || bad "case 21h: a verdict of a cell that never ran was moved"
 
+# durations.tsv keeps the first run's length: the retry runs under the
+# pool cap and says nothing about how long the cell takes at full load
+e=$(new_env)
+meminfo "$e" 60
+echo "1 0" >"$e/state/spec.a.1"
+echo "5 0" >"$e/state/spec.a.2"
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+expect "case 21i (durations of a retried cell)" 0 "$e"
+secs=$(awk -F'\t' '$1=="a"{print $2}' "$e/root/durations.tsv" 2>/dev/null)
+if [[ ! "$secs" =~ ^[0-9]+$ ]] || [ "$secs" -gt 3 ]; then bad "case 21i: durations.tsv has '$secs' seconds for a; the first run took about 1, the retry about 5"; fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
