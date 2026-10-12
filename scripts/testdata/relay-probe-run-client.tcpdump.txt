@@ -1,0 +1,58 @@
+13:33:14.415824 56:c4:54:72:7a:44 > 33:33:00:00:00:02, ethertype IPv6 (0x86dd), length 70: (hlim 255, next-header ICMPv6 (58) payload length: 16) fe80::54c4:54ff:fe72:7a44 > ff02::2: [icmp6 sum ok] ICMP6, router solicitation, length 16
+	  source link-address option (1), length 8 (1): 56:c4:54:72:7a:44
+13:33:18.511575 56:c4:54:72:7a:44 > 33:33:00:00:00:02, ethertype IPv6 (0x86dd), length 70: (hlim 255, next-header ICMPv6 (58) payload length: 16) fe80::54c4:54ff:fe72:7a44 > ff02::2: [icmp6 sum ok] ICMP6, router solicitation, length 16
+	  source link-address option (1), length 8 (1): 56:c4:54:72:7a:44
+13:33:26.447500 56:c4:54:72:7a:44 > 33:33:00:00:00:02, ethertype IPv6 (0x86dd), length 70: (hlim 255, next-header ICMPv6 (58) payload length: 16) fe80::54c4:54ff:fe72:7a44 > ff02::2: [icmp6 sum ok] ICMP6, router solicitation, length 16
+	  source link-address option (1), length 8 (1): 56:c4:54:72:7a:44
+13:33:33.159196 52:54:00:6f:e3:c7 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 52:54:00:6f:e3:c7, length 300, xid 0xe8e5e211, Flags [none]
+	  Client-Ethernet-Address 52:54:00:6f:e3:c7
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Discover
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 12: "udhcp 1.36.1"
+	    Client-ID (61), length 7: ether 52:54:00:6f:e3:c7
+13:33:33.186253 52:54:00:5f:7b:2c > 52:54:00:6f:e3:c7, ethertype IPv4 (0x0800), length 342: (tos 0x10, ttl 128, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    10.200.10.1.67 > 10.200.10.100.68: BOOTP/DHCP, Reply, length 300, hops 1, xid 0xe8e5e211, Flags [none]
+	  Your-IP 10.200.10.100
+	  Gateway-IP 10.200.10.1
+	  Client-Ethernet-Address 52:54:00:6f:e3:c7
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Offer
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 10.200.10.1
+	    Lease-Time (51), length 4: 3600
+	    Server-ID (54), length 4: 10.200.11.2
+	    Client-ID (61), length 7: ether 52:54:00:6f:e3:c7
+13:33:33.219076 52:54:00:6f:e3:c7 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: (tos 0x0, ttl 64, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 52:54:00:6f:e3:c7, length 300, xid 0xe8e5e211, Flags [none]
+	  Client-Ethernet-Address 52:54:00:6f:e3:c7
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: Request
+	    Requested-IP (50), length 4: 10.200.10.100
+	    Server-ID (54), length 4: 10.200.11.2
+	    MSZ (57), length 2: 576
+	    Parameter-Request (55), length 7: 
+	      Subnet-Mask (1), Default-Gateway (3), Domain-Name-Server (6), Hostname (12)
+	      Domain-Name (15), BR (28), NTP (42)
+	    Vendor-Class (60), length 12: "udhcp 1.36.1"
+	    Client-ID (61), length 7: ether 52:54:00:6f:e3:c7
+13:33:33.222760 52:54:00:5f:7b:2c > 52:54:00:6f:e3:c7, ethertype IPv4 (0x0800), length 342: (tos 0x10, ttl 128, id 0, offset 0, flags [none], proto UDP (17), length 328)
+    10.200.10.1.67 > 10.200.10.100.68: BOOTP/DHCP, Reply, length 300, hops 1, xid 0xe8e5e211, Flags [none]
+	  Your-IP 10.200.10.100
+	  Gateway-IP 10.200.10.1
+	  Client-Ethernet-Address 52:54:00:6f:e3:c7
+	  Vendor-rfc1048 Extensions
+	    Magic Cookie 0x63825363
+	    DHCP-Message (53), length 1: ACK
+	    Subnet-Mask (1), length 4: 255.255.255.0
+	    Default-Gateway (3), length 4: 10.200.10.1
+	    Lease-Time (51), length 4: 3600
+	    Server-ID (54), length 4: 10.200.11.2
+	    Client-ID (61), length 7: ether 52:54:00:6f:e3:c7

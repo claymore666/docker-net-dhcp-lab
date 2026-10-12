@@ -49,7 +49,11 @@ sudo -n nsenter -t "$pid" -n sysctl -qw net.ipv6.conf.eth-obs.disable_ipv6=1
 sudo -n nsenter -t "$pid" -n ip link set eth-obs up
 
 # DHCPv4, DHCPv6, and router solicitations and advertisements (#23).
-sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U \
+# Without --immediate-mode, alpine 3.20's tcpdump 4.99.4 holds a frame
+# in the kernel ring for up to 1 s before -U writes it (measured
+# 2026-10-12); the relay probe and the scenario snapshots read this
+# file live (lab #76).
+sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U --immediate-mode \
 	'udp port 67 or udp port 68 or udp port 546 or udp port 547 or (icmp6 and (ip6[40] == 133 or ip6[40] == 134))'
 
 # Bounded wait for tcpdump to actually be running before telling the
