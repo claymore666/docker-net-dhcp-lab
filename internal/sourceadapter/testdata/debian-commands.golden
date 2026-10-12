@@ -158,6 +158,7 @@
 ## kea EnableFeature/temporary-6 err=true
 ## isc-dhcp Leases err=false
 "sudo cat /var/lib/dhcp/dhcpd.leases"
+"sudo cat /etc/dhcp/lab-reservations.conf"
 ## isc-dhcp Leases6 err=false
 "sudo cat /var/lib/dhcp/dhcpd6.leases"
 ## isc-dhcp SetRAOff err=false
@@ -186,7 +187,7 @@
 ## isc-dhcp ShortenLeaseTime err=false
 # restore err=false
 "sudo cat /etc/dhcp/dhcpd.conf"
-"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 60;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
+"sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 60;\nmin-lease-time 60;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
 "sudo systemctl restart isc-dhcp-server"
 "sudo tee /etc/dhcp/dhcpd.conf >/dev/null <<'LABEOF'\ndefault-lease-time 600;\nmax-lease-time 7200;\nauthoritative;\nclass \"b5\" {\n  match if option vendor-class-identifier = \"lab-class-b5\";\n}\nsubnet 10.200.1.0 netmask 255.255.255.0 {\n  pool {\n    deny members of \"b5\";\n    range 10.200.1.100 10.200.1.200;\n  }\n  pool {\n    allow members of \"b5\";\n    range 10.200.1.221 10.200.1.230;\n  }\n  option routers 10.200.1.1;\n}\ninclude \"/etc/dhcp/lab-reservations.conf\";\nLABEOF\n"
 "sudo systemctl restart isc-dhcp-server"

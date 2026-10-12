@@ -39,12 +39,108 @@ func (a *ISCDHCPAdapter) allCapabilities() []Capability {
 // (Leases()) and is the file ResetLeases truncates (issue #3 part 2).
 const iscLeaseFile = "/var/lib/dhcp/dhcpd.leases"
 
+// iscReservationFile is the include the lab writes host reservations to
+// (iscReserve); dhcpd serves them outside the pool.
+const iscReservationFile = "/etc/dhcp/lab-reservations.conf"
+
+// Leases returns dhcpd.leases plus the reservations a client holds right
+// now. dhcpd never writes a host { fixed-address } binding to the lease
+// file (lab #70, B1/B2), so a reservation counts only when dhcpd's own
+// log for the current activation says its last event on that address
+// was a DHCPACK: a reserved address nobody holds is not a lease.
 func (a *ISCDHCPAdapter) Leases(ctx context.Context) ([]Lease, error) {
+	leases, err := a.leaseFileRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conf, err := a.Runner.Run(ctx, "sudo cat "+iscReservationFile)
+	if err != nil {
+		return nil, fmt.Errorf("isc-dhcp: read %s: %w", iscReservationFile, err)
+	}
+	hosts := parseISCReservations(conf)
+	if len(hosts) == 0 {
+		return leases, nil
+	}
+	unit := a.host().svc().name
+	journal, err := a.Runner.Run(ctx, iscJournalCmd(unit))
+	if err != nil {
+		return nil, fmt.Errorf("isc-dhcp: read %s log for reservations: %w", unit, err)
+	}
+	return mergeISCReservations(leases, hosts, parseISCHeld(journal)), nil
+}
+
+// leaseFileRows is the dynamic table alone; Ready reads this one so the
+// log read below never decides whether the source is ready (#70).
+func (a *ISCDHCPAdapter) leaseFileRows(ctx context.Context) ([]Lease, error) {
 	out, err := a.Runner.Run(ctx, "sudo cat "+iscLeaseFile)
 	if err != nil {
 		return nil, fmt.Errorf("isc-dhcp: read dhcpd.leases: %w", err)
 	}
 	return parseISCLeases(out)
+}
+
+// iscJournalCmd reads the unit's log since its current activation began
+// (a restart or ResetLeases starts a new one, so an old ACK never
+// counts); a unit that is not active has no activation and prints
+// nothing.
+func iscJournalCmd(unit string) string {
+	return fmt.Sprintf(`s=$(systemctl show -p ActiveEnterTimestamp --value %s); if [ -n "$s" ]; then sudo journalctl -u %s -o cat --no-pager --since "$s"; fi`, unit, unit)
+}
+
+// iscReservation is one host block of iscReservationFile: exactly one of
+// mac or clientID is set, as iscReserve writes them.
+type iscReservation struct {
+	mac, clientID, addr string
+}
+
+var (
+	iscHostBlockRE = regexp.MustCompile(`host\s+\S+\s*\{\s*(?:hardware ethernet\s+([0-9a-fA-F:]+)|option dhcp-client-identifier\s+([0-9a-fA-F:]+))\s*;\s*fixed-address\s+([\d.]+)\s*;\s*\}`)
+	iscLogEventRE  = regexp.MustCompile(`DHCP(ACK) on ([\d.]+) to ([0-9a-fA-F:]{17})|DHCP(RELEASE|DECLINE) of ([\d.]+) from ([0-9a-fA-F:]{17})`)
+)
+
+func parseISCReservations(conf string) []iscReservation {
+	var out []iscReservation
+	for _, m := range iscHostBlockRE.FindAllStringSubmatch(conf, -1) {
+		out = append(out, iscReservation{mac: strings.ToLower(m[1]), clientID: strings.ToLower(m[2]), addr: m[3]})
+	}
+	return out
+}
+
+// parseISCHeld maps an address to the MAC of its last ACK, dropping it
+// again when a RELEASE or DECLINE for it comes later in the log.
+func parseISCHeld(journal string) map[string]string {
+	held := map[string]string{}
+	for _, m := range iscLogEventRE.FindAllStringSubmatch(journal, -1) {
+		if m[1] == "ACK" {
+			held[m[2]] = strings.ToLower(m[3])
+		} else {
+			delete(held, m[5])
+		}
+	}
+	return held
+}
+
+func mergeISCReservations(leases []Lease, hosts []iscReservation, held map[string]string) []Lease {
+	row := map[string]int{}
+	for i, l := range leases {
+		row[l.Address] = i
+	}
+	for _, h := range hosts {
+		mac, ok := held[h.addr]
+		if !ok || (h.mac != "" && h.mac != mac) {
+			continue
+		}
+		// One row per address: a lease-file row for a reserved address
+		// stays the lease file's row, marked reserved (#70).
+		if i, dup := row[h.addr]; dup {
+			leases[i].Reserved = true
+			continue
+		}
+		row[h.addr] = len(leases)
+		leases = append(leases, Lease{MAC: mac, Address: h.addr, ClientID: h.clientID, Reserved: true})
+	}
+	sort.Slice(leases, func(i, j int) bool { return leases[i].Address < leases[j].Address })
+	return leases
 }
 
 var (
@@ -219,25 +315,40 @@ func (a *ISCDHCPAdapter) ResetLeases(ctx context.Context) error {
 func (a *ISCDHCPAdapter) host() host { return debianHost("isc-dhcp-server") }
 
 // ShortenLeaseTime rewrites the RUNNING config's default-lease-time and
-// restarts (issue #3, A14). It captures /etc/dhcp/dhcpd.conf as it
-// stands right now, never /root/lab-stock-config/dhcpd.conf.stock: that
-// file is the package's own pre-install default, captured before this
-// cell's own subnet/pool/lab-reservations.conf include ever got written
-// over it, so restoring from it would drop this cell's whole working
-// config. max-lease-time is left untouched: it only caps a lease a
-// client explicitly requests a longer term for, and this scenario's
-// bare client takes whatever default-lease-time hands it, the same
-// RFC 2131 T1-at-roughly-half-the-lease fallback dnsmasq and Kea both
-// rely on here too, since dhcpd sends no explicit T1/T2 of its own
-// either.
+// min-lease-time, then restarts (issue #3, A14). It captures
+// /etc/dhcp/dhcpd.conf as it stands right now, never
+// /root/lab-stock-config/dhcpd.conf.stock: that file is the package's
+// own pre-install default, captured before this cell's own
+// subnet/pool/lab-reservations.conf include ever got written over it.
+// The client asks for no lease time, so dhcpd serves default-lease-time,
+// raised to its built-in 300 s min-lease-time when shorter: the run
+// served 300 s for the asked 40 and 120 until min-lease-time moved too (#70).
 func (a *ISCDHCPAdapter) ShortenLeaseTime(ctx context.Context, seconds int) (func(context.Context) error, error) {
 	if seconds <= 0 {
 		return nil, fmt.Errorf("isc-dhcp: lease time must be positive, got %d", seconds)
 	}
-	repl := fmt.Sprintf(`default-lease-time %d;`, seconds)
-	return shortenLeaseTimeViaSubstitution(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
-		iscDefaultLeaseTimeRE, repl,
+	return shortenLeaseTimeViaRewrite(ctx, a.Runner, "/etc/dhcp/dhcpd.conf",
+		func(orig string) string { return shortenISCConf(orig, seconds) },
 		func(ctx context.Context) error { return a.Restart(ctx) }, "isc-dhcp")
+}
+
+// shortenISCConf sets default-lease-time and min-lease-time to seconds,
+// rewriting an existing min-lease-time line or adding one after the
+// default line. Input without a default-lease-time comes back unchanged.
+func shortenISCConf(orig string, seconds int) string {
+	if !iscDefaultLeaseTimeRE.MatchString(orig) {
+		return orig
+	}
+	min := fmt.Sprintf("min-lease-time %d;", seconds)
+	if iscMinLeaseTimeRE.MatchString(orig) {
+		orig = iscMinLeaseTimeRE.ReplaceAllString(orig, min)
+		min = ""
+	}
+	repl := fmt.Sprintf("default-lease-time %d;", seconds)
+	if min != "" {
+		repl += "\n" + min
+	}
+	return iscDefaultLeaseTimeRE.ReplaceAllString(orig, repl)
 }
 
 // iscRoutersRE anchors SetDNSOption on the routers line the cloud-init
@@ -259,7 +370,7 @@ func (a *ISCDHCPAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 
 // Ready, Recover and Impair: the shared group C bodies (readiness.go, #23).
 func (a *ISCDHCPAdapter) Ready(ctx context.Context) error {
-	return a.host().sourceReady(ctx, a.Runner, a.units(), a.Leases, &a.base)
+	return a.host().sourceReady(ctx, a.Runner, a.units(), a.leaseFileRows, &a.base)
 }
 
 func (a *ISCDHCPAdapter) Recover(ctx context.Context) error {
