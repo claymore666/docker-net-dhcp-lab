@@ -8,8 +8,17 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
-**[504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md)** in docker-net-dhcp-lab v0.1.0
-over 3 DHCP servers, 2 Docker hosts, 5 network shapes, 17 scenarios per shape.
+**[1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)**
+in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
+Most BLOCKED rows come from lab infrastructure under load (test hosts
+unreachable over ssh), confirmed by rerunning those cells alone. Most FAIL
+rows are lab defects (the verdict writer and source adapters), fixed in
+this release. The plugin finding is the CreateEndpoint client timeout
+described on the results page.
+
+Earlier run, for history: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
+docker-net-dhcp-lab v0.1.0 over 3 DHCP servers, 2 Docker hosts, 5 network
+shapes, 17 scenarios per shape.
 
 ## How it works
 
@@ -52,11 +61,12 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 
 <table>
 <tr>
-<th>Docker hosts</th><th></th><th>Plugin runs on</th><th colspan="4">DHCP servers</th>
+<th>Docker hosts</th><th></th><th></th><th>Plugin runs on</th><th colspan="5">DHCP servers</th>
 </tr>
 <tr>
 <td align="center"><img src="docs/logos/debian.svg" alt="Debian logo" height="40"></td>
 <td align="center"><img src="docs/logos/ubuntu.svg" alt="Ubuntu logo" height="40"></td>
+<td align="center"><img src="docs/logos/debian.svg" alt="Debian logo" height="40"></td>
 <td align="center"><img src="docs/logos/docker.svg" alt="Docker logo" height="40"></td>
 <td align="center">Kea</td>
 <td align="center">ISC dhcpd</td>
@@ -67,7 +77,8 @@ What the lab runs on (a mark shown only to say the lab runs on that project):
 <tr>
 <td align="center"><a href="https://www.debian.org/">Debian</a> 13</td>
 <td align="center"><a href="https://ubuntu.com/">Ubuntu</a> 24.04 LTS</td>
-<td align="center">Docker Engine 29.8.1 (<a href="https://github.com/moby/moby">moby/moby</a>)</td>
+<td align="center"><a href="https://www.debian.org/">Debian</a> 11 with docker-ce 20.10.24</td>
+<td align="center">Docker Engine 29.9.0 (<a href="https://github.com/moby/moby">moby/moby</a>) on Debian 13 and Ubuntu, 20.10.24 on Debian 11</td>
 <td align="center"><a href="https://github.com/isc-projects/kea">isc-projects/kea</a></td>
 <td align="center"><a href="https://github.com/isc-projects/dhcp">isc-projects/dhcp</a></td>
 <td align="center"><a href="https://thekelleys.org.uk/dnsmasq/doc.html">dnsmasq</a></td>
@@ -141,7 +152,7 @@ Group B runs today (IPv4; a scenario whose source lacks the feature reports N/A,
 |---|---|---|
 | B1 | reservation by MAC | the source reserves an address for a fixed MAC; the container must get it (not on ipvlan, which shares the parent's MAC) |
 | B2 | reservation by client id | the source reserves an address for the `client_id` option; the container must get it |
-| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq; Pi-hole expected, not yet confirmed on the host) |
+| B3 | DNS registration | with `register_dns` the source answers a query for the container's hostname with the leased address (dnsmasq and Pi-hole; in the v0.2.0 run Pi-hole's B3 failed on four shapes and the cause is not yet established; dnsmasq's B3 failure on bridge was the lab's lookup returning no output while the lease table held the hostname) |
 | B4 | same MAC, same address | a container is removed and a new one with the same MAC must get the same address from the same single lease |
 | B5 | vendor class pool | with `vendor_class` the source serves the address from the class pool |
 | B6 | option change on renewal | the source changes its DNS option; after the lease renews, the container's `resolv.conf` carries the new server |
@@ -202,7 +213,7 @@ Group F runs today (the plugin's client options, judged by the bytes the contain
 | F1 | user class pool | with `user_class` the container sends a short label naming its kind of client (DHCP option 77); the source serves that label from its own address range, outside the main one |
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
 | F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
-| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Pi-hole's embedded dnsmasq is expected to (the host run has not confirmed it yet), Kea and ISC answer as usual and the normal four messages follow |
+| F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Pi-hole's embedded dnsmasq grants it too (v0.2.0 run: PASS on bridge and macvlan, FAIL on ipvlan, N/A on bridge-ipam), Kea and ISC answer as usual and the normal four messages follow |
 | F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source that serves DHCPv6 grants it (not udhcpd or Pi-hole, whose cells are DHCPv4 only), so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
 | F5 | temporary address | with `ipv6_temporary` the client also asks for a temporary address (IA_TA); ISC and dnsmasq grant one, which must be on the link beside the stable address, in the source's table and on `/Plugin.Health`, never in docker inspect. Kea grants none, so there the container must run as without the option |
 | F6 | prefix delegation | with `ipv6_mode=dhcp` and `ipv6_pd=64` the client also asks for a delegated prefix (IA_PD); Kea and ISC delegate one, which must be in the Reply, in the source's table, as an `unreachable` route in the container and on `/Plugin.Health` `delegated_prefixes`. dnsmasq delegates none, so there the container must run with no delegated prefix. On ipvlan the network create must be refused. From plugin v2.5.0 |
@@ -269,8 +280,24 @@ scripts/down-cell.sh kea <work-dir>
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
 | udhcpd | `udhcpd` | v0.2.0 results page |
 | Pi-hole | `pihole` | v0.2.0 results page |
-| MikroTik CHR | `chr` | run on 2026-10-11, no verdicts (base image refused), see the v0.2.0 results page |
-| OpenWrt 25.12 | `openwrt` | run on 2026-10-11, no verdicts (base image missing), see the v0.2.0 results page |
+| MikroTik CHR | `chr` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
+| OpenWrt 25.12 | `openwrt` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
+| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages |
+| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages |
+| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages |
+| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only) |
+| Kea behind a relay | `kea-relay` | run on 2026-10-11, no verdicts: it stopped at its relay probe (no relayed ACK reached the client observer, a lab error, so no shape ran), see the v0.2.0 results page |
+| A physical Fritz.Box (v0.3.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
+
+Work for v0.3.0 is on `dev` and has no host run yet, so none of it
+appears on a results page:
+
+- **Fritz.Box cell** (#13): the `fritzbox` cell and its schema are in
+  `lab.yaml`; the adapter is a placeholder that reads nothing.
+- **Windows Server 2025 image** (#14): `scripts/build-windows-image.sh`
+  builds the evaluation image a Windows DHCP cell would boot; no cell uses it yet.
+- **Server events** (#15): Kea, ISC dhcpd and dnsmasq can list the DHCP
+  messages they logged; no scenario reads them yet.
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
@@ -353,8 +380,8 @@ the plugin's own log, and one verdict file per scenario and shape.
 `scripts/run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name>...` runs
 several cells at once on one host and leaves one evidence bundle per cell
 under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
-and its exit code in `<root>/logs/<cell>.rc` (`--root` defaults to
-`/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
+and its exit code in `<root>/logs/<cell>.rc` (`--root` is the base directory, any directory with room for the
+evidence and the VM disks; the script's default is `/srv/lab/work/<user>`). N defaults to the smaller of the cell count,
 `(vCPUs - 2) / 3` and `(free memory in GiB - 4) / 3`, never below 1. That
 bound assumes 3 vCPUs and 3 GiB per cell; a `kea-ha` or `isc-failover`
 cell has a third VM and takes 4 and 4 GiB, so the default can overcommit by
@@ -502,5 +529,5 @@ present at priority -10 with a rule that drops by destination
 (`scripts/containment-preflight.sh`, run via `sudo -n` since reading
 nftables state needs root). That check only reads the ruleset text; it
 cannot prove traffic is actually blocked end to end. The proof of that
-is `dmz-probe.sh ""` run inside the Docker host VM at a live run, not
-this preflight.
+is `scripts/containment-probe.sh` run against the Docker host VM at a
+live run, not this preflight.
