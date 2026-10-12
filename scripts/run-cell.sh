@@ -49,6 +49,7 @@ if [ -z "$source_type" ]; then
 	exit 1
 fi
 . "$REPO_ROOT/scripts/source-types.sh"
+. "$REPO_ROOT/scripts/load-gate.sh"
 version_line=$(source_version_cmd "$source_type")
 
 echo "== bring up cell $CELL =="
@@ -174,6 +175,9 @@ for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 		echo "run-cell: $CELL/$shape already has a verdict for every scenario in $EVIDENCE_DIR, skipping"
 		continue
 	fi
+	# Run 1 (#79): a shape begun on a loaded host timed out in CreateEndpoint.
+	# Bounded; a shape that waits the whole bound still runs.
+	load_gate "run-cell: $CELL/$shape" "${LAB_LOAD_WAIT:-900}" "${LAB_LOAD_POLL:-30}"
 	rc=0
 	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" "$remaining" || rc=$?
 	if [ "$rc" -eq 3 ]; then

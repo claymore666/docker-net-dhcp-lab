@@ -56,12 +56,21 @@ write_stub_run_cell() {
 #!/bin/bash
 cell=$1
 echo "start $cell $(date +%s%N) $2 $3" >>"$LAB_TEST_DIR/calls.log"
+k=$(grep -c "^start $cell " "$LAB_TEST_DIR/calls.log")
 secs=0
 rc=0
 [ -f "$LAB_TEST_DIR/spec.$cell" ] && read -r secs rc <"$LAB_TEST_DIR/spec.$cell"
+[ -f "$LAB_TEST_DIR/spec.$cell.$k" ] && read -r secs rc <"$LAB_TEST_DIR/spec.$cell.$k"
 trap 'echo term >"$LAB_TEST_DIR/term.$cell"; exit 143' TERM
 sleep "$secs" &
 wait $!
+# emit.<cell>.<run>: "file|reason" lines, written as verdicts into the evidence dir
+if [ -f "$LAB_TEST_DIR/emit.$cell.$k" ]; then
+	mkdir -p "$3"
+	while IFS='|' read -r f reason; do
+		printf 'scenario: x\ncell: %s\nresult: FAIL\nreason: %b\n' "$cell" "$reason" >"$3/$f"
+	done <"$LAB_TEST_DIR/emit.$cell.$k"
+fi
 echo "end $cell $(date +%s%N)" >>"$LAB_TEST_DIR/calls.log"
 exit "$rc"
 STUB
@@ -74,18 +83,26 @@ echo "down $1 $(date +%s%N)" >>"$LAB_TEST_DIR/calls.log"
 STUB
 }
 
+# The load gate (#79) reads LAB_LOADAVG; every run gets an idle file unless a
+# case writes its own, so no case reads the box this runs on.
+idle() { echo "0.00 0.00 0.00 1/1 1" >"$1/loadavg"; }
+busy() { echo "${2:-9.00} 9.00 9.00 1/1 1" >"$1/loadavg"; }
+export LAB_LOADAVG="$tmp/loadavg.idle"
+echo "0.00 0.00 0.00 1/1 1" >"$LAB_LOADAVG"
+
 # A scratch repo root with a copy of run-cells.sh beside the stubs.
 new_env() {
 	local d
 	d=$(mktemp -d "$tmp/env-XXXXXX")
 	mkdir -p "$d/repo/scripts" "$d/state" "$d/root"
-	cp "$REPO_ROOT/scripts/run-cells.sh" "$d/repo/scripts/"
+	cp "$REPO_ROOT/scripts/run-cells.sh" "$REPO_ROOT/scripts/load-gate.sh" "$d/repo/scripts/"
 	write_stub_run_cell "$d/repo/scripts/run-cell.sh"
 	write_stub_down_cell "$d/repo/scripts/down-cell.sh"
 	chmod +x "$d/repo/scripts/"*.sh
 	: >"$d/repo/lab.yaml"
 	: >"$d/state/calls.log"
 	: >"$d/state/down.log"
+	idle "$d"
 	echo "$d"
 }
 
@@ -94,7 +111,7 @@ new_env() {
 cells() {
 	local d=$1 rc=0
 	shift
-	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" PATH="$tmp/bin:$PATH" \
+	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" LAB_LOADAVG="$d/loadavg" LAB_LOAD_POLL=1 PATH="$tmp/bin:$PATH" \
 		"$d/repo/scripts/run-cells.sh" --root "$d/root" --stagger 0 "$@" >"$d/out" 2>&1 || rc=$?
 	echo "$rc" >"$d/rc"
 }
@@ -531,7 +548,7 @@ order() { awk '$1=="start"||$1=="gap"{print $1}' "$1/state/calls.log" | tr '\n' 
 gapped() { # env, args...: like cells, with the gap stub first on PATH
 	local d=$1 rc=0
 	shift
-	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" PATH="$tmp/gapbin:$tmp/bin:$PATH" \
+	LAB_TEST_DIR="$d/state" LAB_MEMINFO="$d/meminfo" LAB_LOADAVG="$d/loadavg" PATH="$tmp/gapbin:$tmp/bin:$PATH" \
 		"$d/repo/scripts/run-cells.sh" --root "$d/root" "$@" >"$d/out" 2>&1 || rc=$?
 	echo "$rc" >"$d/rc"
 }
@@ -583,6 +600,282 @@ echo "3 0" >"$e/state/spec.b"
 cells "$e" -j 2 a b
 got=$(awk '$1=="end"||$1=="down"{print $1, $2}' "$e/state/calls.log" | tr '\n' ',')
 [ "$got" = "end a,down a,end b," ] || { echo "run-cells-test: FAIL -- case 18c: the failed cell waited for the other: '$got'" >&2; fail=1; }
+
+# Cases 19 to 21 (#79): the load gate, longest-first order, one retry pass.
+# Wall time is never asserted; every claim is a call order, a log line or a
+# file that the stubs and the script leave behind.
+nlines() { grep -c -- "$2" "$1/out" || true; }
+starts_of() { awk -v c="$2" '$1=="start" && $2==c' "$1/state/calls.log" | wc -l; }
+start_order() { awk '$1=="start"{print $2}' "$1/state/calls.log" | tr '\n' ' '; }
+bad() { echo "run-cells-test: FAIL -- $1" >&2; fail=1; }
+
+# Case 19: load gate. Idle: no wait. Busy then idle: the start is after the
+# recorded moment the file went idle, one wait line. Busy for good: the cell
+# still starts after the bound. 0 disables. The edge load1 == ncpu/2 waits.
+e=$(new_env)
+meminfo "$e" 60
+cells "$e" -j 2 --load-wait 600 a b
+expect "case 19 (idle host)" 0 "$e"
+[ "$(nlines "$e" 'load gate')" -eq 0 ] || bad "case 19: an idle host (load1 0.00) logged a load gate line"
+[ "$(started "$e")" -eq 2 ] || bad "case 19: wanted two starts on an idle host"
+
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 9.00
+(
+	sleep 2
+	date +%s%N >"$e/state/idle.at"
+	idle "$e"
+) &
+flip=$!
+cells "$e" -j 1 --load-wait 60 a
+wait "$flip"
+expect "case 19b (busy then idle)" 0 "$e"
+begun=$(awk '$1=="start"{print $3}' "$e/state/calls.log")
+if [ -z "$begun" ] || [ "$begun" -le "$(cat "$e/state/idle.at")" ]; then
+	bad "case 19b: the cell started at ${begun:-never} while load1 was still 9.00 (idle at $(cat "$e/state/idle.at"))"
+fi
+[ "$(nlines "$e" 'load gate: load1 9.00 .*waiting up to 60s')" -eq 1 ] || bad "case 19b: wanted exactly one 'waiting' line"
+has "case 19b" "$e" 'load gate: load1 0.00 after [0-9]+s; starting'
+
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 9.00
+cells "$e" -j 1 --load-wait 2 a
+expect "case 19c (busy past the bound still starts)" 0 "$e"
+[ "$(started "$e")" -eq 1 ] || bad "case 19c: a cell that waited out the bound was not started"
+has "case 19c" "$e" 'load gate: load1 9.00 still at or above 8.0 after [0-9]+s; starting anyway'
+[ "$(nlines "$e" 'waiting up to')" -eq 1 ] || bad "case 19c: wanted one waiting line for the whole wait, not one per poll"
+
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 9.00
+cells "$e" -j 1 --load-wait 0 a
+expect "case 19d (--load-wait 0)" 0 "$e"
+[ "$(nlines "$e" 'load gate')" -eq 0 ] || bad "case 19d: --load-wait 0 still gated"
+
+e=$(new_env)
+meminfo "$e" 60
+rm -f "$e/loadavg"
+cells "$e" -j 1 --load-wait 5 a
+expect "case 19e (no loadavg file)" 0 "$e"
+[ "$(nlines "$e" 'load gate')" -eq 0 ] || bad "case 19e: an unreadable loadavg gated"
+
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 7.99
+cells "$e" -j 1 --load-wait 1 a
+[ "$(nlines "$e" 'load gate')" -eq 0 ] || bad "case 19f: load1 7.99 on 16 cpus waited"
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 8.00
+cells "$e" -j 1 --load-wait 1 a
+[ "$(nlines "$e" 'waiting up to')" -eq 1 ] || bad "case 19f: load1 8.00 on 16 cpus (== ncpu/2) did not wait"
+
+for badw in -1 x 1.5 ""; do
+	e=$(new_env)
+	meminfo "$e" 60
+	cells "$e" --load-wait "$badw" a
+	expect "case 19g (--load-wait '$badw')" 2 "$e"
+	has "case 19g" "$e" "REFUSED -- --load-wait wants a non-negative integer"
+done
+
+# a TERM during a load wait ends the wait at once (as case 13 for the disk)
+e=$(new_env)
+meminfo "$e" 60
+busy "$e" 9.00
+t0=$SECONDS
+(
+	LAB_TEST_DIR="$e/state" LAB_MEMINFO="$e/meminfo" LAB_LOADAVG="$e/loadavg" LAB_LOAD_POLL=100 PATH="$tmp/bin:$PATH" \
+		exec "$e/repo/scripts/run-cells.sh" --root "$e/root" --stagger 0 --load-wait 300 a >"$e/out" 2>&1
+) &
+wpid=$!
+n=0
+until grep -q 'waiting up to' "$e/out" 2>/dev/null; do
+	n=$((n + 1))
+	[ "$n" -gt 100 ] && break
+	sleep 0.1
+done
+kill -TERM "$wpid"
+wrc=0
+wait "$wpid" || wrc=$?
+if [ "$wrc" -ne 130 ] || [ $((SECONDS - t0)) -ge 20 ]; then
+	bad "case 19h: exit $wrc after $((SECONDS - t0)) s; wanted 130 well before the 100 s poll"
+fi
+
+# Case 20: order. Known durations descending, unknown last in the given
+# order, --check prints the order the real run then uses, bad rows ignored.
+e=$(new_env)
+meminfo "$e" 60
+printf 'a\t10\nb\t500\nc\t100\n' >"$e/durations.tsv"
+cells "$e" -j 1 --durations "$e/durations.tsv" a b c
+expect "case 20 (order)" 0 "$e"
+[ "$(start_order "$e")" = "b c a " ] || bad "case 20: start order '$(start_order "$e")', wanted b c a"
+
+e=$(new_env)
+meminfo "$e" 60
+printf 'a\t10\nb\t500\n' >"$e/durations.tsv"
+cells "$e" -j 1 --durations "$e/durations.tsv" e a f b
+[ "$(start_order "$e")" = "b a e f " ] || bad "case 20b: start order '$(start_order "$e")', wanted b a e f (unknown after known, given order among unknown)"
+
+e=$(new_env)
+meminfo "$e" 60
+printf 'a\t10\nb\t500\nc\t100\n' >"$e/durations.tsv"
+cells "$e" --check --durations "$e/durations.tsv" a b c
+has "case 20c (--check order)" "$e" 'order, longest first from .*: b c a$'
+table=$(awk '/^cell +bridge/{f=1;next} /^run-cells:/{f=0} f&&NF{print $1}' "$e/out" | tr '\n' ' ')
+[ "$table" = "b c a " ] || bad "case 20c: the --check table lists '$table', wanted b c a"
+cells "$e" -j 1 --durations "$e/durations.tsv" a b c
+[ "$(start_order "$e")" = "$table" ] || bad "case 20c: --check printed '$table' but the run started '$(start_order "$e")'"
+
+e=$(new_env)
+meminfo "$e" 60
+cells "$e" --durations "$e/no-such-file" a
+expect "case 20d (missing durations file)" 2 "$e"
+has "case 20d" "$e" "REFUSED -- --durations file"
+[ "$(started "$e")" -eq 0 ] || bad "case 20d: a cell started"
+
+e=$(new_env)
+meminfo "$e" 60
+printf 'a\tx\n\nb\t5\nc' >"$e/durations.tsv"
+cells "$e" -j 1 --durations "$e/durations.tsv" a b
+expect "case 20e (malformed rows)" 0 "$e"
+[ "$(start_order "$e")" = "b a " ] || bad "case 20e: start order '$(start_order "$e")', wanted b a"
+
+# the default file under the root is read when it exists
+e=$(new_env)
+meminfo "$e" 60
+printf 'b\t99\n' >"$e/root/durations.tsv"
+cells "$e" -j 1 a b
+[ "$(start_order "$e")" = "b a " ] || bad "case 20f: default <root>/durations.tsv not used: '$(start_order "$e")'"
+
+# every run writes one row per cell that finished 0; rows of other cells
+# survive; a cell that failed keeps its old row
+e=$(new_env)
+meminfo "$e" 60
+echo "1 0" >"$e/state/spec.a"
+echo "1 0" >"$e/state/spec.b"
+cells "$e" -j 2 a b
+d="$e/root/durations.tsv"
+for c in a b; do
+	secs=$(awk -F'\t' -v c="$c" '$1==c{print $2}' "$d" 2>/dev/null)
+	if ! [[ "$secs" =~ ^[0-9]+$ ]] || [ "$secs" -lt 1 ] || [ "$secs" -gt 30 ]; then
+		bad "case 20g: $c has duration '$secs' in $d (stub slept 1 s)"
+	fi
+done
+[ "$(wc -l <"$d")" -eq 2 ] || bad "case 20g: wanted two rows"
+e=$(new_env)
+meminfo "$e" 60
+printf 'z\t7\na\t999\n' >"$e/root/durations.tsv"
+echo "0 1" >"$e/state/spec.a"
+cells "$e" -j 2 a b
+d="$e/root/durations.tsv"
+[ "$(awk -F'\t' '$1=="z"{print $2}' "$d")" = 7 ] || bad "case 20h: another cell's row was dropped"
+[ "$(awk -F'\t' '$1=="a"{print $2}' "$d")" = 999 ] || bad "case 20h: a cell that failed replaced its row"
+awk -F'\t' '$1=="b"{f=1} END{exit !f}' "$d" || bad "case 20h: the cell that passed has no row"
+
+# Case 21: one retry pass.
+SIG='CreateEndpoint: Post http://x: Client.Timeout exceeded while awaiting headers'
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s\nA2.verdict|ordinary failure\n' "$SIG" >"$e/state/emit.a.1"
+printf 'A1.verdict|second look passed\n' >"$e/state/emit.a.2"
+cells "$e" -j 1 a
+expect "case 21 (retry)" 0 "$e"
+ev="$e/root/evidence/a"
+[ "$(starts_of "$e" a)" -eq 2 ] || bad "case 21: cell a started $(starts_of "$e" a) times, wanted 2"
+grep -q "^reason: $SIG" "$ev/retried/A1.verdict" 2>/dev/null || bad "case 21: the first verdict is not kept under retried/"
+grep -q '^reason: second look passed' "$ev/A1.verdict" || bad "case 21: the rerun's verdict is not in place"
+grep -q 'ordinary failure' "$ev/A2.verdict" || bad "case 21: a verdict without the signature was moved"
+has "case 21 log" "$e" 'retry pass: a has 1 verdict\(s\) whose reason carries CreateEndpoint and Client.Timeout .*A1.verdict'
+has "case 21 log" "$e" 'retry pass: rerunning a once, -j 1'
+if [ ! -f "$e/root/logs/a.first.log" ] || [ ! -f "$e/root/logs/a.log" ]; then bad "case 21: the first attempt's log is gone"; fi
+has "case 21 table" "$e" '^a +0 \(retried\)'
+
+# two signature rounds: the retry's own verdicts are final, no second pass
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|first %s\n' "$SIG" >"$e/state/emit.a.1"
+printf 'A1.verdict|second %s\n' "$SIG" >"$e/state/emit.a.2"
+printf 'A1.verdict|third %s\n' "$SIG" >"$e/state/emit.a.3"
+cells "$e" -j 1 a
+expect "case 21b (retry hits the signature)" 0 "$e"
+[ "$(starts_of "$e" a)" -eq 2 ] || bad "case 21b: a started $(starts_of "$e" a) times; one retry pass, never two"
+grep -q '^reason: second' "$e/root/evidence/a/A1.verdict" || bad "case 21b: the second verdict is not final"
+grep -q '^reason: first' "$e/root/evidence/a/retried/A1.verdict" || bad "case 21b: the first verdict is not under retried/"
+# a name already under retried/ is never overwritten
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/root/evidence/a/retried"
+echo "older" >"$e/root/evidence/a/retried/A1.verdict"
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+[ "$(cat "$e/root/evidence/a/retried/A1.verdict")" = older ] || bad "case 21c: an earlier retried/ file was overwritten"
+[ "$(grep -l "^reason: $SIG" "$e"/root/evidence/a/retried/* | wc -l)" -eq 1 ] || bad "case 21c: the moved verdict is not kept beside the older one"
+
+# only the cell with the signature is rerun; CreateEndpoint alone, a
+# signature split over two lines and another file's word do not match
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|CreateEndpoint failed\nA2.verdict|Client.Timeout alone\n' >"$e/state/emit.a.1"
+printf 'B1.verdict|Client.Timeout exceeded in CreateEndpoint\n' >"$e/state/emit.b.1"
+cells "$e" -j 2 a b
+expect "case 21d (only the signature cell)" 0 "$e"
+[ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21d: a (no signature) was rerun"
+[ "$(starts_of "$e" b)" -eq 2 ] || bad "case 21d: b (Client.Timeout before CreateEndpoint) was not rerun"
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|CreateEndpoint failed\\nsecond line Client.Timeout\n' >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+[ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21d: a signature split over two lines matched"
+
+# --no-retry never reruns and never moves
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 --no-retry a
+expect "case 21e (--no-retry)" 0 "$e"
+[ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21e: --no-retry reran a"
+if [ ! -f "$e/root/evidence/a/A1.verdict" ] || [ -d "$e/root/evidence/a/retried" ]; then bad "case 21e: --no-retry moved a verdict"; fi
+has "case 21e" "$e" 'retry pass disabled'
+
+# the pass runs at most two at once
+e=$(new_env)
+meminfo "$e" 60
+for c in a b c d; do
+	echo "1 0" >"$e/state/spec.$c"
+	printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.$c.1"
+done
+cells "$e" -j 4 a b c d
+expect "case 21f (retry pool cap)" 0 "$e"
+max=$(awk '$1=="start"{n[$2]++; if (n[$2]==2) print $3, 1} $1=="end"{m[$2]++; if (m[$2]==2) print $3, -1}' "$e/state/calls.log" | sort -k1,1n -k2,2n | awk '{n+=$2; if (n>m) m=n} END{print m+0}')
+[ "$max" -eq 2 ] || bad "case 21f: the retry pass peaked at $max running, wanted exactly 2"
+
+# the exit code is the second rc
+e=$(new_env)
+meminfo "$e" 60
+echo "0 1" >"$e/state/spec.a.1"
+echo "0 0" >"$e/state/spec.a.2"
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+expect "case 21g (first rc 1, retried rc 0)" 0 "$e"
+e=$(new_env)
+meminfo "$e" 60
+echo "0 0" >"$e/state/spec.a.1"
+echo "0 1" >"$e/state/spec.a.2"
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+expect "case 21g (first rc 0, retried rc 1)" 1 "$e"
+
+# a cell that never ran is not retried, whatever sits in its evidence dir
+e=$(new_env)
+meminfo "$e" 60
+echo 1000 >"$e/state/free_mib"
+mkdir -p "$e/root/evidence/a"
+printf 'scenario: x\nreason: %s\n' "$SIG" >"$e/root/evidence/a/old.verdict"
+LAB_DISK_WAIT=0 cells "$e" -j 1 a
+[ "$(started "$e")" -eq 0 ] || bad "case 21h: a skipped cell was started by the retry pass"
+[ -f "$e/root/evidence/a/old.verdict" ] || bad "case 21h: a verdict of a cell that never ran was moved"
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

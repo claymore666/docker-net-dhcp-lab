@@ -377,7 +377,7 @@ plugin/engine/kernel versions, a config diff from the source's stock
 install, one packet capture for the whole run, lease-table snapshots,
 the plugin's own log, and one verdict file per scenario and shape.
 
-`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--root DIR] [--check] <cell-name>...` runs
+`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--root DIR] [--check] <cell-name>...` runs
 several cells at once on one host and leaves one evidence bundle per cell
 under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` is the base directory, any directory with room for the
@@ -403,7 +403,19 @@ the host; `--check` prints that table and stops there. Before each start it
 wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
 minutes for it, and otherwise marks the cell `skipped-disk`; it also looks
 again for that cell's VMs and observer and marks the cell `skipped-exists`
-if they have appeared meanwhile. INT or TERM
+if they have appeared meanwhile. Before each cell start, and before each
+shape inside a cell, it waits while the one-minute load average is at or
+above half the vCPUs, up to `--load-wait` seconds (default 900, `0` disables;
+a cell that waited the bound out still starts) and logs each wait. The cells
+start longest first, by the seconds in `--durations FILE` (default
+`<root>/durations.tsv` if it exists; every run updates that file with the
+cells that finished 0, and cells it does not know start last, `--check`
+prints the order). After all cells finish, a cell with a verdict whose
+reason carries `CreateEndpoint` and `Client.Timeout` (the load signature)
+gets one more run, two cells at a time: those verdicts are moved to
+`<evidence>/retried/`, the log lists them, and the second result is final
+(`--no-retry` skips the pass). On the two IPAM shapes `labctl run` writes the
+N/A verdicts the shape alone decides without running the scenario. INT or TERM
 stops every running cell and tears it down with `down-cell.sh`. Two
 `run-cells.sh` started within the same minutes on overlapping cells are only
 caught once the first has defined its VMs, so do not do that. Render the

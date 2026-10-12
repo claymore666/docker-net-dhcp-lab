@@ -14,6 +14,9 @@ fake="$tmp/repo"
 mkdir -p "$fake/scripts" "$tmp/bin"
 cp "$REPO_ROOT/scripts/run-cell.sh" "$fake/scripts/run-cell.sh"
 cp "$REPO_ROOT/scripts/source-types.sh" "$fake/scripts/source-types.sh"
+cp "$REPO_ROOT/scripts/load-gate.sh" "$fake/scripts/load-gate.sh"
+echo "0.00 0.00 0.00 1/100 1" >"$tmp/loadavg.idle"
+echo "9.00 9.00 9.00 1/100 1" >"$tmp/loadavg.busy"
 stub() {
 	printf '#!/bin/bash\n%s\n' "$2" >"$1"
 	chmod +x "$1"
@@ -33,8 +36,10 @@ esac'
 stub "$tmp/bin/go" 'case "$3" in
 resolve) cat "$RESOLVED_FILE" ;;
 remaining) echo A1 ;;
-run) echo "run $6" >>"$CALLS" ;;
+run) echo "run $6" >>"$CALLS"; [ -z "${GATE_CASE:-}" ] || cp "$LOAD_BUSY" "$LAB_LOADAVG" ;;
 esac'
+# a sleep of the poll value (7) is the load gate waiting: log it and let the load clear
+stub "$tmp/bin/sleep" 'if [ "$1" = 7 ]; then echo gate >>"$CALLS"; cp "$LOAD_IDLE" "$LAB_LOADAVG"; else exec /bin/sleep "$@"; fi'
 cat >"$tmp/resolved.json" <<'JSON'
 {"cell": {"segment": {"bridge": "lab-br-t-rly"},
   "docker_host": {"mgmt_address": "10.200.255.110/24", "plugin_tag": "x"},
@@ -47,7 +52,9 @@ run() {
 	shift
 	mkdir -p "$tmp/$case"
 	: >"$tmp/$case/calls"
-	env "$@" PATH="$tmp/bin:$PATH" CALLS="$tmp/$case/calls" RESOLVED_FILE="$tmp/resolved.json" \
+	cp "$tmp/loadavg.${LOAD_START:-idle}" "$tmp/$case/loadavg"
+	env "$@" PATH="$tmp/bin:$PATH" LAB_LOADAVG="$tmp/$case/loadavg" LAB_NCPU=16 LAB_LOAD_POLL=7 \
+		LOAD_IDLE="$tmp/loadavg.idle" LOAD_BUSY="$tmp/loadavg.busy" CALLS="$tmp/$case/calls" RESOLVED_FILE="$tmp/resolved.json" \
 		"$fake/scripts/run-cell.sh" t-relay "$tmp/$case/work" "$tmp/$case/evidence" >"$tmp/$case/out" 2>&1
 }
 
@@ -89,5 +96,22 @@ for case in probe-fails probe-passes; do
 		fail=1
 	fi
 done
+# the per-shape load gate (#79): a busy host is waited out before every
+# shape, never after one; the probe is not a shape.
+LOAD_START=busy run gate-order GATE_CASE=1 || {
+	echo "run-cell-relay-test: FAIL -- run-cell failed under a busy host" >&2
+	cat "$tmp/gate-order/out" >&2
+	fail=1
+}
+want="gate run gate run gate run gate run gate run"
+got=$(grep -E '^(gate|run)' "$tmp/gate-order/calls" | sed 's/^\(gate\|run\).*/\1/' | tr '\n' ' ' | sed 's/ $//')
+if [ "$got" != "$want" ]; then
+	echo "run-cell-relay-test: FAIL -- load gate order '$got', wanted '$want'" >&2
+	fail=1
+fi
+if [ "$(grep -c '^gate' "$tmp/probe-passes/calls")" -ne 0 ]; then
+	echo "run-cell-relay-test: FAIL -- an idle host waited at the per-shape gate" >&2
+	fail=1
+fi
 [ "$fail" -eq 0 ] && echo "run-cell-relay-test: PASS"
 exit "$fail"
