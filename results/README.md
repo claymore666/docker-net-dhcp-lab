@@ -14,3 +14,4 @@ Pages:
 
 - [v0.1.0](v0.1.0.md), and the same lab run against [plugin v2.5.0](v0.1.0-plugin-v2.5.0.md).
 - [v0.2.0, plugin v2.6.0-rc1](v0.2.0-plugin-v2.6.0-rc1.md).
+- [v0.3.0 (pre-release, lab dev 98899a0), plugin v2.6.0-rc2](v0.3.0-plugin-v2.6.0-rc2.md).
