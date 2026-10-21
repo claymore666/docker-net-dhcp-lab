@@ -190,7 +190,7 @@ func runD1Like(ctx context.Context, e Env, scenario, suffix, opt string) (v Verd
 	if !ok {
 		return bad
 	}
-	o, _ := judgeD1(r.d1Obs(ctx, e))
+	o, _ := judgeD1Persistent(r.d1Obs(ctx, e))
 	return fFinish(scenario, e, o, opt, ev)
 }
 

@@ -241,10 +241,42 @@ func judgeD1(o d1Obs) (fOutcome, d6Exchange) {
 		na.Addr, x.DUID, s.Valid, s.Pref, na.Valid, na.Pref, o.Route), x
 }
 
+// judgeD1Persistent is D1 for the rows that read the lifetimes the
+// persistent client installs: after the one-shot's lease the persistent
+// client sends a Confirm (a Renew or Rebind once it holds time), and only
+// then do the address's lifetimes turn finite (plugin #1369). With none of
+// those packets before the settled read the endpoint never attached; that
+// is reported as such, not as a lifetime fault (lab #102).
+func judgeD1Persistent(o d1Obs) (fOutcome, d6Exchange) {
+	x, out, ok := exchange6(o.Msgs)
+	if !ok {
+		return out, x
+	}
+	var leaseAt time.Time
+	for _, m := range x.Msgs {
+		if m.Type == "REPLY" && HasAddr(m.NA) {
+			leaseAt = m.At
+			break
+		}
+	}
+	end := o.Settled.sampled()
+	for _, m := range x.client() {
+		switch m.Type {
+		case "CONFIRM", "RENEW", "REBIND":
+			if m.At.After(leaseAt) && !m.At.After(end) {
+				return judgeD1(o)
+			}
+		}
+	}
+	return fFail("attach failure: DUID %s sent no Confirm, Renew or Rebind between its lease Reply and the settled read (exchange %s), so the persistent client never ran; the lifetimes were not judged", x.DUID, strings.Join(x.types(), " ")), x
+}
+
 // judgeF4Wire -- DHCPv6 rapid commit (plugin docs/reference.md,
 // rapid_commit): option 14 in every Solicit; a server that supports it
 // answers the Reply and "the lease takes two messages instead of four".
-// Before v2.4.0 the client sends no option 14 and the four follow.
+// Before v2.4.0 the client sends no option 14 and the four follow. The
+// persistent client may append one CONFIRM REPLY; the Reply to a Confirm
+// carries a Status Code and no IA (RFC 8415 section 18.2.12; plugin #1371).
 func judgeF4Wire(present, serverRapid bool, x d6Exchange) fOutcome {
 	types := x.types()
 	seq := strings.Join(types, " ")
@@ -260,19 +292,30 @@ func judgeF4Wire(present, serverRapid bool, x d6Exchange) fOutcome {
 	if sol == 0 {
 		return fFail("the capture holds no Solicit from DUID %s (exchange %s)", x.DUID, seq)
 	}
+	lease, confirm := types, false
+	if n := len(types); n >= 2 && types[n-2] == "CONFIRM" && types[n-1] == "REPLY" {
+		lease, confirm = types[:n-2], true
+	}
 	if present && serverRapid {
-		if !slices.Equal(types, []string{"SOLICIT", "REPLY"}) {
-			return fFail("rapid commit on both sides, the exchange was %s, want SOLICIT REPLY", seq)
+		if !slices.Equal(lease, []string{"SOLICIT", "REPLY"}) {
+			return fFail("rapid commit on both sides, the exchange was %s, want SOLICIT REPLY, then at most one CONFIRM REPLY", seq)
 		}
 		if !x.Reply.Rapid {
 			return fFail("the Reply to a rapid-commit Solicit carries no option 14 (RFC 8415 section 18.3.1)")
 		}
-		return fOK("two messages, Solicit and Reply both with option 14")
+		return fOK("two messages, Solicit and Reply both with option 14%s", confirmNote(confirm))
 	}
-	if !slices.Equal(types, []string{"SOLICIT", "ADVERTISE", "REQUEST", "REPLY"}) {
-		return fFail("the exchange was %s, want SOLICIT ADVERTISE REQUEST REPLY", seq)
+	if !slices.Equal(lease, []string{"SOLICIT", "ADVERTISE", "REQUEST", "REPLY"}) {
+		return fFail("the exchange was %s, want SOLICIT ADVERTISE REQUEST REPLY, then at most one CONFIRM REPLY", seq)
 	}
-	return fOK("four messages, Solicit option 14 = %v", present)
+	return fOK("four messages, Solicit option 14 = %v%s", present, confirmNote(confirm))
+}
+
+func confirmNote(confirm bool) string {
+	if confirm {
+		return ", then the persistent client's Confirm and its Reply"
+	}
+	return ""
 }
 
 // judgeF5 -- temporary address (plugin docs/reference.md,
@@ -371,14 +414,10 @@ func judgeD2(o d2Obs) fOutcome {
 	return slaacFormed(o)
 }
 
-// slaacFormed is judgeD2 past its Solicit rule, shared with D3b and the
-// fallback leg of D3c, where auto forms the same address (docs,
-// ipv6_mode: "a clear flag means the prefix") (#23 rows D2, D3b).
-func slaacFormed(o d2Obs) fOutcome {
-	var pio PIO
-	var last RAMsg
-	var maxValid, maxPref uint32
-	found := false
+// lastAutoPIO is the autonomous PIO the settled address derives from: the
+// first prefix seen before the settled read, its last PIO and RA, and the
+// largest valid and preferred lifetime that prefix carried.
+func lastAutoPIO(o d2Obs) (pio PIO, last RAMsg, maxValid, maxPref uint32, found bool) {
 	for _, ra := range o.RAs {
 		if ra.At.After(o.Settled.At) {
 			continue
@@ -391,6 +430,14 @@ func slaacFormed(o d2Obs) fOutcome {
 			maxValid, maxPref = max(maxValid, p.Valid), max(maxPref, p.Pref)
 		}
 	}
+	return pio, last, maxValid, maxPref, found
+}
+
+// slaacFormed is judgeD2 past its Solicit rule, shared with D3b and the
+// fallback leg of D3c, where auto forms the same address (docs,
+// ipv6_mode: "a clear flag means the prefix") (#23 rows D2, D3b).
+func slaacFormed(o d2Obs) fOutcome {
+	pio, last, maxValid, maxPref, found := lastAutoPIO(o)
 	if !found {
 		return fBlocked("the capture shows no RA with an autonomous prefix before the settled read (%d RAs)", len(o.RAs))
 	}

@@ -202,3 +202,79 @@ func TestIpvlanRefusalRowsWriteTheirVerdicts(t *testing.T) {
 		}
 	}
 }
+
+// f6Host answers the route read two ways: iproute2 through nsenter prints
+// proto dhcp, BusyBox ip inside the container prints no protocol (plugin
+// #1370, lab #102; the BusyBox line is the one the plugin issue records).
+type f6Host struct {
+	*d6Host
+	nsenter *int
+}
+
+func (h f6Host) Run(ctx context.Context, cmd string) (string, error) {
+	switch {
+	case strings.Contains(cmd, "nsenter"):
+		*h.nsenter++
+		if !strings.Contains(cmd, `-t "$(sudo docker inspect -f '{{.State.Pid}}'`) || !strings.HasSuffix(cmd, "-n ip -6 route show") {
+			return "", fmt.Errorf("not the container's netns: %s", cmd)
+		}
+		return "unreachable fd42:200:0:180::/64 dev lo proto dhcp metric 1024 pref medium\n", nil
+	case strings.HasSuffix(cmd, "ip -6 route show"):
+		return "unreachable fd42:200:0:180::/64 dev lo metric 1024 pref medium\n", nil
+	}
+	return h.d6Host.Run(ctx, cmd)
+}
+
+// The prefix-delegation row reads the delegated prefix's route from the container's netns with
+// the host's iproute2; the BusyBox read inside alpine can never pass.
+func TestRunF6ReadsTheRouteThroughNsenter(t *testing.T) {
+	f := newD6Fix(t, ShapeMacvlan, "", sourceadapter.CapPD)
+	f.e.Subnet6 = "fd42:200:0:100::/64"
+	o, routes, h := goodF6()
+	_ = routes
+	f.cap.msgs = o.Msgs
+	f.src.leases6 = o.Leases
+	f.h.forceMAC = d2MAC
+	f.h.health = fmt.Sprintf(`{"endpoints":[{"endpoint":%q,"delegated_prefixes":[{"prefix":%q}]}]}`, fmt.Sprintf("%016x%048x", 1, 0), h.DelegatedPrefixes[0].Prefix)
+	var n int
+	f.e.Host = f6Host{d6Host: f.h, nsenter: &n}
+	v := runF6(context.Background(), f.e)
+	if v.Result != PASS || n != 1 {
+		t.Errorf("%s %q, nsenter reads %d", v.Result, v.Reason, n)
+	}
+}
+
+// TestD4bAwaitKeepsEveryAddressRead feeds the container reads a withdrawn
+// prefix produces under plugin #1368 (the address stays, its valid
+// lifetime falls); the lines are synthetic. The count-down judge needs
+// the series, not only the last read (lab #102).
+func TestD4bAwaitKeepsEveryAddressRead(t *testing.T) {
+	f := newD6Fix(t, ShapeMacvlan, "")
+	ll := addrLine(d6LL.Addr.String(), 64, "link", "forever", "forever")
+	f.h.start = ll + addrLine(d6NA.String(), 64, "global", "7000sec", "3000sec")
+	f.h.settled = f.h.start
+	f.h.onSettledRead = func() { f.h.settled = ll + addrLine(d6NA.String(), 64, "global", "6997sec", "2997sec") }
+	f.e.EvidenceDir = t.TempDir()
+	r := dRead{mac: d2MAC, start: d6Read{Addrs: []addr6{d6LL}}}
+	ev := map[string]string{}
+	n := 0
+	reads, _, _, err := d4bAwait(context.Background(), f.e, "c1", r, "drop", time.Now(), func([]addr6, string) bool { n++; return n >= 3 }, ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reads) != 3 {
+		t.Fatalf("%d reads, want one per poll (3)", len(reads))
+	}
+	last := reads[len(reads)-1]
+	if a, ok := findAddr6(last.Addrs, d6NA); !ok || a.Valid != 6997 {
+		t.Errorf("last read %+v, want %s with valid 6997", last.Addrs, d6NA)
+	}
+	if a, ok := findAddr6(reads[0].Addrs, d6NA); !ok || a.Valid != 7000 {
+		t.Errorf("first read %+v, want %s with valid 7000", reads[0].Addrs, d6NA)
+	}
+	for _, k := range []string{"addrs-drop-first", "addrs-drop"} {
+		if ev[k] == "" {
+			t.Errorf("no evidence file %q", k)
+		}
+	}
+}
