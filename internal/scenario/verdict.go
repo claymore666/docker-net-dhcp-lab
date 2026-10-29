@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -96,14 +97,14 @@ func Write(dir string, v Verdict) error {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "scenario: %s\n", v.Scenario)
-	fmt.Fprintf(&b, "cell: %s\n", v.Cell)
-	fmt.Fprintf(&b, "shape: %s\n", v.Shape)
-	fmt.Fprintf(&b, "result: %s\n", v.Result)
+	fmt.Fprintf(&b, "scenario: %s\n", oneLine(v.Scenario))
+	fmt.Fprintf(&b, "cell: %s\n", oneLine(v.Cell))
+	fmt.Fprintf(&b, "shape: %s\n", oneLine(string(v.Shape)))
+	fmt.Fprintf(&b, "result: %s\n", oneLine(string(v.Result)))
 	fmt.Fprintf(&b, "reason: %s\n", oneLine(v.Reason))
-	fmt.Fprintf(&b, "git_sha: %s\n", v.GitSHA)
+	fmt.Fprintf(&b, "git_sha: %s\n", oneLine(v.GitSHA))
 	if v.IsolationMethod != "" {
-		fmt.Fprintf(&b, "isolation: %s\n", v.IsolationMethod)
+		fmt.Fprintf(&b, "isolation: %s\n", oneLine(v.IsolationMethod))
 	}
 	if v.Host.Distro != "" {
 		fmt.Fprintf(&b, "host.distro: %s\n", oneLine(v.Host.Distro))
@@ -121,6 +122,9 @@ func Write(dir string, v Verdict) error {
 	}
 	sort.Strings(labels)
 	for _, label := range labels {
+		if strings.ContainsAny(label, "\r\n") {
+			return fmt.Errorf("verdict %s/%s/%s: evidence label %q holds a line break", v.Cell, v.Shape, v.Scenario, label)
+		}
 		// Stored relative to dir, never the absolute path Write was
 		// called with: the run's own machine layout is not evidence and
 		// must never leak into a bundle another host later reads or
@@ -132,16 +136,33 @@ func Write(dir string, v Verdict) error {
 		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return fmt.Errorf("verdict %s/%s/%s: evidence %q (%s) is outside %s", v.Cell, v.Shape, v.Scenario, label, v.Evidence[label], dir)
 		}
+		if strings.ContainsAny(rel, "\r\n") {
+			return fmt.Errorf("verdict %s/%s/%s: evidence %q path %q holds a line break", v.Cell, v.Shape, v.Scenario, label, rel)
+		}
 		fmt.Fprintf(&b, "evidence.%s: %s\n", label, filepath.ToSlash(rel))
 	}
 	return os.WriteFile(dir+"/"+v.FileName(), []byte(b.String()), 0o644)
 }
 
-// oneLine folds every CR and LF into a space so a free-text value stays one "key: value" line.
+// foldRE is a run of line-breaking or tab whitespace in a field value.
+var foldRE = regexp.MustCompile(`[\r\n\t\v\f]+`)
+
+// oneLine folds every run of CR, LF, tab, VT and FF into one space so a
+// free-text value stays one "key: value" line.
 func oneLine(s string) string {
 	// #38: ssh's own stderr ends its lines in "\r\n", and a reason that
 	// carried one made labctl remaining reject the whole verdict file.
-	return strings.TrimRight(strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(s), " ")
+	// #94: the isolation value was written raw and did the same.
+	return strings.TrimSpace(foldRE.ReplaceAllString(s, " "))
+}
+
+// fieldKeyRE is what a verdict key looks like; a line whose prefix is
+// anything else continues the previous value (#94).
+var fieldKeyRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]*$`)
+
+type verdictField struct {
+	line     int
+	key, val string
 }
 
 // ReadVerdict parses one file Write produced. It never looks at path's
@@ -153,22 +174,38 @@ func oneLine(s string) string {
 // isolation is optional, matching Write's own "only when non-empty"
 // rule; every other key is required, and an unrecognised key fails
 // loudly rather than being silently dropped, the same discipline a
-// results page reading this file depends on (issue #4).
+// results page reading this file depends on (issue #4). A line whose
+// prefix is not a key joins the previous value (#94, older files).
 func ReadVerdict(path string) (Verdict, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Verdict{}, fmt.Errorf("read verdict %s: %w", path, err)
 	}
 	v := Verdict{Evidence: map[string]string{}}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
+	var fields []verdictField
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
 		key, val, ok := strings.Cut(line, ": ")
 		if !ok {
+			key, ok = strings.CutSuffix(line, ":")
+			val = ""
+		}
+		if ok && fieldKeyRE.MatchString(key) {
+			fields = append(fields, verdictField{line: i + 1, key: key, val: val})
+			continue
+		}
+		// #94: files written before the writer folded its values carry
+		// a value's own line break; the broken-off text joins the value.
+		if len(fields) == 0 {
 			return Verdict{}, fmt.Errorf("%s:%d: line %q is not a \"key: value\" pair", path, i+1, line)
 		}
+		fields[len(fields)-1].val += " " + line
+	}
+	for _, f := range fields {
+		key, val, i := f.key, f.val, f.line-1
 		switch {
 		case key == "scenario":
 			v.Scenario = val
