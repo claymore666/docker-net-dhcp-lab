@@ -3,6 +3,7 @@ package sourceadapter
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -78,6 +79,9 @@ func TestPiholeReadsItsOwnLeaseFile(t *testing.T) {
 	}
 }
 
+// piholeReset is what start and restart carry in front (lab #93).
+const piholeReset = "{ sudo systemctl reset-failed pihole-FTL || true; } && "
+
 func TestPiholeServiceActionsNameTheFTLUnit(t *testing.T) {
 	r := &fakeRunner{}
 	a := &PiholeAdapter{Runner: r}
@@ -86,9 +90,80 @@ func TestPiholeServiceActionsNameTheFTLUnit(t *testing.T) {
 		if err := fn(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if len(r.calls) != 1 || r.calls[0] != "sudo systemctl "+verb+" pihole-FTL" {
-			t.Errorf("%s: calls %q", verb, r.calls)
+		want := "sudo systemctl " + verb + " pihole-FTL"
+		if verb != "stop" {
+			want = piholeReset + want
 		}
+		if len(r.calls) != 1 || r.calls[0] != want {
+			t.Errorf("%s: calls %q, want %q", verb, r.calls, want)
+		}
+	}
+}
+
+// Every path that starts FTL clears systemd's start counter first, or the
+// sixth restart inside the interval is refused (run 2, lab #93): the
+// service action, Recover's unit restart, a reservation, a lease reset
+// and the restores of the lab-file edits. A unit that is not failed, or
+// a reset-failed that errors, must not stop the start.
+func TestPiholeEveryStartPathResetsFailedFirst(t *testing.T) {
+	ctx := context.Background()
+	check := func(name string, calls []string) {
+		t.Helper()
+		var starts int
+		for _, c := range calls {
+			for _, verb := range []string{"restart", "start"} {
+				if i := strings.Index(c, "sudo systemctl "+verb+" pihole-FTL"); i >= 0 {
+					starts++
+					if !strings.HasSuffix(c[:i], piholeReset) {
+						t.Errorf("%s: %q starts FTL without reset-failed directly before", name, c)
+					}
+				}
+			}
+		}
+		if starts == 0 {
+			t.Errorf("%s: no start or restart was sent", name)
+		}
+	}
+	r := &fakeRunner{}
+	a := &PiholeAdapter{Runner: r}
+	_ = a.Restart(ctx)
+	check("Restart", r.calls)
+	r.calls = nil
+	_ = a.Start(ctx)
+	check("Start", r.calls)
+	r.calls = nil
+	_ = a.ResetLeases(ctx)
+	check("ResetLeases", r.calls)
+	r.calls = nil
+	_ = a.ReserveMAC(ctx, "02:11:22:33:44:55", "10.200.13.150")
+	check("ReserveMAC", r.calls)
+	r.calls = nil
+	_ = a.ReserveClientID(ctx, "01:02:03", "10.200.13.151")
+	check("ReserveClientID", r.calls)
+	rr := &recordRunner{cfg: piholeLabHeader + "\n"}
+	restore, err := (&PiholeAdapter{Runner: rr}).SetDNSOption(ctx, "10.200.13.253")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("SetDNSOption", rr.calls)
+	rr.calls = nil
+	if err := restore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check("SetDNSOption restore", rr.calls)
+	// the unit's other commands keep their plain form
+	u := piholeUnit(piholeService)
+	plain := systemdService(piholeService)
+	if u.stop != plain.stop || u.isActive != plain.isActive || u.signal != plain.signal {
+		t.Errorf("stop, is-active or signal changed: %+v", u)
+	}
+	if o := piholeUnit("other"); o != systemdService("other") {
+		t.Errorf("another unit changed: %+v", o)
+	}
+	// reset-failed failing must not stop the start
+	sh := exec.Command("bash", "-c", strings.NewReplacer("sudo systemctl reset-failed pihole-FTL", "false", "sudo systemctl restart pihole-FTL", "echo started").Replace(u.restart))
+	if out, err := sh.Output(); err != nil || strings.TrimSpace(string(out)) != "started" {
+		t.Errorf("restart after a failing reset-failed: %q %v", out, err)
 	}
 }
 
@@ -282,7 +357,7 @@ func TestPiholeReadyHoldsTheLabFileToItsBaseline(t *testing.T) {
 	assertNeverTouchesFTLOwnedFiles(t, "ready and recover", h.calls)
 	var restarted bool
 	for _, c := range h.calls {
-		if c == "sudo systemctl restart pihole-FTL" {
+		if c == piholeReset+"sudo systemctl restart pihole-FTL" {
 			restarted = true
 		}
 		if strings.Contains(c, "systemctl") && strings.Contains(c, " dnsmasq") {

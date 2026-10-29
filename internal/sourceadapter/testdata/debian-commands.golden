@@ -577,27 +577,27 @@
 ## pihole Leases6 err=true
 ## pihole SetRAOff err=true
 ## pihole ReserveMAC err=false
-"sudo sed -i '/^dhcp-host=02:11:22:33:44:55,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=02:11:22:33:44:55,10.200.1.150' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart pihole-FTL"
+"sudo sed -i '/^dhcp-host=02:11:22:33:44:55,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=02:11:22:33:44:55,10.200.1.150' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && { sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole ReserveClientID err=false
-"sudo sed -i '/^dhcp-host=id:00:6c:61:62:2d:66:32:62,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=id:00:6c:61:62:2d:66:32:62,10.200.1.151' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && sudo systemctl restart pihole-FTL"
+"sudo sed -i '/^dhcp-host=id:00:6c:61:62:2d:66:32:62,/d' /etc/dnsmasq.d/lab-reservations.conf && echo 'dhcp-host=id:00:6c:61:62:2d:66:32:62,10.200.1.151' | sudo tee -a /etc/dnsmasq.d/lab-reservations.conf >/dev/null && { sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole SetDNSOption err=false
 # restore err=false
 "sudo cat /etc/dnsmasq.d/90-lab.conf"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-option=6,10.200.1.53\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole Restart err=false
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole Stop err=false
 "sudo systemctl stop pihole-FTL"
 ## pihole Start err=false
-"sudo systemctl start pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl start pihole-FTL"
 ## pihole Reachable err=false
 "ping -c1 -W2 10.200.1.150"
 ## pihole ShortenLeaseTime err=true
 ## pihole ResetLeases err=false
-"sudo systemctl stop pihole-FTL && sudo truncate -s 0 /etc/pihole/dhcp.leases && sudo systemctl start pihole-FTL"
+"sudo systemctl stop pihole-FTL && sudo truncate -s 0 /etc/pihole/dhcp.leases && { sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl start pihole-FTL"
 ## pihole ReadyTwiceThenRecoverDrifted err=false
 "sudo systemctl is-active --quiet pihole-FTL"
 "sudo cat /etc/pihole/dhcp.leases"
@@ -610,10 +610,10 @@
 "sudo ip -4 addr flush dev eth1 && sudo ip addr add 10.200.1.2/24 brd + dev eth1"
 "ip -4 -o addr show dev eth1 | awk '{print $4}'"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole RecoverWithoutBaseline err=false
 "sudo pkill -f '[l]abc-'; for n in $(ip netns list 2>/dev/null | awk '$1 ~ /^[l]abc-/ {print $1}'); do p=$(sudo ip netns pids \"$n\"); [ -z \"$p\" ] || sudo kill -9 $p; sudo ip netns del \"$n\"; done; for l in $(ip -o link show | awk -F': ' '$2 ~ /^[l]abc-/ {split($2, n, \"@\"); print n[1]}'); do sudo ip link del \"$l\"; done; sudo /usr/sbin/tc qdisc del dev eth1 root 2>/dev/null; true"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole Impair err=false
 # restore err=false
 "sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
@@ -660,29 +660,29 @@
 # restore err=false
 "sudo cat /etc/dnsmasq.d/90-lab.conf"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-option=108,00:00:07:08\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole EnableFeature/force-108 err=false
 # restore err=false
 "sudo cat /etc/dnsmasq.d/90-lab.conf"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f2b\ndhcp-option-force=tag:f2b,108,00:00:07:08\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole EnableFeature/rapid-commit-4 err=false
 # restore err=false
 "sudo cat /etc/dnsmasq.d/90-lab.conf"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-rapid-commit\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole EnableFeature/forcerenew-nonce err=false
 # restore err=false
 "sudo cat /etc/dnsmasq.d/90-lab.conf"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\ndhcp-host=id:00:6c:61:62:2d:66:32:62,set:f8\ndhcp-match=set:f8sel,option:requested-address\ndhcp-option-force=tag:f8,145,01\ndhcp-option-force=tag:f8,tag:f8sel,90,03:01:00:00:00:00:00:00:00:00:01:01:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 "sudo tee /etc/dnsmasq.d/90-lab.conf >/dev/null <<'LABEOF'\n# lab-owned scenario overrides, read through misc.etc_dnsmasq_d (issue #10)\nLABEOF\n"
-"sudo systemctl restart pihole-FTL"
+"{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole EnableFeature/rapid-commit-6 err=true
 ## pihole EnableFeature/temporary-6 err=true
