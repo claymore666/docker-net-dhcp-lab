@@ -545,8 +545,10 @@ func cmdRun(args []string) int {
 	keyPath := os.ExpandEnv("$HOME/.ssh/id_ed25519_lab")
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
 	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
-	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
-		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	// The first parent EBUSY of the cell captures every namespace's links (#97).
+	hostRunner := &scenario.BusyCapture{Cell: cellName, EvidenceDir: evidenceDir, Log: os.Stderr,
+		Inner: &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+			Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}}
 	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
 		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
