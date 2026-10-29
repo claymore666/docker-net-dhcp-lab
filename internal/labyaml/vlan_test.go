@@ -24,7 +24,15 @@ func TestVLANSubnetsCollideWithNothing(t *testing.T) {
 			segs = append(segs, cell.Relay.ServerSegment.Subnet)
 		}
 	}
-	segs = append(segs, "10.200.16.0/24") // windows cell, not on dev yet
+	// The windows cell (10.200.16.0/24) must be among the segments read
+	// from lab.yaml, not a hand-typed copy of it. (#15)
+	win := false
+	for _, s := range segs {
+		win = win || s == "10.200.16.0/24"
+	}
+	if !win {
+		t.Fatalf("lab.yaml segments %v do not include the windows cell 10.200.16.0/24", segs)
+	}
 	for _, s := range segs {
 		taken[netip.MustParsePrefix(s)] = s
 		// C9 renumbers a cell into this subnet for a while: a VLAN pool
