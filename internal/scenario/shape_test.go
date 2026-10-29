@@ -343,3 +343,170 @@ func TestIsolateIPAMNetworkFailsWhenRecreateFailsAndTheOldNetworkIsGone(t *testi
 		t.Errorf("sleep was called %v; a lab error must not wait out the hold on a network that is not there", slept)
 	}
 }
+
+// scriptedShapeRunner answers per command and per call number: fail
+// returns the error for the n-th (1-based) run of cmd, nil for success.
+type scriptedShapeRunner struct {
+	fail  func(cmd string, n int) error
+	calls []string
+	seen  map[string]int
+}
+
+func (f *scriptedShapeRunner) Run(_ context.Context, cmd string) (string, error) {
+	if f.seen == nil {
+		f.seen = map[string]int{}
+	}
+	f.calls = append(f.calls, cmd)
+	f.seen[cmd]++
+	if f.fail != nil {
+		return "", f.fail(cmd, f.seen[cmd])
+	}
+	return "", nil
+}
+
+var errSSH255 = fmt.Errorf("ssh lab@10.200.255.20: exit status 255: Connection reset by 10.200.255.20 port 22\r\n")
+var errRuleAbsent = fmt.Errorf("ssh lab@10.200.255.20: exit status 1: iptables: Bad rule (does a matching rule exist in that chain?).\r\n")
+
+func fastReadyRetry(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := bridgeReadyRetryWait
+	bridgeReadyRetryWait = d
+	t.Cleanup(func() { bridgeReadyRetryWait = old })
+}
+
+// #101: the readiness read right after netplan apply failed once and the
+// run-2 shape aborted; one more read after a wait is the whole retry.
+func TestNetworkUpRetriesTheBridgeReadinessReadOnce(t *testing.T) {
+	fastReadyRetry(t, 30*time.Millisecond)
+	br := hostBridgeName(NetworkName("dnsmasq", ShapeBridgeIPAM))
+	show := "ip link show " + br
+	r := &scriptedShapeRunner{fail: func(cmd string, n int) error {
+		if cmd == show && n == 1 {
+			return errRuleAbsent
+		}
+		return nil
+	}}
+	start := time.Now()
+	if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridgeIPAM); err != nil {
+		t.Fatalf("NetworkUp gave up on a readiness read that passed on the second try: %v", err)
+	}
+	if got := r.seen[show]; got != 2 {
+		t.Fatalf("readiness read ran %d times, want 2", got)
+	}
+	if time.Since(start) < 30*time.Millisecond {
+		t.Fatal("the retry read ran without waiting")
+	}
+}
+
+func TestNetworkUpGivesUpAfterTwoReadinessReads(t *testing.T) {
+	fastReadyRetry(t, 0)
+	br := hostBridgeName(NetworkName("dnsmasq", ShapeBridge))
+	show := "ip link show " + br
+	r := &scriptedShapeRunner{fail: func(cmd string, _ int) error {
+		if cmd == show {
+			return errRuleAbsent
+		}
+		return nil
+	}}
+	_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge)
+	if err == nil || !strings.Contains(err.Error(), "did not come up after netplan apply") {
+		t.Fatalf("want the original did-not-come-up error, got %v", err)
+	}
+	if got := r.seen[show]; got != 2 {
+		t.Fatalf("readiness read ran %d times, want exactly 2", got)
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "docker network create") {
+			t.Fatalf("network created although the bridge never came up: %q", c)
+		}
+	}
+}
+
+func TestNetworkUpReadinessRetryHonoursACancelledContext(t *testing.T) {
+	fastReadyRetry(t, time.Hour)
+	br := hostBridgeName(NetworkName("dnsmasq", ShapeBridge))
+	show := "ip link show " + br
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &scriptedShapeRunner{fail: func(cmd string, _ int) error {
+		if cmd == show {
+			cancel()
+			return errRuleAbsent
+		}
+		return nil
+	}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := NetworkUp(ctx, r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("NetworkUp succeeded with a cancelled context and a bridge that was not ready")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the readiness retry wait ignored the cancelled context")
+	}
+}
+
+// #93 item 3: ssh exit 255 on the rule check is a transport failure, not
+// "rule not present".
+func TestNetworkUpFirewallCheckTransportFailure(t *testing.T) {
+	br := hostBridgeName(NetworkName("pihole", ShapeBridge))
+	for _, c := range []struct{ name, check string }{
+		{"v4", forwardRuleCheck(br)},
+		{"v6", forwardRule6Check(br)},
+	} {
+		t.Run(c.name+" persistent 255 is not a missing rule", func(t *testing.T) {
+			r := &scriptedShapeRunner{fail: func(cmd string, _ int) error {
+				if cmd == c.check {
+					return errSSH255
+				}
+				return nil
+			}}
+			_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "pihole", ShapeBridge)
+			if err == nil {
+				t.Fatal("NetworkUp succeeded although the rule could not be read")
+			}
+			if strings.Contains(err.Error(), "required firewall rule not present") {
+				t.Fatalf("a transport failure was reported as an absent rule: %v", err)
+			}
+			if !strings.Contains(err.Error(), "could not read the firewall rule") || !strings.Contains(err.Error(), "exit status 255") {
+				t.Fatalf("error does not name the transport failure: %v", err)
+			}
+			if got := r.seen[c.check]; got != 2 {
+				t.Fatalf("check ran %d times, want 2 (one retry)", got)
+			}
+		})
+		t.Run(c.name+" 255 once then present passes", func(t *testing.T) {
+			r := &scriptedShapeRunner{fail: func(cmd string, n int) error {
+				if cmd == c.check && n == 1 {
+					return errSSH255
+				}
+				return nil
+			}}
+			if _, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "pihole", ShapeBridge); err != nil {
+				t.Fatalf("NetworkUp failed on a transport blip that the retry cleared: %v", err)
+			}
+			// the third read is bridgeReady's own, after the retry cleared it
+			if got := r.seen[c.check]; got != 3 {
+				t.Fatalf("check ran %d times, want 3 (blip, retry, bridgeReady)", got)
+			}
+		})
+		t.Run(c.name+" exit 1 is still a missing rule, not retried", func(t *testing.T) {
+			r := &scriptedShapeRunner{fail: func(cmd string, _ int) error {
+				if cmd == c.check {
+					return errRuleAbsent
+				}
+				return nil
+			}}
+			_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "pihole", ShapeBridge)
+			if err == nil || !strings.Contains(err.Error(), "required firewall rule not present") {
+				t.Fatalf("an absent rule lost its message: %v", err)
+			}
+			if got := r.seen[c.check]; got != 1 {
+				t.Fatalf("an absent rule was read %d times, want 1", got)
+			}
+		})
+	}
+}

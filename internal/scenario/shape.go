@@ -288,6 +288,48 @@ func ensureBridgePresent(ctx context.Context, r sourceadapter.Runner, stack laby
 	return nil
 }
 
+// bridgeReadyRetryWait is the pause before NetworkUp's one second
+// readiness read; a variable so tests do not sleep it (#101).
+var bridgeReadyRetryWait = 10 * time.Second
+
+// bridgeReadyAfterWait is the readiness wait NetworkUp ends with: one
+// read, and, only if it fails, one more after bridgeReadyRetryWait. The
+// run-2 dnsmasq bridge-ipam abort (#101) was a single read straight after
+// netplan apply; a second read is the whole retry, never a loop, so a
+// bridge that never comes up still fails. A cancelled ctx skips the wait.
+func bridgeReadyAfterWait(ctx context.Context, r sourceadapter.Runner, br string) bool {
+	if bridgeReady(ctx, r, br) {
+		return true
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(bridgeReadyRetryWait):
+	}
+	return bridgeReady(ctx, r, br)
+}
+
+// sshTransportRE matches ssh's own exit status 255, the code it returns
+// when the connection fails or drops, never the remote command's status
+// (iptables -C answers 1 for an absent rule).
+var sshTransportRE = regexp.MustCompile(`exit status 255\b`)
+
+// checkRule runs one iptables -C style check. It returns nil when the
+// rule is present. An ssh transport failure (exit 255) is retried once,
+// and, if it persists, reported with transport true so the caller does
+// not call the rule absent when its presence was never read (#93 item 3,
+// run 2: "ssh exit 255", connection reset by the docker host).
+func checkRule(ctx context.Context, r sourceadapter.Runner, check string) (transport bool, err error) {
+	_, err = r.Run(ctx, check)
+	if err != nil && sshTransportRE.MatchString(err.Error()) {
+		_, err = r.Run(ctx, check)
+	}
+	if err == nil {
+		return false, nil
+	}
+	return sshTransportRE.MatchString(err.Error()), err
+}
+
 // NetworkUp brings up one shape's null-IPAM network on the docker host.
 // It clears any previous run's network (and, for bridge, its host
 // bridge) first: a stale leftover must never let a fresh create look
@@ -333,12 +375,18 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 		// Verify the rule is actually there before trusting it, so a
 		// missing rule fails right here, by name, instead of surfacing
 		// forty seconds later as an unexplained scenario timeout.
-		if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
+		if transport, err := checkRule(ctx, r, forwardRuleCheck(br)); err != nil {
+			if transport {
+				return "", fmt.Errorf("networkup(%s): could not read the firewall rule %q: %w", shape, forwardRuleAdd(br), err)
+			}
 			return "", fmt.Errorf(
 				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, \"Prepare a host bridge\"); bridge shape cannot pass DHCP traffic without it: %w",
 				shape, forwardRuleAdd(br), err)
 		}
-		if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
+		if transport, err := checkRule(ctx, r, forwardRule6Check(br)); err != nil {
+			if transport {
+				return "", fmt.Errorf("networkup(%s): could not read the firewall rule %q: %w", shape, forwardRule6Add(br), err)
+			}
 			return "", fmt.Errorf(
 				"networkup(%s): required firewall rule not present: %q (docs/bridge-mode.md, DHCPv6); bridge shape cannot pass DHCPv6 or RAs without it: %w",
 				shape, forwardRule6Add(br), err)
@@ -346,7 +394,7 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
 			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
 		}
-		if !bridgeReady(ctx, r, br) {
+		if !bridgeReadyAfterWait(ctx, r, br) {
 			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "))
 		}
 		create, _ := networkCreateCmd(shape, net, br, nil)
