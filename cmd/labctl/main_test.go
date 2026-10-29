@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/claymore666/docker-net-dhcp-lab/internal/labyaml"
 	"github.com/claymore666/docker-net-dhcp-lab/internal/scenario"
@@ -393,5 +397,165 @@ func TestRunScenariosListStartingWithAStaticRowIsolatesLater(t *testing.T) {
 	})
 	if err != nil || len(isolated) != 1 || isolated[0] != "b" {
 		t.Fatalf("isolated before %v (err %v), want only b", isolated, err)
+	}
+}
+
+// #101: an infrastructure abort leaves BLOCKED rows with the abort reason
+// for the shape's scenarios that have no verdict, and touches no other.
+func TestWriteAbortRowsFillsOnlyTheMissingScenarios(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	first, second := scenario.Catalog[0].Name, scenario.Catalog[1].Name
+	existing := []scenario.Verdict{
+		{Scenario: first, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.NA, Reason: "kept", GitSHA: "aaa", Timestamp: at},
+		{Scenario: second, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.FAIL, Reason: "kept too", GitSHA: "aaa", Timestamp: at},
+		{Scenario: first, Cell: "dnsmasq", Shape: scenario.ShapeMacvlan, Result: scenario.NA, Reason: "other shape", GitSHA: "aaa", Timestamp: at},
+		{Scenario: first, Cell: "kea", Shape: scenario.ShapeBridgeIPAM, Result: scenario.NA, Reason: "other cell", GitSHA: "aaa", Timestamp: at},
+	}
+	before := map[string]string{}
+	for _, v := range existing {
+		if err := scenario.Write(dir, v); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[v.FileName()] = string(b)
+	}
+
+	names, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "bbb", "network recreate failed\r\nsecond line", at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := len(scenario.Catalog) - 2; len(names) != want {
+		t.Fatalf("wrote %d rows, want %d (catalog minus the two that had verdicts)", len(names), want)
+	}
+	for name, content := range before {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s changed or vanished: err=%v", name, err)
+		}
+	}
+	for _, s := range scenario.Catalog[2:] {
+		v, err := scenario.ReadVerdict(filepath.Join(dir, fmt.Sprintf("dnsmasq-%s-%s.verdict", scenario.ShapeBridgeIPAM, s.Name)))
+		if err != nil {
+			t.Fatalf("%s has no row: %v", s.Name, err)
+		}
+		if v.Result != scenario.BLOCKED || !strings.HasPrefix(v.Reason, abortReasonPrefix) || !strings.Contains(v.Reason, "network recreate failed second line") {
+			t.Fatalf("%s: result %s reason %q", s.Name, v.Result, v.Reason)
+		}
+	}
+	if left, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM)); err != nil || len(left) != 2 {
+		t.Fatalf("after the abort %d scenarios count as done, want only the 2 real verdicts, err %v", len(left), err)
+	}
+}
+
+// #101: an abort row is not a verdict. A second pass over the same
+// evidence directory (a resume, or run-cells.sh's retry pass) must still
+// list the scenarios the abort covered, and the real verdict it writes
+// replaces the row.
+func TestAbortRowsDoNotStopASecondPassFromRunningTheScenarios(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	first := scenario.Catalog[0].Name
+	if err := scenario.Write(dir, scenario.Verdict{Scenario: first, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.NA, Reason: "ran before the abort", GitSHA: "a", Timestamp: at}); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "b", "boom", at)
+	if err != nil || len(aborted) != len(scenario.Catalog)-1 {
+		t.Fatalf("abort wrote %d rows, err %v", len(aborted), err)
+	}
+
+	done, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := remainingScenarioNames(scenario.Catalog, done)
+	if len(again) != len(aborted) || again[0] != aborted[0] {
+		t.Fatalf("second pass would run %d scenarios, want the %d the abort covered", len(again), len(aborted))
+	}
+
+	real := scenario.Verdict{Scenario: again[0], Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.FAIL, Reason: "ran on the second pass", GitSHA: "c", Timestamp: at}
+	if err := scenario.Write(dir, real); err != nil {
+		t.Fatal(err)
+	}
+	v, err := scenario.ReadVerdict(filepath.Join(dir, real.FileName()))
+	if err != nil || v.Result != scenario.FAIL || isAbortRow(v) {
+		t.Fatalf("after the second pass %s reads %s %q (err %v), want the real verdict", again[0], v.Result, v.Reason, err)
+	}
+
+	rows, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "d", "boom again", at)
+	if err != nil || len(rows) != len(aborted)-1 {
+		t.Fatalf("a second abort rewrote %d rows, want %d, err %v", len(rows), len(aborted)-1, err)
+	}
+	v, err = scenario.ReadVerdict(filepath.Join(dir, real.FileName()))
+	if err != nil || v.Result != scenario.FAIL {
+		t.Fatalf("a second abort replaced a real verdict: %s (err %v)", v.Result, err)
+	}
+}
+
+// #101: only an abort row is non-final. A BLOCKED verdict from the plugin
+// side (parent busy, plugin not ready, pool capacity) still counts as done,
+// is not listed by remaining and is never rewritten by an abort, even when
+// its reason mentions an abort.
+func TestNonAbortBlockedVerdictsStayFinal(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	reasons := []string{
+		"the parent interface is busy",
+		"the plugin was not ready",
+		"the run was aborted by the operator before this scenario ran",
+	}
+	before := map[string]string{}
+	for i, reason := range reasons {
+		v := scenario.Verdict{Scenario: scenario.Catalog[i].Name, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.BLOCKED, Reason: reason, GitSHA: "a", Timestamp: at}
+		if err := scenario.Write(dir, v); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[v.FileName()] = string(b)
+	}
+	done, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range reasons {
+		if !done[scenario.Catalog[i].Name] {
+			t.Fatalf("%s: a non-abort BLOCKED verdict does not count as done", scenario.Catalog[i].Name)
+		}
+	}
+	names, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "b", "boom", at)
+	if err != nil || len(names) != len(scenario.Catalog)-len(reasons) {
+		t.Fatalf("abort wrote %d rows, want %d, err %v", len(names), len(scenario.Catalog)-len(reasons), err)
+	}
+	for name, content := range before {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s changed by the abort: err=%v", name, err)
+		}
+	}
+}
+
+func TestWriteAbortRowsOnACompleteShapeWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Now()
+	for _, s := range scenario.Catalog {
+		if err := scenario.Write(dir, scenario.Verdict{Scenario: s.Name, Cell: "kea", Shape: scenario.ShapeBridge, Result: scenario.NA, Reason: "r", GitSHA: "a", Timestamp: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, err := writeAbortRows(dir, "kea", scenario.ShapeBridge, "b", "x", at)
+	if err != nil || len(names) != 0 {
+		t.Fatalf("names %v err %v, want none", names, err)
+	}
+}
+
+func TestCmdAbortBlockedRefusesAnUnknownShape(t *testing.T) {
+	if rc := cmdAbortBlocked([]string{"lab.yaml", ".", "kea", "tunnel", t.TempDir(), "x"}); rc != 2 {
+		t.Fatalf("rc %d, want 2", rc)
 	}
 }
