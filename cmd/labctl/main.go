@@ -272,6 +272,10 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.OpenwrtAdapter{Runner: runner}, nil
 	case "fritzbox":
 		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
+	case "windows":
+		// run-cells.sh skips the cell while its image is absent (lab #14),
+		// so a run never reaches this; the adapter is the next change.
+		return nil, fmt.Errorf("source type windows has no adapter yet (lab #14); the cell is wired and cannot run")
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}

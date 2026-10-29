@@ -31,6 +31,7 @@ new_case() {
 	d=$(mktemp -d "$tmp/case-XXXXXX")
 	mkdir -p "$d/repo/scripts" "$d/repo/images" "$d/cache"
 	cp "$REPO_ROOT/scripts/fetch-base-image.sh" "$d/repo/scripts/"
+	cp "$REPO_ROOT/scripts/image-path.sh" "$d/repo/scripts/"
 	printf '%s  img.qcow2\n' "$SUM" >"$d/repo/images/img.sha256"
 	: >"$d/curl.log"
 	echo "$d"

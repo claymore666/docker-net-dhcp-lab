@@ -14,12 +14,13 @@ set -euo pipefail
 # progress line there as a protocol prefix (lab #92). Progress goes to stderr.
 usage='usage: fetch-base-image.sh <name> <url> [qcow2|archive|built] [checksum-url]'
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-CACHE_DIR=${LAB_IMAGE_CACHE:-/srv/lab/images}
+. "$REPO_ROOT/scripts/image-path.sh"
+CACHE_DIR=$(image_cache_dir)
 NAME=${1:?$usage}
 KIND=${3:-qcow2}
 SUMS_URL=${4:-}
 PINNED="$REPO_ROOT/images/$NAME.sha256"
-DEST="$CACHE_DIR/$NAME.qcow2"
+DEST=$(base_image_path "$NAME")
 
 mkdir -p "$CACHE_DIR"
 

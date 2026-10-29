@@ -22,6 +22,7 @@ DISK_WAIT=${LAB_DISK_WAIT:-600}
 DISK_POLL=${LAB_DISK_POLL:-30}
 LOAD_POLL=${LAB_LOAD_POLL:-30}
 . "$REPO_ROOT/scripts/load-gate.sh"
+. "$REPO_ROOT/scripts/image-path.sh"
 
 usage() {
 	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
@@ -154,6 +155,25 @@ claim() {
 	fi
 }
 
+# image_gate JSON: prints why a built base image the cell needs is not on
+# this host and returns 0; returns 1 when every one is there. The one
+# definition --check and the start share (lab #14), over the path
+# fetch-base-image.sh writes. Only presence is asked: a stale or expired
+# image is up-source.sh's refusal, which stays red.
+image_gate() {
+	local name path
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		path=$(base_image_path "$name")
+		if [ ! -f "$path" ]; then
+			echo "built image $name is not on this host ($path is missing); run its build script"
+			return 0
+		fi
+	done < <(jq -r '[.source_image, .docker_host_image] | map(select(. != null and .kind == "built") | .name) | unique | .[]' <<<"$1")
+	return 1
+}
+
+declare -A CELL_JSON=()
 T_BRIDGE=()
 T_DOCKER=()
 T_SOURCE=()
@@ -164,6 +184,7 @@ for i in "${!CELLS[@]}"; do
 		echo "run-cells: REFUSED -- labctl resolve failed for cell $cell; nothing was started" >&2
 		exit 1
 	fi
+	CELL_JSON[$cell]=$json
 	bridge=$(jq -r '.cell.segment.bridge // empty' <<<"$json")
 	docker_addr=$(jq -r '.cell.docker_host.mgmt_address // empty' <<<"$json")
 	source_addr=$(jq -r '.cell.source.mgmt_address // empty' <<<"$json")
@@ -245,8 +266,16 @@ if [ "${#refusals[@]}" -gt 0 ]; then
 	echo "run-cells: nothing was started" >&2
 	exit 1
 fi
+would_skip=0
+for cell in "${CELLS[@]}"; do
+	if msg=$(image_gate "${CELL_JSON[$cell]}"); then
+		echo "run-cells: $cell would be skipped-image: $msg"
+		would_skip=$((would_skip + 1))
+	fi
+done
 if [ "$CHECK_ONLY" -eq 1 ]; then
 	echo "run-cells: --check OK, ${ncells} cell(s) share no name, domain, bridge, address, observer or directory"
+	[ "$would_skip" -eq 0 ] || echo "run-cells: --check: $would_skip cell(s) would be skipped-image, which is not a failure"
 	exit 0
 fi
 
@@ -298,10 +327,37 @@ stagger_gap() {
 	nap "$left"
 }
 
+# The results page reads this file to show the cell as one BLOCKED column
+# (internal/matrix, lab #14). Not written over an earlier run's verdicts,
+# which stay the cell's evidence.
+mark_image_not_built() {
+	local cell=$1 msg=$2 ev
+	ev=$ROOT/evidence/$cell
+	if compgen -G "$ev/*.verdict" >/dev/null; then
+		echo "run-cells: $cell keeps the verdicts of an earlier run in $ev; no image-not-built marker written" >&2
+		return 0
+	fi
+	mkdir -p "$ev"
+	jq -n --arg cell "$cell" --arg reason "image not built" --arg detail "$msg" \
+		--arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		'{cell: $cell, reason: $reason, detail: $detail, date: $date}' >"$ev/image-not-built.json"
+}
+
 start_cell() {
 	local cell=$1 pid
 	rm -f "$ROOT/logs/$cell.rc"
 	START[$cell]=$EPOCHSECONDS
+	# First, before any wait: a cell whose image cannot exist here is not
+	# a disk or a load question, and never reaches run-cell.sh (lab #14).
+	if msg=$(image_gate "${CELL_JSON[$cell]}"); then
+		RC[$cell]=skipped-image
+		END[$cell]=$EPOCHSECONDS
+		echo "skipped-image" >"$ROOT/logs/$cell.rc"
+		echo "run-cells: $cell not started: $msg" >&2
+		mark_image_not_built "$cell" "$msg"
+		return 0
+	fi
+	rm -f "$ROOT/evidence/$cell/image-not-built.json"
 	if ! wait_for_disk; then
 		RC[$cell]=skipped-disk
 		END[$cell]=$EPOCHSECONDS
@@ -504,6 +560,8 @@ fi
 print_table
 failed=0
 for cell in "${CELLS[@]}"; do
-	[ "${RC[$cell]:-}" = 0 ] || failed=1
+	# skipped-image is the one non-zero result that is not a failure; a
+	# skipped-disk, skipped-exists, terminated or missing rc still is.
+	case "${RC[$cell]:-}" in 0 | skipped-image) ;; *) failed=1 ;; esac
 done
 exit "$failed"

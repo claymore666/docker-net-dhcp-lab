@@ -33,6 +33,7 @@ fresh() {
 	rm -rf "$tmp/repo" "$tmp/cache"
 	mkdir -p "$tmp/repo/scripts" "$tmp/repo/images" "$tmp/cache"
 	cp "$REPO_ROOT/scripts/fetch-base-image.sh" "$tmp/repo/scripts/"
+	cp "$REPO_ROOT/scripts/image-path.sh" "$tmp/repo/scripts/"
 	: >"$tmp/qemu.log"
 }
 

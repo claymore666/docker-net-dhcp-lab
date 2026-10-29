@@ -14,6 +14,7 @@ source_version_cmd() {
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | fritzbox) printf 'kernel\tuname -r\n' ;;
 	routeros) printf 'routeros\t:put [/system resource get version]\n' ;;
 	openwrt) printf '%s\t%s\n' openwrt "$openwrt_version" ;;
+	windows) printf 'windows\t[System.Environment]::OSVersion.VersionString\n' ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -32,6 +33,10 @@ source_config_pairs() {
 	# the box has no shell; the probe VM's hosts file stands in until the
 	# probe seed decides what to capture (lab #13 PR 4)
 	fritzbox) printf '%s\n' probe-hosts.stock:/etc/hosts ;;
+	# no shell files to back up: the image build exports the DHCP server
+	# once, scope in place, as baseline.xml; "dhcp-export" is the live
+	# export (lab #14)
+	windows) printf '%s\n' baseline.xml:dhcp-export ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -43,7 +48,7 @@ source_config_pairs() {
 source_stock_mask() {
 	case "$1" in
 	udhcpd) echo 1 ;;
-	kea | isc-dhcp | dnsmasq | pihole | routeros | fritzbox) echo 0 ;;
+	kea | isc-dhcp | dnsmasq | pihole | routeros | fritzbox | windows) echo 0 ;;
 	openwrt) echo 1 ;;
 	*) source_type_unknown "$1" ;;
 	esac
@@ -52,11 +57,14 @@ source_stock_mask() {
 # source_stock_cmd TYPE NAME and source_live_cmd TYPE PATH: the command
 # that prints that side over ssh. RouterOS (#9) has no shell: the stock
 # side is the export the seed wrote before its first change, the live
-# side the command /export itself.
+# side the command /export itself. Windows (#14) has PowerShell as its
+# ssh shell: the stock side is the build's baseline export, the live side
+# a fresh export of the running server; neither text carries a quote.
 source_stock_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat /root/lab-stock-config/%s\n' "$2" ;;
 	routeros) printf ':put [/file get %s contents]\n' "$2" ;;
+	windows) printf 'Get-Content -Raw C:\\ProgramData\\lab\\%s\n' "$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -64,6 +72,7 @@ source_live_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat %s\n' "$2" ;;
 	routeros) printf '%s\n' "$2" ;;
+	windows) printf '$f = Join-Path $env:TEMP lab-live.xml; Export-DhcpServer -File $f -Leases -Force; Get-Content -Raw $f; Remove-Item $f\n' ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }

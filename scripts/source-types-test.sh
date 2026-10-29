@@ -104,6 +104,39 @@ echo "${!#}" >>"$SSH_LOG"
 echo "option=1"
 STUB
 
+# windows (#14): PowerShell reads, no shell files and no sudo. The stock
+# side is the build's baseline export, the live side a fresh export; the
+# capture sends them as they are and drops the CR PowerShell ends lines in.
+[ "$(source_version_cmd windows)" = $'windows\t[System.Environment]::OSVersion.VersionString' ] || bad "windows: version $(source_version_cmd windows)"
+[ "$(source_config_pairs windows)" = baseline.xml:dhcp-export ] || bad "windows: pairs $(source_config_pairs windows)"
+[ "$(source_stock_mask windows)" = 0 ] || bad "windows: stock mask"
+[ "$(source_stock_cmd windows baseline.xml)" = 'Get-Content -Raw C:\ProgramData\lab\baseline.xml' ] || bad "windows: stock read $(source_stock_cmd windows baseline.xml)"
+case "$(source_live_cmd windows dhcp-export)" in *'Export-DhcpServer -File'*'Get-Content -Raw'*) ;; *) bad "windows: live read $(source_live_cmd windows dhcp-export)" ;; esac
+for cmd in "$(source_version_cmd windows)" "$(source_stock_cmd windows x)" "$(source_live_cmd windows x)"; do
+	case "$cmd" in *sudo* | *"'"* | *'"'*) bad "windows: read carries sudo or a quote: $cmd" ;; esac
+done
+cat >"$tmp/bin/ssh" <<'STUB'
+#!/bin/bash
+echo "${!#}" >>"$SSH_LOG"
+case "${!#}" in
+'Get-Content -Raw'*) printf '<DHCPServer>\r\n<Scope>10.200.16.0</Scope>\r\n</DHCPServer>\r\n' ;;
+*) printf '<DHCPServer>\r\n<Scope>10.200.16.0</Scope>\r\n<Lease>10.200.16.101</Lease>\r\n</DHCPServer>\r\n' ;;
+esac
+STUB
+: >"$tmp/ssh.log"
+SSH_LOG="$tmp/ssh.log" PATH="$tmp/bin:$PATH" \
+	"$REPO_ROOT/scripts/capture-source-config-diff.sh" c-win windows 192.0.2.1 "$tmp" "$tmp/ev-win" >/dev/null ||
+	bad "windows: capture failed"
+[ "$(wc -l <"$tmp/ssh.log")" -eq 2 ] || bad "windows: capture sent $(wc -l <"$tmp/ssh.log") reads"
+grep -q sudo "$tmp/ssh.log" && bad "windows: the capture sent a Linux read"
+grep -q $'\r' "$tmp"/ev-win/* && bad "windows: the diff kept a CR"
+grep -qx '+<Lease>10.200.16.101</Lease>' "$tmp"/ev-win/* || bad "windows: the diff is not stock against live: $(cat "$tmp"/ev-win/*)"
+cat >"$tmp/bin/ssh" <<'STUB'
+#!/bin/bash
+echo "${!#}" >>"$SSH_LOG"
+echo "option=1"
+STUB
+
 # A type with pairs and a mask but a stock or live read that is missing (#9)
 # or prints nothing: the capture refuses before any ssh and writes no
 # diff file. Run against a

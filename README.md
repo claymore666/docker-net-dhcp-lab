@@ -296,6 +296,7 @@ scripts/down-cell.sh kea <work-dir>
 | dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages |
 | Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only) |
 | Kea behind a relay | `kea-relay` | run on 2026-10-11, no verdicts: it stopped at its relay probe (no relayed ACK reached the client observer, a lab error, so no shape ran), see the v0.2.0 results page |
+| Windows Server 2025 DHCP (v0.3.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built; its adapter does not exist yet |
 | A physical Fritz.Box (v0.3.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
 
 Work for v0.3.0 is on `dev` and has no host run yet, so none of it
@@ -304,7 +305,9 @@ appears on a results page:
 - **Fritz.Box cell** (#13): the `fritzbox` cell and its schema are in
   `lab.yaml`; the adapter is a placeholder that reads nothing.
 - **Windows Server 2025 image** (#14): `scripts/build-windows-image.sh`
-  builds the evaluation image a Windows DHCP cell would boot; no cell uses it yet.
+  builds the evaluation image the `windows` cell boots. The cell is in
+  `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
+  first host build are still to come, and `labctl` refuses the cell until then.
 - **Server events** (#15): Kea, ISC dhcpd and dnsmasq can list the DHCP
   messages they logged; no scenario reads them yet.
 
@@ -404,7 +407,8 @@ later calls to the same guest try once each until one succeeds. Starts are space
 `--stagger` seconds apart (default 60, `0` disables) so that the guests do
 not all boot, install the plugin and open ssh at the same moment. A cell
 that fails does not stop the others, is torn down with `down-cell.sh` as
-soon as it exits, and the exit code is 1 if any cell's was not 0.
+soon as it exits, and the exit code is 1 if any cell's was not 0, except
+`skipped-image` (below), which is not a failure.
 Before the first start it resolves every cell and refuses if two share a
 name, VM name, bridge, management address, observer container, observer
 veth or directory, or if any of those VMs or containers already exists on
@@ -412,10 +416,16 @@ the host; `--check` prints that table and stops there. Before each start it
 wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
 minutes for it, and otherwise marks the cell `skipped-disk`; it also looks
 again for that cell's VMs and observer and marks the cell `skipped-exists`
-if they have appeared meanwhile. Before each cell start, and before each
-shape inside a cell, it waits while the one-minute load average is at or
-above half the vCPUs, up to `--load-wait` seconds (default 900, `0` disables;
-a cell that waited the bound out still starts) and logs each wait. The cells
+if they have appeared meanwhile. A cell whose base image is a `built` one
+(the Windows image, or OpenWrt's) that is not in the image cache
+(`/srv/lab/images/<name>.qcow2`, or `LAB_IMAGE_CACHE`) is marked
+`skipped-image` before anything else: it never starts, the log says which
+image to build, and it leaves `evidence/<cell>/image-not-built.json`
+(`cell`, `reason`, `detail`, `date`) so `labctl matrix` shows the cell as one
+BLOCKED column, "image not built". `--check` names such cells too. Before
+each cell start, and before each shape inside a cell, it waits while the
+one-minute load average is at or above half the vCPUs, up to `--load-wait`
+seconds (default 900, `0` disables; a cell that waited the bound out still starts) and logs each wait. The cells
 start longest first, by the seconds in `--durations FILE` (default
 `<root>/durations.tsv` if it exists; every run updates that file with the
 cells that finished 0, and cells it does not know start last, `--check`

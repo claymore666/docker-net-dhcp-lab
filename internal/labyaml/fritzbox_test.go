@@ -231,7 +231,7 @@ func TestFritzboxResolveJSONPaths(t *testing.T) {
 
 // The shipped cell, pinned to the design: subnet, box at .1, probe at .2,
 // pool .100-.200 (the group F user-class pool owns .203-.210), a /64 of
-// the ULA /48. 10.200.16.0/24 stays free for the DESIGN-910 slot (lab #13).
+// the ULA /48. 10.200.16.0/24 is the Windows cell's alone (lab #13, #14).
 func TestRealLabYAMLFritzboxCell(t *testing.T) {
 	c, err := Load("../../lab.yaml")
 	if err != nil {
@@ -248,8 +248,8 @@ func TestRealLabYAMLFritzboxCell(t *testing.T) {
 		t.Errorf("fritzbox cell\n got %v\nwant %v", got, want)
 	}
 	for _, o := range c.Cells {
-		if o.Segment.Subnet == "10.200.16.0/24" {
-			t.Errorf("cell %s sits on 10.200.16.0/24, the reserved appliance slot", o.Name)
+		if o.Segment.Subnet == "10.200.16.0/24" && o.Name != "windows" {
+			t.Errorf("cell %s sits on 10.200.16.0/24, the windows cell's slot", o.Name)
 		}
 	}
 }

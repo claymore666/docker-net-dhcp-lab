@@ -435,6 +435,35 @@ cells:
       memory_mib: 2048
       disk_gib: 8
 
+  - name: windows
+    description: >
+      Windows Server 2025 evaluation (Server Core), its own DHCP Server role,
+      driven over OpenSSH with PowerShell. The image is built once on the
+      host by scripts/build-windows-image.sh from an ISO placed by hand, with
+      the cell's addresses and key baked in; without it the cell is skipped,
+      never failed. DHCPv4 only. Issue #14.
+    segment:
+      bridge: lab-br-windows
+      subnet: 10.200.16.0/24
+    source:
+      type: windows
+      base_image: windows-2025-eval
+      mgmt_address: 10.200.255.161/24
+      seg_address: 10.200.16.2/24
+      pool_start: 10.200.16.100
+      pool_end: 10.200.16.200
+      vcpus: 2
+      memory_mib: 4096
+      disk_gib: 20
+    docker_host:
+      base_image: debian-13-generic-amd64
+      mgmt_address: 10.200.255.160/24
+      plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.5.0
+      previous_plugin_tag: ghcr.io/claymore666/docker-net-dhcp:v2.4.0
+      vcpus: 2
+      memory_mib: 2048
+      disk_gib: 8
+
   - name: isc-failover
     description: >
       ISC dhcpd 4.4 failover pair: the isc-dhcp cell's server twice, load

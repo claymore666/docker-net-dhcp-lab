@@ -61,9 +61,15 @@ esac
 RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
 field() { jq -r "$1 // empty" <<<"$RESOLVED"; }
 base_image=$(field .cell.source.base_image)
-# The source type check arrives with the type itself, in the cell wiring.
 if [ "$base_image" != "$IMAGE_NAME" ]; then
 	echo "build-windows-image: REFUSED -- cell $CELL is on '$base_image', not $IMAGE_NAME" >&2
+	exit 1
+fi
+# The type the image serves is windows; its image under another type is a
+# cell edited by hand (lab #14).
+source_type=$(field .cell.source.type)
+if [ "$source_type" != windows ]; then
+	echo "build-windows-image: REFUSED -- cell $CELL has source type '$source_type', not windows" >&2
 	exit 1
 fi
 mgmt_addr=$(field .cell.source.mgmt_address)
