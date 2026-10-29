@@ -104,6 +104,29 @@ run_case "ULA, the /48 itself, allowed" \
 	$'note: ula_prefix "fd42:200::/48"\n' ok || fail=1
 run_case "ULA, zero third group with leading zeros, allowed" \
 	$'note: fd42:200:0000:100::1\n' ok || fail=1
+# A ULA candidate must start an address (#96): the tail of a link-local
+# address that happens to contain "fdff:" is not one. The first line is the
+# rc2 evidence line; every start position of a real ULA stays refused.
+run_case "link-local with a fdff group, the rc2 evidence line, allowed" \
+	$'    inet6 fe80::bcd5:fdff:fe80:d1/64 scope link\n' ok || fail=1
+run_case "link-local with fd after a double colon, allowed" \
+	$'fe80::fdff:fe80:d1/64\n' ok || fail=1
+run_case "ULA at line start refused" $'fd00::1\n' fail note.txt 'hygiene: candidate at note.txt:1' 1 || fail=1
+run_case "ULA after a space refused" $'host fd12:3456::1\n' fail note.txt 'hygiene: candidate at note.txt:1' 1 || fail=1
+run_case "ULA after an equals sign refused" $'addr=fd12:3456::1\n' fail || fail=1
+run_case "ULA inside brackets refused" $'[fd12:3456::1]:8080\n' fail || fail=1
+run_case "ULA inside parentheses and quotes refused" $'("fd12:3456::1")\n' fail || fail=1
+run_case "ULA after a colon that follows a non-hex word refused" \
+	$'gateway:fd12:3456::1\n' fail || fail=1
+run_case "two ULAs on one line report twice" \
+	$'fd12:3456::1 fd12:3456::2\n' fail note.txt 'hygiene: candidate at note.txt:1' 2 || fail=1
+run_case "ULA next to a lab ULA, the lab one allowed" \
+	$'fd42:200:0:100::1 fd12:3456::1\n' fail note.txt 'hygiene: candidate at note.txt:1' 1 || fail=1
+run_case "fd group inside a longer word is not an address, as before" \
+	$'golfd12:3456::1 my_fd12:3456::1\n' ok || fail=1
+run_case "allowed lab ULA after an equals sign and a bracket" \
+	$'a=fd42:200:0:100::1 [fd42:200:0:200::2]\n' ok || fail=1
+
 # No candidate address at all.
 run_case "no address" $'note: nothing here\n' ok || fail=1
 # A session agent name or a review-exchange marker must be caught even
@@ -441,6 +464,28 @@ run_case "answer file, a Value outside any password element" \
 	$'<MetaData><Key>/IMAGE/NAME</Key><Value>Windows Server</Value></MetaData>\n' ok extra/unattend.xml '!password-literal' || fail=1
 run_case "answer file, a literal after a placeholder password block" \
 	$'<Password><Value>__X__</Value></Password>\n<Value>hunter2</Value>\n' ok extra/unattend.xml '!password-literal' || fail=1
+
+# The shared function pack.sh and config-diff-lib.sh call (#96): same anchor,
+# and it prints the address itself, never the prefix the pattern consumed.
+(
+	# shellcheck source=scripts/hygiene-patterns.sh
+	. "$REPO_ROOT/scripts/hygiene-patterns.sh"
+	unit_case() {
+		local desc=$1 line=$2 want=$3 got
+		got=$(hygiene_address_disallowed "$line")
+		if [ "$got" != "$want" ]; then
+			echo "hygiene-check-test: FAIL -- $desc: wanted '$want', got '$got'" >&2
+			return 1
+		fi
+	}
+	unit_fail=0
+	unit_case "disallowed: link-local with a fdff group" 'fe80::bcd5:fdff:fe80:d1/64' '' || unit_fail=1
+	unit_case "disallowed: ULA after a space, prefix dropped" 'host fd12:3456::1' 'fd12:3456::1' || unit_fail=1
+	unit_case "disallowed: ULA after a colon and a non-hex word" 'gateway:fd12:3456::1' 'fd12:3456::1' || unit_fail=1
+	unit_case "disallowed: lab ULA after a bracket" '[fd42:200:0:100::1]' '' || unit_fail=1
+	unit_case "disallowed: IPv4 beside a ULA" '192.168.7.7,fd12::1' $'192.168.7.7\nfd12::1' || unit_fail=1
+	exit "$unit_fail"
+) || fail=1
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

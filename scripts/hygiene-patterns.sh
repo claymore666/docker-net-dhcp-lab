@@ -16,12 +16,29 @@
 HYGIENE_ALLOWED_RE='^(10\.200\.|10\.1\.1\.|127\.|169\.254\.|172\.(1[7-9]|2[0-9]|3[01])\.|192\.0\.2\.|198\.51\.100\.|203\.0\.113\.|fd42:200(:(0{1,4}:|:)|$))'
 
 # RFC1918 and link-local candidates only; a public IP is not house detail.
-HYGIENE_ADDR_CANDIDATE_RE='\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2}|fd[0-9a-f]{2}:[0-9a-f:]+)\b'
+# An fd ULA must start an address (#96): the tail "fdff:fe80:d1" of the
+# link-local fe80::bcd5:fdff:fe80:d1 is not one. ERE has no lookbehind, so
+# the fd alternative consumes one prefix -- line start, a non-word non-colon
+# char, or a single colon after a non-hex char ("via:fd00::1") -- and
+# hygiene_trim_candidate drops it; every consumer calls it. The IPv4
+# alternatives keep a bare \b: a tail needs a dotted run of five groups.
+HYGIENE_ADDR_CANDIDATE_RE='(\b(10(\.[0-9]{1,3}){3}|192\.168(\.[0-9]{1,3}){2}|172\.(1[6-9]|2[0-9]|3[01])(\.[0-9]{1,3}){2}|169\.254(\.[0-9]{1,3}){2})|(^|[^0-9A-Za-z_:]|(^|[^0-9a-fA-F:]):)fd[0-9a-f]{2}:[0-9a-f:]+)\b'
+
+# hygiene_trim_candidate M sets HYGIENE_TRIMMED to M without the prefix the
+# fd alternative consumed (a prefix char is never in [0-9a-f]; an address
+# starts with one), no fork.
+hygiene_trim_candidate() {
+	HYGIENE_TRIMMED=${1#"${1%%[0-9a-f]*}"}
+}
 
 # hygiene_address_candidates prints every address-shaped substring on
 # line $1, one per line (none, if there aren't any).
 hygiene_address_candidates() {
-	grep -oE "$HYGIENE_ADDR_CANDIDATE_RE" <<<"$1" || true
+	local m
+	while IFS= read -r m; do
+		hygiene_trim_candidate "$m"
+		printf '%s\n' "$HYGIENE_TRIMMED"
+	done < <(grep -oE "$HYGIENE_ADDR_CANDIDATE_RE" <<<"$1" || true)
 }
 
 # hygiene_address_disallowed prints every address-shaped substring on
