@@ -43,6 +43,9 @@ echo "== up-source.sh: the IPv6 gate follows the source type (lab #10) =="
 echo "== Docker host user-data carries the Debian 11 archive rewrite, and only there (issue #27) =="
 ./scripts/cloud-init-docker-host-test.sh
 
+echo "== relay user-data turns forwarding on without the sysctl binary (lab #91) =="
+./scripts/relay-user-data-test.sh
+
 echo "== up-source.sh: the five cloud-init sources render as pinned; seed and image kinds dispatch =="
 ./scripts/up-source-golden-test.sh
 
