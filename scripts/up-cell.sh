@@ -180,6 +180,10 @@ done
 	exit 1
 }
 
+echo "== scenario image =="
+# Before any source comes up and before any scenario can start (lab #93).
+"$REPO_ROOT/scripts/pull-scenario-image.sh" "$mgmt_ip" "$known_hosts"
+
 # If this cell has an IP source in lab.yaml (issue #2), bring it up too,
 # on the segment bridge just built above. A cell with no source (issue
 # #1's ref-only) leaves this a no-op.
