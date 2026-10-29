@@ -81,5 +81,40 @@ if [ "$ow_iface" -ne 1 ] || [ "$ow_other" -ne 1 ] || [ "$ow_dev" -ne 1 ]; then
 	fail=1
 fi
 
+# A VLAN child's link: names the netplan id of the segment NIC, the ethernet
+# whose set-name is eth1 (seg0); link: eth1 is refused by netplan, so eth1.100
+# never exists (#121, measured on the Kea cell 2026-10-29). Another existing id
+# such as mgmt0 would parent the VLAN on the management NIC, and a vlans entry
+# with no link: is refused by netplan too.
+seg_id=$(awk '/^  [a-z0-9]+:$/ { id = $1; sub(/:$/, "", id) } /^[[:space:]]+set-name: eth1$/ { print id }' cloud-init/source-network-config.tmpl.yaml)
+if [ -z "$seg_id" ] || [ "$(wc -l <<<"$seg_id")" -ne 1 ]; then
+	echo "source-bind-check: FAIL -- source-network-config.tmpl.yaml has not exactly one ethernet with set-name: eth1" >&2
+	fail=1
+fi
+for t in cloud-init/*-user-data.tmpl.yaml; do
+	while read -r link; do
+		if [ "$link" != "$seg_id" ]; then
+			echo "source-bind-check: FAIL -- $t: link: $link is not the segment netplan id $seg_id" >&2
+			fail=1
+		fi
+	done < <(sed -n 's/^[[:space:]]*link: *\([^ #]*\).*$/\1/p' "$t")
+	# every entry under vlans: carries a link: of its own
+	nolink=$(awk '
+		function flush() { if (name != "" && !haslink) print name; name = "" }
+		/^[[:space:]]*vlans:[[:space:]]*$/ { flush(); match($0, /^ */); vind = RLENGTH; invl = 1; next }
+		invl {
+			match($0, /^ */); ind = RLENGTH
+			if ($0 ~ /^[[:space:]]*$/) next
+			if (ind <= vind) { flush(); invl = 0; next }
+			if ($0 ~ /^[[:space:]]*[^[:space:]:]+:[[:space:]]*$/ && (eind == 0 || ind <= eind)) { flush(); name = $1; eind = ind; haslink = 0; next }
+			if ($0 ~ /^[[:space:]]*link:[[:space:]]*[^[:space:]]/) haslink = 1
+		}
+		END { flush() }' "$t")
+	if [ -n "$nolink" ]; then
+		echo "source-bind-check: FAIL -- $t: vlans entry $nolink has no link:" >&2
+		fail=1
+	fi
+done
+
 [ "$fail" -eq 0 ] || exit 1
-echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd, udhcpd, pihole and openwrt bind eth1 only; kea, isc-dhcp and dnsmasq also bind its VLAN child eth1.100"
+echo "source-bind-check: ok -- kea, isc-dhcp and dnsmasq (v4 and v6), radvd, udhcpd, pihole and openwrt bind eth1 only; kea, isc-dhcp and dnsmasq also bind its VLAN child eth1.100; every VLAN link: is the segment netplan id"
