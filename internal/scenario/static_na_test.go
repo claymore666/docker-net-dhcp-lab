@@ -106,10 +106,65 @@ func TestStaticNAEmptyOnNonIPAMShapes(t *testing.T) {
 			continue
 		}
 		for _, s := range Catalog {
-			if v, ok := StaticNA(s, staticEnv(t, shape, src)); ok {
+			_, shapeRow := shapeStaticNA[s.Name]
+			if v, ok := StaticNA(s, staticEnv(t, shape, src)); ok && !(shapeRow && shape == ShapeIpvlan) {
 				t.Errorf("%s on %s answered statically: %s", s.Name, shape, v.Reason)
 			}
 		}
+	}
+}
+
+// Drift for the non-ipam shape rows, both directions: what the bodies
+// answer on ipvlan with nothing to run against, set against shapeStaticNA.
+func TestShapeStaticNATableMatchesTheScenarios(t *testing.T) {
+	observed := map[string]bool{}
+	for _, s := range Catalog {
+		func() {
+			defer func() { _ = recover() }()
+			e := Env{Cell: "kea", Shape: ShapeIpvlan, GitSHA: "abc1234"}
+			v := s.Run(context.Background(), e)
+			if f, ok := shapeStaticNA[s.Name]; ok {
+				if want, _ := f(e); v.Result == NA && want.Reason == v.Reason {
+					observed[s.Name] = true
+				}
+			}
+		}()
+	}
+	for name := range shapeStaticNA {
+		if !observed[name] {
+			t.Errorf("shapeStaticNA row %s: the scenario body does not answer it first on ipvlan", name)
+		}
+	}
+	if len(observed) == 0 {
+		t.Fatal("no scenario answered the ipvlan N/A; the drift check sees nothing")
+	}
+}
+
+// A shape row answers only on its own shape, and writes the wrapper's bytes.
+func TestStaticNAAnswersC6OnIpvlanOnlyAndMatchesTheWrapper(t *testing.T) {
+	src := &fakeAdapter{caps: allNeeds()}
+	c6 := scenarioNamed(t, NameC6)
+	for _, shape := range Shapes {
+		_, ok := StaticNA(c6, staticEnv(t, shape, src))
+		if want := shape == ShapeIpvlan || shape == ShapeBridgeIPAM || shape == ShapeMacvlanIPAM; ok != want {
+			t.Errorf("C6 on %s: static %v, want %v", shape, ok, want)
+		}
+	}
+	e := staticEnv(t, ShapeIpvlan, src)
+	got, _ := StaticNA(c6, e)
+	want := RunOne(context.Background(), c6, e)
+	if want.Result != NA || want.Reason != got.Reason {
+		t.Fatalf("wrapper %s %q, static %q", want.Result, want.Reason, got.Reason)
+	}
+	a, b := t.TempDir(), t.TempDir()
+	if err := Write(a, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(b, want); err != nil {
+		t.Fatal(err)
+	}
+	if x, y := verdictBytes(t, a), verdictBytes(t, b); x != y {
+		t.Errorf("bytes differ\nstatic:\n%s\nwrapper:\n%s", x, y)
 	}
 }
 
