@@ -32,6 +32,7 @@ const (
 type wireExchange struct {
 	XID, Class, IP, Start string
 	At                    time.Time
+	Unseen                bool // the ACK's request is not in the capture
 }
 
 func classifyStart(st DHCPMsg, seen bool) (class, why string) {
@@ -68,7 +69,7 @@ func wireExchanges(msgs []DHCPMsg) []wireExchange {
 			acked[m.XID] = true
 			st, seen := starts[m.XID]
 			class, why := classifyStart(st, seen)
-			out = append(out, wireExchange{XID: m.XID, Class: class, IP: m.YIAddr, Start: why, At: m.At})
+			out = append(out, wireExchange{XID: m.XID, Class: class, IP: m.YIAddr, Start: why, At: m.At, Unseen: !seen})
 		}
 	}
 	return out
@@ -180,6 +181,12 @@ func eAligned(server []sourceadapter.ServerEvent, wire []DHCPMsg) (acks []source
 	if len(ex) == 0 {
 		b("the capture holds no ACK for this client, so there is no wire side to tie the logs to")
 		return
+	}
+	for _, x := range ex {
+		if x.Unseen {
+			b("the capture holds an ACK (xid %s) whose request it does not hold: the capture started late or dropped a frame, so the exchange cannot be classified", x.XID)
+			return
+		}
 	}
 	if err := alignGroups(serverGroups(acks), exchangeGroups(ex)); err != nil {
 		b("the witnesses disagree before any plugin number is read: %v", err)

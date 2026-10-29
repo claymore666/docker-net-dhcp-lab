@@ -448,3 +448,31 @@ func TestParseEHealth(t *testing.T) {
 		t.Error("a body without releases_sent_v6 parsed")
 	}
 }
+
+// The plugin sends no RELEASE on stop: the source logs none and the
+// counter does not move, which is 0 == 0 on the release half and must
+// not pass (#15).
+func TestJudgeE1NoReleaseAtAllFails(t *testing.T) {
+	o := happyE1()
+	o.Server = []sourceadapter.ServerEvent{srvEv("ACK", eIP, 0), srvEv("ACK", eIP, 20)}
+	o.ReleasesSent = 0
+	wantOutcome(t, judgeE1(o), FAIL, "0 RELEASE")
+}
+
+// An ACK in the capture whose request is missing (the capture started
+// late or dropped a frame) is a gap in a witness, never a plugin finding.
+func TestJudgeAnACKWithoutItsRequestIsBlockedNotFail(t *testing.T) {
+	o := happyE1()
+	o.Wire = cat(boundWire("a1", eIP, 0), []DHCPMsg{wireMsg("ACK", "b2", "", eIP, eIP, 20.01)})
+	wantOutcome(t, judgeE1(o), BLOCKED, "does not hold")
+	o2 := happyE2()
+	o2.Wire = o.Wire
+	wantOutcome(t, judgeE2(o2), BLOCKED, "does not hold")
+}
+
+// The v6 half of the two views is compared too.
+func TestJudgeE2HealthMetricsDisagreeOnV6Fails(t *testing.T) {
+	o := happyE2()
+	o.After["leases_obtained_v6"] = 1
+	wantOutcome(t, judgeE2(o), FAIL, "/Plugin.Health says")
+}
