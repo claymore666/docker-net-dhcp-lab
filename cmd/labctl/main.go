@@ -229,6 +229,7 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		PoolStart: cell.Source.PoolStart,
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
+		VLAN:      scenario.ObserverVLAN{Cell: cellName, Bridge: cell.Segment.Bridge},
 	}
 	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
 	if err != nil {
