@@ -313,6 +313,10 @@ func TestStaticNAForCountsTheWrapperCallsPerShape(t *testing.T) {
 		calls := len(scenario.Catalog) - len(na)
 		ipam := shape == scenario.ShapeBridgeIPAM || shape == scenario.ShapeMacvlanIPAM
 		switch {
+		case shape == scenario.ShapeIpvlan:
+			if _, ok := na[scenario.NameC6]; !ok || len(na) != 1 {
+				t.Errorf("%s: skipped %d scenarios, want exactly C6 (conflict_check=wait is refused on ipvlan, #117)", shape, len(na))
+			}
 		case !ipam && len(na) != 0:
 			t.Errorf("%s: %d scenarios skipped on a shape without the ipam refusal", shape, len(na))
 		case ipam && len(na) == 0:
