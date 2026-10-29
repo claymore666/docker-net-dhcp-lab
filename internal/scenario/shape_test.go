@@ -493,6 +493,24 @@ func TestNetworkUpFirewallCheckTransportFailure(t *testing.T) {
 				t.Fatalf("check ran %d times, want 3 (blip, retry, bridgeReady)", got)
 			}
 		})
+		t.Run(c.name+" 255 then exit 1 is a missing rule", func(t *testing.T) {
+			r := &scriptedShapeRunner{fail: func(cmd string, n int) error {
+				if cmd != c.check {
+					return nil
+				}
+				if n == 1 {
+					return errSSH255
+				}
+				return errRuleAbsent
+			}}
+			_, err := NetworkUp(context.Background(), r, labyaml.NetStackNetplan, "pihole", ShapeBridge)
+			if err == nil || !strings.Contains(err.Error(), "required firewall rule not present") || strings.Contains(err.Error(), "could not read") {
+				t.Fatalf("a rule that is really absent was not reported as absent: %v", err)
+			}
+			if got := r.seen[c.check]; got != 2 {
+				t.Fatalf("check ran %d times, want 2", got)
+			}
+		})
 		t.Run(c.name+" exit 1 is still a missing rule, not retried", func(t *testing.T) {
 			r := &scriptedShapeRunner{fail: func(cmd string, _ int) error {
 				if cmd == c.check {
