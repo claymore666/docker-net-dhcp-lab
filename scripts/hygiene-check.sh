@@ -138,7 +138,8 @@ if [ "${#scan_files[@]}" -gt 0 ]; then
 	if [ "${#addr_files[@]}" -gt 0 ]; then
 		scan "$work/addr" grep -HnZoaE -e "$HYGIENE_ADDR_CANDIDATE_RE" -- "${addr_files[@]}"
 		while IFS= read -r -d '' f && IFS= read -r rest; do
-			if ! [[ "${rest#*:}" =~ $HYGIENE_ALLOWED_RE ]]; then
+			hygiene_trim_candidate "${rest#*:}"
+			if ! [[ "$HYGIENE_TRIMMED" =~ $HYGIENE_ALLOWED_RE ]]; then
 				records+=("${fidx[$f]}:${rest%%:*}:0")
 			fi
 		done <"$work/addr"
