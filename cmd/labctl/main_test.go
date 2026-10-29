@@ -495,6 +495,51 @@ func TestAbortRowsDoNotStopASecondPassFromRunningTheScenarios(t *testing.T) {
 	}
 }
 
+// #101: only an abort row is non-final. A BLOCKED verdict from the plugin
+// side (parent busy, plugin not ready, pool capacity) still counts as done,
+// is not listed by remaining and is never rewritten by an abort, even when
+// its reason mentions an abort.
+func TestNonAbortBlockedVerdictsStayFinal(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	reasons := []string{
+		"the parent interface is busy",
+		"the plugin was not ready",
+		"the run was aborted by the operator before this scenario ran",
+	}
+	before := map[string]string{}
+	for i, reason := range reasons {
+		v := scenario.Verdict{Scenario: scenario.Catalog[i].Name, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.BLOCKED, Reason: reason, GitSHA: "a", Timestamp: at}
+		if err := scenario.Write(dir, v); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[v.FileName()] = string(b)
+	}
+	done, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range reasons {
+		if !done[scenario.Catalog[i].Name] {
+			t.Fatalf("%s: a non-abort BLOCKED verdict does not count as done", scenario.Catalog[i].Name)
+		}
+	}
+	names, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "b", "boom", at)
+	if err != nil || len(names) != len(scenario.Catalog)-len(reasons) {
+		t.Fatalf("abort wrote %d rows, want %d, err %v", len(names), len(scenario.Catalog)-len(reasons), err)
+	}
+	for name, content := range before {
+		got, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || string(got) != content {
+			t.Fatalf("%s changed by the abort: err=%v", name, err)
+		}
+	}
+}
+
 func TestWriteAbortRowsOnACompleteShapeWritesNothing(t *testing.T) {
 	dir := t.TempDir()
 	at := time.Now()
