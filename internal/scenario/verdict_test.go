@@ -203,6 +203,23 @@ func TestReadVerdictJoinsAContinuationLine(t *testing.T) {
 	}
 }
 
+// A broken-off line may itself hold ": " (ssh prints "port 22: timed
+// out"); its prefix is not a key, so it still joins the value (#94).
+func TestReadVerdictJoinsAContinuationLineHoldingAColon(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.verdict")
+	body := "scenario: A5-host-reboot\ncell: host\nshape: bridge\nresult: BLOCKED\nreason: ssh failed\r\nConnection to 10.200.255.40 port 22: timed out\r\ngit_sha: abc123\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := ReadVerdict(path)
+	if err != nil {
+		t.Fatalf("ReadVerdict: %v", err)
+	}
+	if want := "ssh failed Connection to 10.200.255.40 port 22: timed out"; v.Reason != want || v.GitSHA != "abc123" {
+		t.Fatalf("reason = %q (git_sha %q), want %q", v.Reason, v.GitSHA, want)
+	}
+}
+
 // A continuation joins only a value; one with no field before it, or a
 // key-shaped unknown field after it, is still refused loudly (#94).
 func TestReadVerdictStaysStrictAroundContinuations(t *testing.T) {
@@ -264,15 +281,24 @@ func TestWriteKeepsEveryFieldOnOneLine(t *testing.T) {
 
 // An evidence label or path is a pointer, so Write refuses a line break
 // in one rather than folding the pointer into a different name (#94).
-func TestWriteRefusesALineBreakInAnEvidenceLabel(t *testing.T) {
+func TestWriteRefusesALineBreakInAnEvidenceLabelOrPath(t *testing.T) {
 	dir := t.TempDir()
 	ev := filepath.Join(dir, "lease.txt")
 	if err := os.WriteFile(ev, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	v := Verdict{Scenario: NameA1, Cell: "kea", Shape: ShapeBridge, Result: PASS, Reason: "x",
-		Evidence: map[string]string{"lease\nafter": ev}, Timestamp: time.Now()}
-	if err := Write(dir, v); err == nil || !strings.Contains(err.Error(), "line break") {
-		t.Fatalf("expected a line-break refusal, got %v", err)
+	odd := filepath.Join(dir, "a\nb.txt")
+	if err := os.WriteFile(odd, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, evidence := range map[string]map[string]string{
+		"label": {"lease\nafter": ev},
+		"path":  {"lease": odd},
+	} {
+		v := Verdict{Scenario: NameA1, Cell: "kea", Shape: ShapeBridge, Result: PASS, Reason: "x",
+			Evidence: evidence, Timestamp: time.Now()}
+		if err := Write(dir, v); err == nil || !strings.Contains(err.Error(), "line break") {
+			t.Fatalf("%s: expected a line-break refusal, got %v", name, err)
+		}
 	}
 }
