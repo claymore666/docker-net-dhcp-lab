@@ -59,7 +59,7 @@ func healthyRelay(t *testing.T) (*scriptRunner, *scriptRunner) {
 	}
 	relay := &scriptRunner{replies: map[string]string{
 		"sudo systemctl is-active":      "1234\n",
-		"sysctl -n":                     "1\n",
+		"cat " + relayForwardProc:       "1\n",
 		"ip -4 -o addr show dev eth1":   "3: eth1    inet 10.200.10.1/24 brd 10.200.10.255 scope global eth1\\       valid_lft forever preferred_lft forever\n",
 		"ip -4 -o addr show dev eth2":   "4: eth2    inet 10.200.11.1/24 brd 10.200.11.255 scope global eth2\\       valid_lft forever preferred_lft forever\n",
 		"sudo nft list ruleset":         measuredRuleset,
@@ -94,7 +94,9 @@ func TestRelayReadyChecks(t *testing.T) {
 	}{
 		{"inner source not ready", nil, "inner"},
 		{"1 relay service inactive", func(r, _ *scriptRunner) { r.fail["sudo systemctl is-active"] = true }, "pgrep dhcrelay failed"},
-		{"2 ip_forward off", func(r, _ *scriptRunner) { r.replies["sysctl -n"] = "0\n" }, "ip_forward"},
+		{"2 ip_forward off", func(r, _ *scriptRunner) { r.replies["cat "+relayForwardProc] = "0\n" }, "ip_forward"},
+		{"2 ip_forward file empty", func(r, _ *scriptRunner) { r.replies["cat "+relayForwardProc] = "" }, "ip_forward"},
+		{"2 ip_forward unreadable", func(r, _ *scriptRunner) { r.fail["cat "+relayForwardProc] = true }, "read ip_forward"},
 		{"3 client leg renumbered", func(r, _ *scriptRunner) {
 			r.replies["ip -4 -o addr show dev eth1"] = "3: eth1    inet 10.200.10.9/24 scope global eth1\n"
 		}, "eth1 carries"},
@@ -171,7 +173,7 @@ func TestRelayRecoverPutsEverythingBack(t *testing.T) {
 	}
 	joined := strings.Join(relay.calls, "\n")
 	for _, want := range []string{"sudo tee " + RelayDefaultsPath, "sudo tee " + RelayNftPath, "policy drop",
-		"sudo nft -f " + RelayNftPath, "net.ipv4.ip_forward=1", "sudo systemctl restart isc-dhcp-relay"} {
+		"sudo nft -f " + RelayNftPath, "echo 1 | sudo tee " + relayForwardProc, "sudo systemctl restart isc-dhcp-relay"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("relay recover never ran %q", want)
 		}
@@ -181,6 +183,59 @@ func TestRelayRecoverPutsEverythingBack(t *testing.T) {
 	}
 	if want := "sudo ip route replace 10.200.10.0/24 via 10.200.11.1 dev eth1"; !slices.Contains(source.calls, want) {
 		t.Errorf("source calls %q lack %q", source.calls, want)
+	}
+}
+
+// noProcpsRelay models the relay VM of run 2 (lab #91): any sysctl, bare
+// or under sudo, is exit 127, ip_forward lives in its /proc file, and that
+// file takes a write only as a root tee fed 1.
+type noProcpsRelay struct {
+	*scriptRunner
+	forward string
+}
+
+func (n *noProcpsRelay) Run(ctx context.Context, cmd string) (string, error) {
+	n.calls = append(n.calls, cmd)
+	switch {
+	case strings.HasPrefix(cmd, "sysctl") || strings.HasPrefix(cmd, "sudo sysctl"):
+		return "", errors.New("exit status 127: bash: line 1: sysctl: command not found")
+	case cmd == "cat "+relayForwardProc:
+		return n.forward + "\n", nil
+	case cmd == "echo 1 | sudo tee "+relayForwardProc+" >/dev/null":
+		n.forward = "1"
+		return "", nil
+	case strings.Contains(cmd, relayForwardProc):
+		return "", errors.New("exit status 1: " + relayForwardProc + ": Permission denied")
+	}
+	calls := n.calls
+	out, err := n.scriptRunner.Run(ctx, cmd)
+	n.calls = calls
+	return out, err
+}
+
+// Ready reads ip_forward and Recover sets it without a sysctl binary on the
+// relay (lab #91): the unit tests ran against a mock that answered sysctl.
+func TestRelayWithoutSysctl(t *testing.T) {
+	base, source := healthyRelay(t)
+	relay := &noProcpsRelay{scriptRunner: base, forward: "0"}
+	a := newTestRelay(relay, source, &innerStub{})
+	err := a.Ready(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "ip_forward") || strings.Contains(err.Error(), "command not found") {
+		t.Fatalf("forwarding off must be reported as such, got %v", err)
+	}
+	if err := a.Recover(context.Background()); err != nil {
+		t.Fatalf("recover on a relay without sysctl: %v", err)
+	}
+	if relay.forward != "1" {
+		t.Fatalf("recover left ip_forward at %q", relay.forward)
+	}
+	if err := a.Ready(context.Background()); err != nil {
+		t.Fatalf("ready after recover: %v", err)
+	}
+	for _, c := range relay.calls {
+		if strings.Contains(c, "sysctl") {
+			t.Errorf("relay command %q uses sysctl", c)
+		}
 	}
 }
 

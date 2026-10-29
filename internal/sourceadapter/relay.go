@@ -17,6 +17,9 @@ const (
 	relayServerNIC    = "eth2"
 	RelayDefaultsPath = "/etc/default/isc-dhcp-relay"
 	RelayNftPath      = "/etc/nftables.conf"
+	// relayForwardProc is read and written directly: a sysctl binary is
+	// not on the relay user's path (run 2, lab #91).
+	relayForwardProc = "/proc/sys/net/ipv4/ip_forward"
 )
 
 // RelayParams is what WithRelay holds the relay and the source to, all
@@ -175,7 +178,7 @@ func (a *relayAdapter) relayReady(ctx context.Context) error {
 	if _, err := a.relay.Run(ctx, "sudo systemctl is-active --quiet "+relayService+" && pgrep -x dhcrelay"); err != nil {
 		return fmt.Errorf("relay: is-active %s && pgrep dhcrelay failed (service down, no dhcrelay, or relay unreachable): %w", relayService, err)
 	}
-	fwd, err := a.relay.Run(ctx, "sysctl -n net.ipv4.ip_forward")
+	fwd, err := a.relay.Run(ctx, "cat "+relayForwardProc)
 	if err != nil {
 		return fmt.Errorf("relay: read ip_forward: %w", err)
 	}
@@ -245,7 +248,7 @@ func (a *relayAdapter) Recover(ctx context.Context) error {
 	}
 	for _, cmd := range []string{
 		"sudo nft -f " + RelayNftPath,
-		"sudo sysctl -qw net.ipv4.ip_forward=1",
+		"echo 1 | sudo tee " + relayForwardProc + " >/dev/null",
 		"sudo systemctl restart " + relayService,
 	} {
 		if _, err := a.relay.Run(ctx, cmd); err != nil {
