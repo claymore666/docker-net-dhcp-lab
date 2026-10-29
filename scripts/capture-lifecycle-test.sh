@@ -134,6 +134,12 @@ if ! grep -qE "^docker exec -d lab-observer-case1 tcpdump -i eth-obs -w /tmp/obs
 	echo "capture-lifecycle-test: FAIL -- case 1: the live capture runs without --immediate-mode" >&2
 	fail=1
 fi
+# E3b (#15): VLAN 100 DHCP is captured to its own file, with a filter that
+# names the tag, because the main filter matches no tagged frame.
+if ! grep -qE "^docker exec -d lab-observer-case1 tcpdump -i eth-obs -w /tmp/obs-vlan.pcap -U --immediate-mode vlan 100 and \(udp port 67 or udp port 68\)\$" "$calls1"; then
+	echo "capture-lifecycle-test: FAIL -- case 1: no tagged capture of VLAN 100 DHCP" >&2
+	fail=1
+fi
 if ! grep -qF "udp port 546 or udp port 547 or (icmp6 and (ip6[40] == 133 or ip6[40] == 134))" "$calls1"; then
 	echo "capture-lifecycle-test: FAIL -- case 1: the capture filter drops DHCPv6 or RS/RA" >&2
 	fail=1

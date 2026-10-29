@@ -285,6 +285,7 @@ func TestRelayNAReasonsCoverEveryDroppedCapability(t *testing.T) {
 		CapRenumber:        "renumbering needs the relay leg renumbered too",
 		CapFailoverPair:    "no failover peer",
 		CapDNSRegistration: "serves no DNS",
+		CapVLANPool:        "eth1.100 sits on the relay's server segment",
 	}
 	for _, c := range relayDropped {
 		if _, ok := want[c]; !ok {

@@ -56,8 +56,10 @@ run 99
 [ "$(wc -l <"$tmp/ssh.log")" -eq 3 ] || bad "the retry is not bounded by LAB_PULL_ATTEMPTS: $(wc -l <"$tmp/ssh.log") calls"
 grep -q 'could not be pulled' "$tmp/err" || bad "a failed pull did not say so on stderr"
 
+# A scenario file with no alpine tag must not end the loop with grep's status 1;
+# the last file by name used to be a test, vlanwitness.go (#15) is not.
 # The tag the scenarios run, from the non-test code, is the tag pulled.
-code=$(for f in internal/scenario/*.go; do case $f in *_test.go) ;; *) grep -hoE 'alpine:[0-9][0-9a-z.-]*' "$f" ;; esac; done | sort -u)
+code=$(for f in internal/scenario/*.go; do case $f in *_test.go) ;; *) grep -hoE 'alpine:[0-9][0-9a-z.-]*' "$f" || true ;; esac; done | sort -u)
 [ -n "$code" ] || bad "no alpine tag found in internal/scenario: the drift check sees nothing"
 [ "$code" = "$image" ] || bad "internal/scenario runs [$code] but the pull script fetches $image"
 

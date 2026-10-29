@@ -33,6 +33,7 @@ var piholeNAReasons = map[Capability]string{
 	CapUserClassPool:   piholeNAReason,
 	CapV6:              piholeV6Reason,
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 }
 
 // NAReason names why a capability is absent; scenario.Applicable shows it

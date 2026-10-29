@@ -113,7 +113,7 @@ func WithRelay(inner Adapter, relay Runner, p RelayParams) Adapter {
 // not the client one, and C9 cannot renumber a source that is not on
 // the client segment, so C6, C6b, C7 and C9 are N/A there. dhcrelay
 // relays v4 only and an RA never crosses the relay, so group D is too.
-var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop}
+var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop, CapVLANPool}
 
 func (a *relayAdapter) Capabilities() []Capability {
 	var caps []Capability
@@ -133,6 +133,7 @@ var relayNAReasons = map[Capability]string{
 	CapRogueServer:     "relay cell: a squatter on the server segment is invisible to clients, by design",
 	CapRenumber:        "relay cell: renumbering needs the relay leg renumbered too",
 	CapFailoverPair:    "relay cell: one source behind one relay, no failover peer; the failover pair cell carries C5 (claymore666/docker-net-dhcp-lab#12)",
+	CapVLANPool:        "relay cell: the source's eth1.100 sits on the relay's server segment, not on the docker host's segment, so a tagged request never reaches it (claymore666/docker-net-dhcp-lab#15)",
 	CapDNSRegistration: "relay cell: the Kea source serves no DNS, so register_dns has nothing to register with",
 }
 

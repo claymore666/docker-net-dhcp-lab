@@ -58,6 +58,9 @@ type Env struct {
 	// Capture reads the live observer capture (group C, #23); nil
 	// leaves a group C scenario BLOCKED, never judged without it.
 	Capture CaptureReader
+	// VLAN is E3b's bridge flag and tagged capture leg (#15); nil leaves
+	// E3b BLOCKED.
+	VLAN VLANWitness
 	// ServerPCAP and ServerCapture are the relay cell's second observer,
 	// on the source's server segment; RelayClientMAC and RelayServerMAC
 	// are the relay's two leg MACs, read once at run start (#11). All
@@ -199,8 +202,10 @@ const (
 	NameF7  = "F7-pref64"
 	NameF8  = "F8-forcerenew"
 
-	NameE1 = "E1-audit-ledger"
-	NameE2 = "E2-metrics-vs-server"
+	NameE1  = "E1-audit-ledger"
+	NameE2  = "E2-metrics-vs-server"
+	NameE3a = "E3a-host-link-names"
+	NameE3b = "E3b-vlan-parent"
 )
 
 // MinPoolAddresses is the most pool addresses one full pass under one
@@ -234,13 +239,15 @@ const (
 // the temporary address and prefix delegation, two each for 108 forced and
 // FORCERENEW (their control clients, #21) and for PREF64, whose second
 // container binds after the RA (#23),
-// plus group E's 2: one each for E1 and E2, each on its own network (#15).
+// plus group E's 4: one each for E1 and E2, each on its own network, and two
+// for E3a, whose two legs start one container each; E3b leases from the VLAN
+// pool, not this one (#15).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against PoolDemand, this sum less what the cell's source cannot run
 // (the C5 family's 22 count only on a failover pair, lab #12), and
 // aborts the cell as a lab error, never as a scenario FAIL.
 // TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 119
+const MinPoolAddresses = 121
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -259,7 +266,7 @@ var poolDemand = map[string]int{
 	NameD4b: 1,
 	NameF1:  1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 1, NameF5: 1, NameF6: 1, NameF7: 2, NameF8: 2,
-	NameE1: 1, NameE2: 1,
+	NameE1: 1, NameE2: 1, NameE3a: 2, NameE3b: 0,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -421,6 +428,8 @@ var Catalog = []Scenario{
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
 	{Name: NameE1, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE1},
 	{Name: NameE2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE2},
+	{Name: NameE3a, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runE3a},
+	{Name: NameE3b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapVLANPool}, Run: runE3b},
 }
 
 // PoolDemand is the worst-case pool need of the scenarios in ss that source can run (lab #12).

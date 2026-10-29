@@ -121,7 +121,7 @@ files carry these IDs.
 | B | router-side features: reservations, DNS registration, requested address, vendor class, option changes on renewal, lease release, ipvlan identity | B1 to B8 | v0.2.0, #23 |
 | C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12b | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
 | D | IPv6: DHCPv6, SLAAC, managed flag, two prefixes | D1 to D4 | v0.2.0, #23 |
-| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 (E1 and E2 built; E3 to E5 planned) | v0.3.0, #15 |
+| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 (E1 to E3 built; E4 and E5 planned) | v0.3.0, #15 |
 | F | server-side support for the plugin's v2.4.0 client features | one per feature, numbered in #20 | v0.2.0, #20 (#21 FORCERENEW sender) |
 
 Group A runs today:
@@ -224,12 +224,14 @@ The user class, forced 108, rapid commit and temporary address rows run on their
 
 The dnsmasq PASS for F6-prefix-delegation and F7-pref64 is a negative (no prefix delegated, no NAT64 prefix reported) and means something only next to the Kea or ISC PASS of the same row in the same matrix: a client that ignores delegation or NAT64 entirely would also pass on dnsmasq.
 
-Group E runs today (the plugin's own records, checked against what the source logged itself; Kea, ISC and dnsmasq only, every other source reports N/A; a source whose journal is switched off is BLOCKED, not passed):
+Group E runs today (the plugin's own records, checked against what the source logged itself; E1 and E2 on Kea, ISC and dnsmasq only, every other source reports N/A for them; a source whose journal is switched off is BLOCKED, not passed. E3a needs no server input and runs on every source; E3b runs on Kea, ISC and dnsmasq, whose templates carry a VLAN 100 pool on the source's own `eth1.100`, and is N/A for the appliances, the failover and HA pairs and the relay cell):
 
 | ID | Scenario | What it does |
 |---|---|---|
 | E1 | audit ledger | with `audit_log` on, one container gets a lease on a shortened lease time, outlives its renewal time and is stopped. The plugin's ledger must hold exactly one bound entry and the renewals, in the order the source logged its own acknowledgements, matched by MAC address and IP and never by clock; no release-like entry may appear and no decline may reach the source |
 | E2 | metrics against the source | the same run, reading the plugin's counters before and after. Leases obtained, renewed and released must move by exactly the number of acknowledgements and releases the source logged, no timeout, unanswered request, refusal or lease change may count, and the health view and the metrics view must agree |
+| E3a | host link names | bridge: the host-side link of a container is `dh-` plus the first 12 characters of its endpoint ID, on the network's bridge, and nothing is left after it stops. A second network with `host_ifname=container_name` renames it on a kernel from 6.2 (the old name stays as an altname, `host_ifnames_applied` moves by one); on an older kernel the rename fails, the `dh-` name stays and `host_ifname_failures` moves by one, which passes. The kernel is read on the docker host. macvlan and ipvlan: no host-side link is named, and `host_ifname` is refused with `host_ifname cannot be set in mode=<mode>` |
+| E3b | VLAN parent | macvlan and ipvlan with `-o vlan=100`: the plugin makes `eth1.100`, an 802.1Q VLAN 100 link on `eth1` with its own alias, the container leases from the VLAN pool the source serves on its own `eth1.100` (an address from the untagged pool fails), the observer's tagged capture shows the reply, and the link is gone when the network is. Two precondition links, `vlan100` and a dummy `eth1.100`, each make the create fail with the documented text, and the dummy must still exist afterwards. A segment bridge with `vlan_filtering` on makes the row BLOCKED. Bridge shapes are N/A |
 
 The ledger rows are read from the plugin's state directory on the docker host. A host where that directory is not the plugin's default, a missing ledger, a suppressed source journal, another endpoint alive on the plugin, or a plugin restart during the run is BLOCKED with the reason. Both scenarios need one address each and report N/A on `bridge-ipam` and `macvlan-ipam`, which cannot carry the extra network.
 

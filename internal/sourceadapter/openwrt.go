@@ -36,6 +36,7 @@ var openwrtNAReasons = map[Capability]string{
 	CapRogueServer:     openwrtNAReason,
 	CapForceRenewNonce: openwrtNAReason,
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 	CapV6:              openwrtV6Reason,
 }
 

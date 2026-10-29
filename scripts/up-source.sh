@@ -143,6 +143,20 @@ class_prefix=${seg_network%.*}
 class_pool_start="$class_prefix.$class_first_host"
 class_pool_end="$class_prefix.$class_last_host"
 
+# E3b (#15): the VLAN 100 pool on the source's eth1.100 sits at segment
+# third octet + 150 (C9 already uses +100); internal/labyaml/vlan.go carries
+# the rule and a test pins this derivation to it. The source keeps its own
+# last octet (a failover partner is .3, not a second .2); pool .100-.200.
+vlan_id=100
+vlan_third=${seg_network#10.200.}
+vlan_third=$(( ${vlan_third%%.*} + 150 ))
+vlan_prefix=10.200.$vlan_third
+vlan_subnet=$vlan_prefix.0/24
+vlan_host=${seg_addr%%/*}
+vlan_addr=$vlan_prefix.${vlan_host##*.}
+vlan_pool_start=$vlan_prefix.100
+vlan_pool_end=$vlan_prefix.200
+
 # Seed hooks (#9), one pair per BaseImage.Seed. seed_<kind> runs before
 # the VM exists and sets seed_args, the virt-install arguments that hand
 # the seed over; ready_<kind> runs after it boots and exits 0 once the
@@ -175,6 +189,8 @@ seed_cloud_init() {
 		-e "s#__SEG_GATEWAY__#$gateway_ip#g" \
 		-e "s#__POOL_START__#$pool_start#g" -e "s#__POOL_END__#$pool_end#g" \
 		-e "s#__CLASS_POOL_START__#$class_pool_start#g" -e "s#__CLASS_POOL_END__#$class_pool_end#g" \
+		-e "s#__VLAN_ID__#$vlan_id#g" -e "s#__VLAN_SUBNET__#$vlan_subnet#g" -e "s#__VLAN_ADDR__#$vlan_addr#g" \
+		-e "s#__VLAN_PREFIX__#$vlan_prefix#g" -e "s#__VLAN_POOL_START__#$vlan_pool_start#g" -e "s#__VLAN_POOL_END__#$vlan_pool_end#g" \
 		-e "s#__SEG_SUBNET6__#$seg_subnet6#g" -e "s#__POOL6_START__#$pool6_start#g" \
 		-e "s#__POOL6_END__#$pool6_end#g" -e "s#__TEMP6_POOL__#$temp6_pool#g" \
 		-e "s#__HA_THIS__#$PEER#g" -e "s#^hostname: lab-${source_type}-source\$#hostname: $host_name#" \
