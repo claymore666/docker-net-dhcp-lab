@@ -177,19 +177,102 @@ func TestWriteKeepsAReasonWithLineBreaksOnOneLine(t *testing.T) {
 	}
 }
 
-// The reader stays strict: a continuation line is still refused.
-func TestReadVerdictRejectsAReasonSplitAcrossLines(t *testing.T) {
+// #94: files written before the writer folded its values carry the
+// value's own line break. The reader joins the broken-off text instead of
+// refusing the file, so labctl remaining and labctl matrix read them.
+func TestReadVerdictJoinsAContinuationLine(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "kea-bridge-A10-kill-restart-policy.verdict")
-	body := "scenario: A10-kill-restart-policy\ncell: kea\nshape: bridge\nresult: BLOCKED\n" +
-		"reason: ssh lab@10.200.255.20: exit status 255: Connection timed out during banner exchange\r\n" +
-		"Connection to 10.200.255.20 port 22 timed out\r\n" +
-		"git_sha: abc123\ntimestamp: 2026-10-09T12:38:10Z\n"
+	path := filepath.Join(dir, "host-macvlan-ipam-A5-host-reboot.verdict")
+	body := "scenario: A5-host-reboot\ncell: host\nshape: macvlan-ipam\nresult: PASS\nreason: ok\ngit_sha: abc123\n" +
+		"isolation: network recreated between scenarios (docker network rm failed: ssh lab@10.200.255.40: exit status 255: Connection refused\r\n" +
+		")\n" +
+		"timestamp: 2026-10-13T12:38:10Z\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ReadVerdict(path)
-	if err == nil || !strings.Contains(err.Error(), ":6:") {
-		t.Fatalf("expected the continuation at line 6 to be refused, got %v", err)
+	v, err := ReadVerdict(path)
+	if err != nil {
+		t.Fatalf("ReadVerdict on a value with a continuation line: %v", err)
+	}
+	want := "network recreated between scenarios (docker network rm failed: ssh lab@10.200.255.40: exit status 255: Connection refused )"
+	if v.IsolationMethod != want {
+		t.Fatalf("isolation = %q, want %q", v.IsolationMethod, want)
+	}
+	if v.Timestamp.IsZero() || v.GitSHA != "abc123" {
+		t.Fatalf("fields after the continuation lost: %+v", v)
+	}
+}
+
+// A continuation joins only a value; one with no field before it, or a
+// key-shaped unknown field after it, is still refused loudly (#94).
+func TestReadVerdictStaysStrictAroundContinuations(t *testing.T) {
+	for name, body := range map[string]string{
+		"continuation first":               ")\nscenario: A1-first-lease\ncell: k\nshape: bridge\nresult: PASS\n",
+		"unknown key after a continuation": "scenario: A1-first-lease\ncell: k\nshape: bridge\nresult: PASS\nreason: x\n)\nfuture_field: surprise\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "bad.verdict")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ReadVerdict(path); err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+		})
+	}
+}
+
+// #94: every value Write prints stays on its own line, whatever the
+// whitespace it carries, and reads back folded to single spaces.
+func TestWriteKeepsEveryFieldOnOneLine(t *testing.T) {
+	dir := t.TempDir()
+	ev := filepath.Join(dir, "lease.txt")
+	if err := os.WriteFile(ev, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := Verdict{Scenario: "A5\nhost", Cell: "ce\tll", Shape: ShapeBridge, Result: PASS,
+		Reason: "r\r\n\r\nx", GitSHA: "ab\ncd",
+		IsolationMethod: "recreated (ssh: exit status 255: Connection refused\n)",
+		Host:            HostInfo{Distro: "d\n1", Kernel: "k\r2", DockerVersion: "v\t3\n"},
+		Evidence:        map[string]string{"lease": ev},
+		Timestamp:       time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
+	if err := Write(dir, v); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, v.FileName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) != 12 || strings.ContainsAny(string(data), "\r\t") {
+		t.Fatalf("want 12 lines and no CR or tab, got %d:\n%q", len(lines), data)
+	}
+	got, err := ReadVerdict(filepath.Join(dir, v.FileName()))
+	if err != nil {
+		t.Fatalf("ReadVerdict: %v", err)
+	}
+	for _, c := range []struct{ name, got, want string }{
+		{"scenario", got.Scenario, "A5 host"}, {"cell", got.Cell, "ce ll"}, {"reason", got.Reason, "r x"},
+		{"git_sha", got.GitSHA, "ab cd"}, {"isolation", got.IsolationMethod, "recreated (ssh: exit status 255: Connection refused )"},
+		{"distro", got.Host.Distro, "d 1"}, {"kernel", got.Host.Kernel, "k 2"}, {"docker", got.Host.DockerVersion, "v 3"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.name, c.got, c.want)
+		}
+	}
+}
+
+// An evidence label or path is a pointer, so Write refuses a line break
+// in one rather than folding the pointer into a different name (#94).
+func TestWriteRefusesALineBreakInAnEvidenceLabel(t *testing.T) {
+	dir := t.TempDir()
+	ev := filepath.Join(dir, "lease.txt")
+	if err := os.WriteFile(ev, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v := Verdict{Scenario: NameA1, Cell: "kea", Shape: ShapeBridge, Result: PASS, Reason: "x",
+		Evidence: map[string]string{"lease\nafter": ev}, Timestamp: time.Now()}
+	if err := Write(dir, v); err == nil || !strings.Contains(err.Error(), "line break") {
+		t.Fatalf("expected a line-break refusal, got %v", err)
 	}
 }
