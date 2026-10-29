@@ -63,7 +63,7 @@ var Mapping = map[string]Entry{
 	"network:dhcp_servers":        {Scenario: scenario.NameC7},
 	"network:dhcp_deny_servers":   {Scenario: scenario.NameC7},
 	"network:register_dns":        {Scenario: scenario.NameB3},
-	"network:audit_log":           {Reason: notCoveredOption},
+	"network:audit_log":           {Scenario: scenario.NameE1},
 	"network:release_lease":       {Scenario: scenario.NameB7},
 	"network:host_ifname":         {Reason: notCoveredOption},
 	"network:force_create":        {Reason: notCoveredOption},
