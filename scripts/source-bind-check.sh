@@ -28,7 +28,9 @@ for t in kea isc-dhcp; do
 	fi
 done
 
-isc_line=$(grep -c '^[[:space:]]*INTERFACESv4="eth1"$' cloud-init/isc-dhcp-user-data.tmpl.yaml || true)
+# The VLAN 100 pool binds eth1.__VLAN_ID__, the tagged child of eth1, and
+# nothing else (lab #15 E3b); a bare or wider list still fails.
+isc_line=$(grep -c '^[[:space:]]*INTERFACESv4="eth1 eth1\.__VLAN_ID__"$' cloud-init/isc-dhcp-user-data.tmpl.yaml || true)
 isc6_line=$(grep -c '^[[:space:]]*INTERFACESv6="eth1"$' cloud-init/isc-dhcp-user-data.tmpl.yaml || true)
 isc_any=$(grep -c '^[[:space:]]*INTERFACESv[46]=' cloud-init/isc-dhcp-user-data.tmpl.yaml || true)
 if [ "$isc_line" -ne 1 ] || [ "$isc6_line" -ne 1 ] || [ "$isc_any" -ne 2 ]; then
@@ -38,8 +40,9 @@ fi
 
 dm_iface=$(grep -c '^[[:space:]]*interface=eth1$' cloud-init/dnsmasq-user-data.tmpl.yaml || true)
 dm_bind=$(grep -c '^[[:space:]]*bind-interfaces$' cloud-init/dnsmasq-user-data.tmpl.yaml || true)
+dm_vlan=$(grep -c '^[[:space:]]*interface=eth1\.__VLAN_ID__$' cloud-init/dnsmasq-user-data.tmpl.yaml || true)
 dm_other=$(grep -cE '^[[:space:]]*interface=' cloud-init/dnsmasq-user-data.tmpl.yaml || true)
-if [ "$dm_iface" -ne 1 ] || [ "$dm_bind" -ne 1 ] || [ "$dm_other" -ne 1 ]; then
+if [ "$dm_iface" -ne 1 ] || [ "$dm_vlan" -ne 1 ] || [ "$dm_bind" -ne 1 ] || [ "$dm_other" -ne 2 ]; then
 	echo "source-bind-check: FAIL -- dnsmasq-user-data.tmpl.yaml does not bind exactly eth1" >&2
 	fail=1
 fi
