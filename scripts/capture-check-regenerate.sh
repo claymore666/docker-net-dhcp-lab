@@ -15,9 +15,10 @@ REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=scripts/dhcp-exchange-check.sh
 . "$REPO_ROOT/scripts/dhcp-exchange-check.sh"
 
-CELL=${1:?usage: capture-check-regenerate.sh <cell-name> <evidence-dir>}
+CELL=${1:?usage: capture-check-regenerate.sh <cell-name> <evidence-dir> [pcap]}
 EVIDENCE_DIR=${2:?}
-PCAP="$EVIDENCE_DIR/$CELL.pcap"
+# A retry pass replays against its own capture, <cell>.retry.pcap (#95).
+PCAP=${3:-$EVIDENCE_DIR/$CELL.pcap}
 
 shopt -s nullglob
 clean=0

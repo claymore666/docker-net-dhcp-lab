@@ -16,6 +16,20 @@ runcmd:
   # noninteractive: same debconf-hang guard as the kea and isc-dhcp
   # templates (issue #2, measured live 2026-09-25).
   - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq dnsmasq-base iputils-arping
+  # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
+  # -o vlan=100 makes the matching eth1.100 on the docker host.
+  - |
+    cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
+    network:
+      version: 2
+      vlans:
+        eth1.__VLAN_ID__:
+          id: __VLAN_ID__
+          link: eth1
+          addresses: [__VLAN_ADDR__/24]
+    NETEOF
+  - chmod 600 /etc/netplan/60-lab-vlan.yaml
+  - netplan apply
   - systemctl stop dnsmasq
   - mkdir -p /root/lab-stock-config /etc/dnsmasq.d
   - cp /etc/dnsmasq.conf /root/lab-stock-config/dnsmasq.conf.stock
@@ -40,6 +54,13 @@ runcmd:
     enable-ra
     dhcp-range=__POOL6_START__,__POOL6_END__,slaac,64,2h
     ra-param=eth1,10,1800
+    DNSMASQEOF
+  # E3b (#15): the VLAN 100 pool is a drop-in, so the adapter's edits of
+  # dnsmasq.conf still see exactly the main and the class range.
+  - |
+    cat >/etc/dnsmasq.d/lab-vlan.conf <<'DNSMASQEOF'
+    interface=eth1.__VLAN_ID__
+    dhcp-range=__VLAN_POOL_START__,__VLAN_POOL_END__,12h
     DNSMASQEOF
   - systemctl enable --now dnsmasq
   - touch /var/lib/cloud/lab-bootstrap-done

@@ -33,6 +33,23 @@ type Bundle struct {
 	// bundle's load the way a real cell or git_sha mismatch does.
 	Host     scenario.HostInfo
 	Verdicts []scenario.Verdict
+	// Blocked is set instead of Verdicts when run-cells.sh did not start
+	// the cell because its built base image is not on the host (lab #14).
+	Blocked *Blocked
+}
+
+// BlockedFile is the marker run-cells.sh writes into a cell's evidence
+// directory when it records skipped-image (lab #14): JSON with cell,
+// reason, detail and date (RFC 3339, UTC).
+const BlockedFile = "image-not-built.json"
+
+// Blocked is that marker, read back. Cell and Reason come from its
+// content, never from the directory name, like every other bundle field.
+type Blocked struct {
+	Cell   string    `json:"cell"`
+	Reason string    `json:"reason"`
+	Detail string    `json:"detail"`
+	Date   time.Time `json:"date"`
 }
 
 // resolvedLab mirrors only the fields `labctl resolve`'s JSON output
@@ -54,6 +71,16 @@ func LoadBundle(dir string) (Bundle, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.verdict"))
 	if err != nil {
 		return Bundle{}, fmt.Errorf("list verdicts in %s: %w", dir, err)
+	}
+	markerPath := filepath.Join(dir, BlockedFile)
+	_, markerErr := os.Stat(markerPath)
+	hasMarker := markerErr == nil
+	if hasMarker && len(matches) > 0 {
+		return Bundle{}, fmt.Errorf("bundle %s: holds both %s and %d verdict(s); run-cells.sh never leaves both, so one of them is stale",
+			dir, BlockedFile, len(matches))
+	}
+	if hasMarker {
+		return loadBlocked(dir, markerPath)
 	}
 	if len(matches) == 0 {
 		return Bundle{}, fmt.Errorf("bundle %s: no *.verdict files found", dir)
@@ -103,4 +130,27 @@ func LoadBundle(dir string) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("bundle %s: %s carries no plugin_tag", dir, resolvedPath)
 	}
 	return b, nil
+}
+
+// loadBlocked reads the image-not-built marker (lab #14). A marker with
+// no cell, no reason or no date is refused: a BLOCKED column that cannot
+// say why or when is the empty column this exists to replace.
+func loadBlocked(dir, path string) (Bundle, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Bundle{}, fmt.Errorf("bundle %s: read %s: %w", dir, path, err)
+	}
+	var m Blocked
+	if err := json.Unmarshal(data, &m); err != nil {
+		return Bundle{}, fmt.Errorf("bundle %s: parse %s: %w", dir, path, err)
+	}
+	switch {
+	case m.Cell == "":
+		return Bundle{}, fmt.Errorf("bundle %s: %s carries no cell", dir, path)
+	case m.Reason == "":
+		return Bundle{}, fmt.Errorf("bundle %s: %s carries no reason", dir, path)
+	case m.Date.IsZero():
+		return Bundle{}, fmt.Errorf("bundle %s: %s carries no date", dir, path)
+	}
+	return Bundle{Dir: dir, Cell: m.Cell, Date: m.Date, Blocked: &m}, nil
 }

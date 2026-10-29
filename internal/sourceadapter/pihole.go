@@ -33,6 +33,7 @@ var piholeNAReasons = map[Capability]string{
 	CapUserClassPool:   piholeNAReason,
 	CapV6:              piholeV6Reason,
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 }
 
 // NAReason names why a capability is absent; scenario.Applicable shows it
@@ -116,7 +117,25 @@ func (a *PiholeAdapter) Start(ctx context.Context) error {
 
 // host is this source's userland: Debian with systemd, eth1 and
 // /usr/sbin/tc; FTL runs as the pihole-FTL unit (#9, #10).
-func (a *PiholeAdapter) host() host { return debianHost(piholeService) }
+func (a *PiholeAdapter) host() host {
+	h := debianHost(piholeService)
+	h.unit = piholeUnit
+	return h
+}
+
+// piholeUnit clears FTL's start-rate counter before every start and
+// restart: the lab restarts it once per scenario and systemd refuses the
+// sixth within its start interval (run 2, lab #93). The brace group keeps
+// the command one && element, so a caller's chain still stops on failure.
+func piholeUnit(name string) service {
+	s := systemdService(name)
+	if name == piholeService {
+		reset := "{ sudo systemctl reset-failed " + name + " || true; } && "
+		s.start = reset + s.start
+		s.restart = reset + s.restart
+	}
+	return s
+}
 
 func (a *PiholeAdapter) Reachable(ctx context.Context, addr string) error {
 	return reachable(ctx, a.Runner, addr)

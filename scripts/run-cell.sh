@@ -51,6 +51,15 @@ fi
 . "$REPO_ROOT/scripts/source-types.sh"
 . "$REPO_ROOT/scripts/load-gate.sh"
 version_line=$(source_version_cmd "$source_type")
+# The server package behind each peer's version (#99); the other types
+# report their version through version_line.
+case "$source_type" in
+kea) server_package=kea-dhcp4-server ;;
+isc-dhcp) server_package=isc-dhcp-server ;;
+dnsmasq) server_package=dnsmasq ;;
+udhcpd) server_package=udhcpd ;;
+*) server_package= ;;
+esac
 
 echo "== bring up cell $CELL =="
 "$REPO_ROOT/scripts/up-cell.sh" "$CELL" "$WORK"
@@ -76,6 +85,9 @@ echo "== versions =="
 	# RouterOS ends its lines in CR (#9).
 	for peer in $peers; do
 		echo "${peer%%=*} ${version_line%%$'\t'*}: $(ssh_run "${peer#*=}" "${version_line#*$'\t'}" | tr -d '\r')"
+		if [ -n "$server_package" ]; then
+			echo "${peer%%=*} package $server_package: $(ssh_run "${peer#*=}" "dpkg-query -W -f '\${Version}' $server_package" || echo unavailable)"
+		fi
 	done
 	if [ -n "$relay_mgmt_ip" ]; then
 		echo "relay distro: $(ssh_run "$relay_mgmt_ip" ". /etc/os-release && echo \$PRETTY_NAME")"
@@ -101,6 +113,18 @@ if [ -n "$relay_mgmt_ip" ]; then
 		>"$EVIDENCE_DIR/${CELL}-relay-config-diff.txt" || true
 fi
 
+# A resumed or retry pass finds the earlier pass's capture already in the
+# evidence dir and writes beside it, never over it (#95). The suffix is
+# fixed here, before either capture is copied, so both agree on the pass.
+pcap_sfx=""
+pcap_pass=1
+while [ -e "$EVIDENCE_DIR/${CELL}${pcap_sfx}.pcap" ]; do
+	pcap_pass=$((pcap_pass + 1))
+	pcap_sfx=".retry$([ "$pcap_pass" -eq 2 ] || echo "$pcap_pass")"
+done
+cell_pcap="$EVIDENCE_DIR/${CELL}${pcap_sfx}.pcap"
+server_pcap="$EVIDENCE_DIR/${CELL}-server${pcap_sfx}.pcap"
+
 echo "== capture: start (spans every shape below) =="
 wait_observer() {
 	local waited=0
@@ -125,7 +149,7 @@ fi
 stop_server_capture() {
 	if [ -n "$server_bridge" ]; then
 		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL-srv" "$WORK/srv"
-		cp "$WORK/srv/observer.pcap" "$EVIDENCE_DIR/${CELL}-server.pcap" 2>/dev/null || true
+		cp "$WORK/srv/observer.pcap" "$server_pcap" 2>/dev/null || true
 	fi
 }
 
@@ -143,7 +167,7 @@ if [ -n "$relay_mgmt_ip" ]; then
 	echo "== relay probe =="
 	if ! "$REPO_ROOT/scripts/relay-probe.sh" "$CELL" "$mgmt_ip" "$relay_mgmt_ip" "$WORK"; then
 		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK" || true
-		cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+		cp "$WORK/observer.pcap" "$cell_pcap" 2>/dev/null || true
 		stop_server_capture
 		relay_journal
 		LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK" || true
@@ -179,7 +203,9 @@ for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	# Bounded; a shape that waits the whole bound still runs.
 	load_gate "run-cell: $CELL/$shape" "${LAB_LOAD_WAIT:-900}" "${LAB_LOAD_POLL:-30}"
 	rc=0
-	go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" "$remaining" || rc=$?
+	# stderr also goes to a file: its last labctl line is the abort reason below (#101).
+	run_err="$WORK/labctl-run-$shape.err"
+	{ go run "$REPO_ROOT/cmd/labctl" run "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$WORK" "$EVIDENCE_DIR" "$WORK/observer.pcap" "$remaining" 2>&1 1>&3 | tee "$run_err" >&2; } 3>&1 || rc=$?
 	if [ "$rc" -eq 3 ]; then
 		echo "run-cell: labctl run reported a lab error (insufficient pool capacity) for $CELL/$shape; aborting the cell, not running the remaining shapes" >&2
 		RUNNER_FAILED=1
@@ -187,16 +213,21 @@ for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
 	elif [ "$rc" -ne 0 ]; then
 		echo "run-cell: labctl run exited non-zero for $CELL/$shape (an infrastructure error, not a scenario FAIL)" >&2
 		RUNNER_FAILED=1
+		# The scenarios it never reached read BLOCKED, not (missing) (#101).
+		abort_reason=$({ grep -E '^labctl run: ' "$run_err" || true; } | tail -n 1 | cut -c1-400)
+		[ -n "$abort_reason" ] || abort_reason="labctl run exited with status $rc"
+		go run "$REPO_ROOT/cmd/labctl" abort-blocked "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$EVIDENCE_DIR" "$abort_reason" ||
+			echo "run-cell: could not write the BLOCKED rows for $CELL/$shape" >&2
 	fi
 done
 
 echo "== capture: stop =="
 "$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK"
-cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+cp "$WORK/observer.pcap" "$cell_pcap" 2>/dev/null || true
 stop_server_capture
 
 echo "== capture: regenerate the capture-check evidence against the final pcap (issue #8) =="
-"$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR" "$cell_pcap"
 
 echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 # dockerd tags a managed plugin's own stdout/stderr lines with
@@ -208,8 +239,17 @@ echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 # captures agree on what counts as a plugin line, and so a window that
 # spans a plugin upgrade keeps the old instance's lines too, not only
 # the current one's.
+
+# A resumed or retry pass finds the earlier pass's journal already in
+# the evidence dir and writes beside it, never over it (#95).
+plugin_log="$EVIDENCE_DIR/${CELL}-plugin-log.txt"
+pass=1
+while [ -e "$plugin_log" ]; do
+	pass=$((pass + 1))
+	plugin_log="$EVIDENCE_DIR/${CELL}-plugin-log.retry$([ "$pass" -eq 2 ] || echo "$pass").txt"
+done
 ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
-	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$EVIDENCE_DIR/${CELL}-plugin-log.txt" || true
+	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$plugin_log" || true
 
 relay_journal
 

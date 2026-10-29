@@ -71,13 +71,21 @@ func b01(b bool) string {
 // judgeD3cAuto -- ipv6_mode=auto on an M=1 A=1 link whose DHCPv6 server
 // is stopped (plugin docs/reference.md, ipv6_mode): auto "falls back to
 // the advertised prefix after half the router-discovery window". So the
-// client solicits, nothing answers, and the prefix's address is formed;
-// fallbacks is the dhcpv6_auto_fallbacks delta, corroboration only (#23 row D3c).
+// one-shot client solicits, nothing answers, and the prefix's address is
+// formed with the last PIO's finite lifetimes. The persistent client adds
+// no Solicit transaction of its own (plugin #1369): a second transaction
+// ID is a second exchange, a retransmission reuses its ID (RFC 8415
+// section 15). fallbacks is the dhcpv6_auto_fallbacks delta,
+// corroboration only (#23 row D3c).
 func judgeD3cAuto(o d2Obs, fallbacks string) fOutcome {
+	var xids []string
 	sol := 0
 	for _, m := range o.Msgs {
 		if m.Type == "SOLICIT" {
 			sol++
+			if !slices.Contains(xids, m.XID) {
+				xids = append(xids, m.XID)
+			}
 		}
 		if m.Type == "REPLY" && HasAddr(m.NA) {
 			return fBlocked("a Reply granted an IA_NA although StopV6Server ran; the source's DHCPv6 server was not silent")
@@ -86,11 +94,20 @@ func judgeD3cAuto(o d2Obs, fallbacks string) fOutcome {
 	if sol == 0 {
 		return fFail("the RA says DHCPv6 (M=1) and the container sent no Solicit under ipv6_mode=auto")
 	}
+	if len(xids) != 1 {
+		return fFail("%d Solicit transactions (xids %s), want the one-shot's alone: the persistent client must not solicit again (plugin #1369)", len(xids), strings.Join(xids, " "))
+	}
 	out := slaacFormed(o)
 	if out.Result != PASS {
 		return out
 	}
-	return fOK("%d Solicits unanswered, then %s; dhcpv6_auto_fallbacks %s (recorded)", sol, out.Reason, fallbacks)
+	pio, _, _, _, _ := lastAutoPIO(o)
+	want, _ := eui64(pio.Prefix, o.MAC)
+	s, _ := findAddr6(o.Settled.Addrs, want)
+	if s.Valid > int64(pio.Valid) || s.Pref > int64(pio.Pref) {
+		return fFail("%s carries valid %d preferred %d, above the last PIO's %d/%d (plugin #1369)", want, s.Valid, s.Pref, pio.Valid, pio.Pref)
+	}
+	return fOK("%d Solicits unanswered (one transaction), then %s; dhcpv6_auto_fallbacks %s (recorded)", sol, out.Reason, fallbacks)
 }
 
 // judgeD3cFails is D3c's strict and dhcp legs (docs: ipv6_auto_strict
@@ -227,14 +244,17 @@ func d4First(before []RAMsg, startAt time.Time) (netip.Prefix, string, bool) {
 }
 
 // judgeD4bDrop -- the router stops advertising the second prefix: its
-// address "is removed" (plugin docs/reference.md:967, ipv6_mode) and,
-// from v2.2.3, the on-link route stays (docs/reference.md:1824-1828,
-// #1088). DESIGN-23d row D4 says the address stays until its valid
-// lifetime; the judge follows the docs and the host run decides
-// (#23).
-func judgeD4bDrop(after []RAMsg, addrs []addr6, routes string, first, second netip.Prefix, mac string, routeKept bool) fOutcome {
+// address stays while its valid lifetime runs and counts down (plugin
+// #1368, RFC 4862 section 5.5.3 e), and the on-link route stays (plugin
+// docs/reference.md:1824-1828, #1088). reads are the container's address
+// reads from the drop on, oldest first; the address may leave only when
+// the lifetime the last read that held it showed has run out (#23).
+func judgeD4bDrop(after []RAMsg, reads []d6Read, routes string, first, second netip.Prefix, mac string, routeKept bool) fOutcome {
 	if len(after) == 0 {
 		return fBlocked("the capture shows no RA after the second prefix was dropped, so nothing told the container")
+	}
+	if len(reads) == 0 {
+		return fBlocked("no address read after the second prefix was dropped")
 	}
 	for _, ra := range after {
 		for _, p := range ra.PIOs {
@@ -245,31 +265,84 @@ func judgeD4bDrop(after []RAMsg, addrs []addr6, routes string, first, second net
 	}
 	a1, _ := eui64(first, mac)
 	a2, _ := eui64(second, mac)
-	if _, ok := findAddr6(addrs, a2); ok {
-		return fFail("%s is still on the link after the router stopped advertising %s; %s", a2, second, d4bDocAddr)
-	}
-	if _, ok := findAddr6(addrs, a1); !ok {
+	last := reads[len(reads)-1]
+	if _, ok := findAddr6(last.Addrs, a1); !ok {
 		return fFail("%s left the link although %s is still advertised", a1, first)
+	}
+	var held string
+	if x, ok := findAddr6(last.Addrs, a2); ok {
+		if bad, ok := d4bCountsDown(reads, a2, x); !ok {
+			return bad
+		}
+		held = fmt.Sprintf("%s stayed with valid %d, counting down", a2, x.Valid)
+	} else {
+		var seen *addr6
+		var seenAt time.Time
+		for _, r := range reads {
+			if x, ok := findAddr6(r.Addrs, a2); ok {
+				seen, seenAt = &x, r.At
+			}
+		}
+		if seen == nil {
+			return fFail("%s was gone at the first read after the drop; the address stays until its valid lifetime runs out, it is not removed when the prefix ceases (%s)", a2, d4bDoc)
+		}
+		if ran := last.sampled().Sub(seenAt); seen.Valid == forever || seen.Valid > int64(ran/time.Second)+lftSlack {
+			return fFail("%s left the link with valid %d seconds still to run, %s after the read that showed it; it goes only at expiry (%s)", a2, seen.Valid, ran.Round(time.Second), d4bDoc)
+		}
+		held = fmt.Sprintf("%s left only as its valid lifetime ran out", a2)
 	}
 	if routeKept {
 		if _, ok := routeFor(routes, second); !ok {
 			return fFail("the on-link route for %s went with the prefix; %s", second, d4bDocRoute)
 		}
-		return fOK("%s removed after the drop, %s kept, the route for %s kept; %s; %s", a2, a1, second, d4bDocAddr, d4bDocRoute)
+		return fOK("%s, %s kept, the route for %s kept; %s; %s", held, a1, second, d4bDoc, d4bDocRoute)
 	}
-	return fOK("%s removed after the drop, %s kept (route not judged before v2.2.3); %s", a2, a1, d4bDocAddr)
+	return fOK("%s, %s kept (route not judged before v2.2.3); %s", held, a1, d4bDoc)
 }
 
-// The plugin doc lines judgeD4bDrop follows, named in its verdict reason
-// (#23).
+// d4bMinSpan is the least time between the first and last read for a
+// count-down to be seen: kernel lifetimes are whole seconds and an ssh
+// read is a few seconds wide (lab #102).
+const d4bMinSpan = 6 * time.Second
+
+// d4bCountsDown is true when a2's valid lifetime is finite and lower in
+// the last read than in the first, else the verdict that says why not.
+func d4bCountsDown(reads []d6Read, a2 netip.Addr, lastSeen addr6) (fOutcome, bool) {
+	if lastSeen.Valid <= 0 {
+		return fFail("%s is still on the link with valid lifetime %d (-1 is forever) after the prefix was withdrawn; %s", a2, lastSeen.Valid, d4bDoc), false
+	}
+	firstRead := reads[0]
+	x, ok := findAddr6(firstRead.Addrs, a2)
+	if !ok {
+		return fFail("%s was missing from the first read after the drop and back later; %s", a2, d4bDoc), false
+	}
+	if span := reads[len(reads)-1].At.Sub(firstRead.sampled()); span < d4bMinSpan {
+		return fBlocked("the address reads after the drop span %s, under %s; a count-down cannot be seen", span.Round(time.Second), d4bMinSpan), false
+	}
+	if lastSeen.Valid >= x.Valid {
+		return fFail("%s valid lifetime %d at the last read, %d at the first %s earlier: it does not count down; %s", a2, lastSeen.Valid, x.Valid, reads[len(reads)-1].At.Sub(firstRead.At).Round(time.Second), d4bDoc), false
+	}
+	return fOutcome{}, true
+}
+
+// The plugin statement judgeD4bDrop follows, named in its verdict reason
+// (plugin #1368), and the route doc line (#23).
 const (
-	d4bDocAddr  = `plugin docs/reference.md:967 (ipv6_mode): an address "whose prefix the router stops advertising, is removed"`
+	d4bDoc      = "plugin #1368: a withdrawn prefix's address keeps its valid lifetime and counts down"
 	d4bDocRoute = `plugin docs/reference.md:1824-1828 (#1088): "an advertisement that leaves a prefix out keeps its route"`
 )
 
+// d4bTwoHours is the valid lifetime a Prefix Information option with
+// valid lifetime 0 cuts an address to when more is left (RFC 4862 section
+// 5.5.3 e).
+const d4bTwoHours = 7200
+
 // judgeD4bExpired -- the second prefix advertised with valid lifetime 0:
-// "an RA with valid lifetime 0 removes" the route (#1088), and the
-// address goes with it (RFC 4862 section 5.5.3 e).
+// "an RA with valid lifetime 0 removes" the route (#1088). The address
+// follows RFC 4862 section 5.5.3 e (plugin #1368): the option "cuts what
+// is left to two hours when more is left and is otherwise ignored", so
+// the address is either gone or still there, finite, with at most two
+// hours left (lab #102).
 func judgeD4bExpired(after []RAMsg, addrs []addr6, routes string, second netip.Prefix, mac string) fOutcome {
 	seen := false
 	for _, ra := range after {
@@ -283,13 +356,17 @@ func judgeD4bExpired(after []RAMsg, addrs []addr6, routes string, second netip.P
 		return fBlocked("the capture shows no RA advertising %s with valid lifetime 0", second)
 	}
 	a2, _ := eui64(second, mac)
-	if _, ok := findAddr6(addrs, a2); ok {
-		return fFail("%s is still on the link after %s was advertised with valid lifetime 0", a2, second)
+	held := "address gone"
+	if x, ok := findAddr6(addrs, a2); ok {
+		if x.Valid == forever || x.Valid > d4bTwoHours {
+			return fFail("%s carries valid %d (-1 is forever) after %s was advertised with valid lifetime 0; the option cuts what is left to two hours (plugin #1368)", a2, x.Valid, second)
+		}
+		held = fmt.Sprintf("address kept with valid %d, within the two hours", x.Valid)
 	}
 	if line, ok := routeFor(routes, second); ok {
 		return fFail("the route %q is still in the container after %s was advertised with valid lifetime 0 (#1088)", line, second)
 	}
-	return fOK("%s advertised with valid lifetime 0: address and route gone", second)
+	return fOK("%s advertised with valid lifetime 0: %s, route gone", second, held)
 }
 
 // routeTypes is ip-route(8)'s TYPE keywords, which `ip -6 route show`
@@ -329,7 +406,9 @@ func routeFor(out string, p netip.Prefix) (string, bool) {
 // IA_PD in the Solicit and Request; a delegated prefix is routed as
 // "`unreachable <prefix> proto dhcp`" and listed in delegated_prefixes;
 // a server with none to give leaves the endpoint its address and no
-// route. busybox ip may print the protocol as its number, 16 (#23 row F6-prefix-delegation, RFC 8415 section 6.3).
+// route. The routes must come from iproute2: BusyBox ip (alpine:3.20,
+// v1.36.1) prints no protocol at all, so only the container's netns read
+// from the host can show proto dhcp (plugin #1370, RFC 8415 section 6.3).
 func judgeF6(o d1Obs, serverPD bool, pool netip.Prefix, routes string, h healthEndpoint, found bool) fOutcome {
 	d1, x := judgeD1(o)
 	if d1.Result != PASS {
@@ -381,7 +460,7 @@ func judgeF6(o d1Obs, serverPD bool, pool netip.Prefix, routes string, h healthE
 		return fFail("the source's DHCPv6 table holds no IA_PD %s for DUID %s", pd, x.DUID)
 	}
 	line, ok := routeFor(routes, pd)
-	if !ok || !strings.HasPrefix(line, "unreachable") || !(strings.Contains(line, "proto dhcp") || strings.Contains(line, "proto 16")) {
+	if !ok || !strings.HasPrefix(line, "unreachable") || !strings.Contains(line, "proto dhcp") {
 		return fFail("the container has no `unreachable %s proto dhcp` route (route %q)", pd, line)
 	}
 	if !found {

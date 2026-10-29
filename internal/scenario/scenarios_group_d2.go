@@ -127,6 +127,22 @@ func containerText(ctx context.Context, e Env, scenario, label, name, cmd string
 	return out, nil
 }
 
+// netnsText runs cmd with the host's iproute2 inside the container's
+// network namespace; BusyBox ip in the container cannot print a route's
+// protocol (plugin #1370, lab #102).
+func netnsText(ctx context.Context, e Env, scenario, label, name, cmd string, ev map[string]string) (string, error) {
+	out, err := e.Host.Run(ctx, fmt.Sprintf(`sudo nsenter -t "$(sudo docker inspect -f '{{.State.Pid}}' %s)" -n %s`, name, cmd))
+	if err != nil {
+		return "", fmt.Errorf("nsenter into %s: %s: %w", name, cmd, err)
+	}
+	p := evidencePath(e, scenario, label)
+	if err := os.WriteFile(p, []byte(out), 0o644); err != nil {
+		return "", err
+	}
+	ev[label] = p
+	return out, nil
+}
+
 func (r dRead) d2Obs() d2Obs {
 	return d2Obs{Msgs: r.msgs, RAs: r.ras, Leases: r.leases, MAC: r.mac, Start: r.start, Settled: r.settled, Inspect: r.inspect}
 }
@@ -463,7 +479,7 @@ func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, secon
 	}
 	a2, _ := eui64(second, r.mac)
 	tDrop := time.Now()
-	addrs, routes, ras, err := d4bAwait(ctx, e, cname, r, "drop", tDrop, func(as []addr6, _ string) bool {
+	reads, routes, ras, err := d4bAwait(ctx, e, cname, r, "drop", tDrop, func(as []addr6, _ string) bool {
 		_, on := findAddr6(as, a2)
 		return !on
 	}, ev)
@@ -474,7 +490,7 @@ func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, secon
 	if err != nil {
 		return blocked(NameD4b, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
-	o := judgeD4bDrop(ras, addrs, routes, first, second, r.mac, routeKept)
+	o := judgeD4bDrop(ras, reads, routes, first, second, r.mac, routeKept)
 	if o.Result != PASS {
 		return fFinish(NameD4b, e, o, d4, ev)
 	}
@@ -487,14 +503,14 @@ func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, secon
 		return blocked(NameD4b, e.Cell, e.Shape, fmt.Sprintf("could not advertise %s with valid lifetime 0: %v", second, err), e.GitSHA)
 	}
 	tExp := time.Now()
-	addrs, routes, ras, err = d4bAwait(ctx, e, cname, r, "expired", tExp, func(_ []addr6, rt string) bool {
+	reads, routes, ras, err = d4bAwait(ctx, e, cname, r, "expired", tExp, func(_ []addr6, rt string) bool {
 		_, on := routeFor(rt, second)
 		return !on && time.Since(tExp) > d4bRAWait
 	}, ev)
 	if err != nil {
 		return blocked(NameD4b, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}
-	x := judgeD4bExpired(ras, addrs, routes, second, r.mac)
+	x := judgeD4bExpired(ras, reads[len(reads)-1].Addrs, routes, second, r.mac)
 	if x.Result != PASS {
 		return fFinish(NameD4b, e, x, d4+"; "+o.Reason, ev)
 	}
@@ -502,15 +518,18 @@ func d4bWithdraw(ctx context.Context, e Env, cname string, r dRead, first, secon
 }
 
 // d4bAwait reads the container every 3 s until done or d4bPoll, then the
-// capture from `from` on (#23 row D4b).
-func d4bAwait(ctx context.Context, e Env, cname string, r dRead, step string, from time.Time, done func([]addr6, string) bool, ev map[string]string) ([]addr6, string, []RAMsg, error) {
-	var as []addr6
+// capture from `from` on; it returns every address read, oldest first, so
+// a count-down can be judged (#23 row D4b, lab #102).
+func d4bAwait(ctx context.Context, e Env, cname string, r dRead, step string, from time.Time, done func([]addr6, string) bool, ev map[string]string) ([]d6Read, string, []RAMsg, error) {
+	var reads []d6Read
 	var routes string
-	var err error
 	for end := from.Add(d4bPoll); ; {
-		if as, err = containerAddrs6(ctx, e.Host, cname); err != nil {
+		at := labNow()
+		as, err := containerAddrs6(ctx, e.Host, cname)
+		if err != nil {
 			return nil, "", nil, err
 		}
+		reads = append(reads, d6Read{At: at, Got: labNow(), Addrs: as})
 		if routes, err = e.Host.Run(ctx, fmt.Sprintf("sudo docker exec %s ip -6 route show", cname)); err != nil {
 			return nil, "", nil, fmt.Errorf("docker exec %s ip -6 route: %w", cname, err)
 		}
@@ -521,18 +540,23 @@ func d4bAwait(ctx context.Context, e Env, cname string, r dRead, step string, fr
 			return nil, "", nil, err
 		}
 	}
-	p := evidencePath(e, NameD4b, "addrs-"+step)
-	if err := writeAddrs6(p, as, strings.TrimSpace(routes)); err != nil {
-		return nil, "", nil, err
+	for _, w := range []struct {
+		label, routes string
+		rd            d6Read
+	}{{"addrs-" + step + "-first", "", reads[0]}, {"addrs-" + step, strings.TrimSpace(routes), reads[len(reads)-1]}} {
+		p := evidencePath(e, NameD4b, w.label)
+		if err := writeAddrs6(p, w.rd.Addrs, w.routes); err != nil {
+			return nil, "", nil, err
+		}
+		ev[w.label] = p
 	}
-	ev["addrs-"+step] = p
 	ll, _ := linkLocal(r.start.Addrs)
 	all := func([]DHCP6Msg, []RAMsg) bool { return true }
 	_, ras, err := dCapture(ctx, e, NameD4b, "capture-v6-"+step, v6Ident(r.mac, ll), from, all, ev)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("could not read the capture: %w", err)
 	}
-	return as, routes, ras, nil
+	return reads, routes, ras, nil
 }
 
 // runF6 -- prefix delegation, ipv6_mode=dhcp with ipv6_pd=64 (v2.5.0,
@@ -564,7 +588,7 @@ func runF6(ctx context.Context, e Env) (v Verdict) {
 		return bad
 	}
 	o := r.d1Obs(ctx, e)
-	routes, err := containerText(ctx, e, NameF6, "routes-v6", containerName(e, NameF6), "ip -6 route show", ev)
+	routes, err := netnsText(ctx, e, NameF6, "routes-v6", containerName(e, NameF6), "ip -6 route show", ev)
 	if err != nil {
 		return blocked(NameF6, e.Cell, e.Shape, err.Error(), e.GitSHA)
 	}

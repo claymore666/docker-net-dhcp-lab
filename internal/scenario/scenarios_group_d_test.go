@@ -113,7 +113,7 @@ func newD6Fix(t *testing.T, shape Shape, tag string, caps ...sourceadapter.Capab
 	if tag != "" {
 		e.PluginTag = tag
 	}
-	c := &d6Cap{msgs: goodD1().Msgs, ras: goodD1().RAs}
+	c := &d6Cap{msgs: append(goodD1().Msgs, confirmPair(1)...), ras: goodD1().RAs}
 	e.Capture = c
 	return &d6Fix{h: h, src: src, cap: c, e: e}
 }
@@ -419,5 +419,19 @@ func TestRunD2OnIpvlanWritesTheRefusalAsEvidence(t *testing.T) {
 	}
 	if !said {
 		t.Errorf("no evidence file says the create succeeded: %v", v.Evidence)
+	}
+}
+
+// A capture with no packet from the persistent client is an attach
+// failure on the D1 rows, not a PASS on lifetimes alone (plugin #1369).
+func TestRunD1WithoutAPersistentClientPacketIsAnAttachFailure(t *testing.T) {
+	for _, run := range []func(context.Context, Env) Verdict{runD1, runD1b} {
+		f := newD6Fix(t, ShapeMacvlan, "")
+		f.cap.msgs = goodD1().Msgs
+		v := run(context.Background(), f.e)
+		needResult(t, v, FAIL)
+		if !strings.Contains(v.Reason, "attach failure") {
+			t.Errorf("reason %q", v.Reason)
+		}
 	}
 }

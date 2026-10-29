@@ -393,9 +393,9 @@ func TestDeclaredCapabilities(t *testing.T) {
 		got  []Capability
 		want []Capability
 	}{
-		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents)},
-		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents)},
-		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapServerEvents)},
+		"kea":      {(&KeaAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents, CapVLANPool)},
+		"isc-dhcp": {(&ISCDHCPAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop, CapServerEvents, CapVLANPool)},
+		"dnsmasq":  {(&DnsmasqAdapter{}).Capabilities(), append(append([]Capability{}, base...), CapDNSRegistration, CapVendorClassPool, CapOptionChange, CapImpair, CapUserClassPool, CapOption108, CapRapidCommit4, CapForceRenewNonce, CapSquatter, CapRogueServer, CapNarrowPool, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapServerEvents, CapVLANPool)},
 	}
 	for name, c := range cases {
 		if len(c.got) != len(c.want) {

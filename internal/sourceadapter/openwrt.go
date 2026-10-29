@@ -36,6 +36,7 @@ var openwrtNAReasons = map[Capability]string{
 	CapRogueServer:     openwrtNAReason,
 	CapForceRenewNonce: openwrtNAReason,
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 	CapV6:              openwrtV6Reason,
 }
 
@@ -108,7 +109,7 @@ func (a *OpenwrtAdapter) Start(ctx context.Context) error {
 }
 
 func (a *OpenwrtAdapter) Reachable(ctx context.Context, addr string) error {
-	return reachable(ctx, a.Runner, addr)
+	return reachableAs(ctx, a.Runner, addr, "sudo ")
 }
 
 func (a *OpenwrtAdapter) ResetLeases(ctx context.Context) error {

@@ -33,10 +33,32 @@ runcmd:
   # with no frontend (issue #2, measured live 2026-09-25); same guard
   # here in case any future isc-dhcp-server package version adds one.
   - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server radvd dnsmasq-base iputils-arping
+  # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
+  # -o vlan=100 makes the matching eth1.100 on the docker host.
+  - |
+    cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
+    network:
+      version: 2
+      vlans:
+        eth1.100:
+          id: 100
+          link: eth1
+          addresses: [10.200.152.3/24]
+    NETEOF
+  - chmod 600 /etc/netplan/60-lab-vlan.yaml
+  - netplan apply
   - mkdir -p /root/lab-stock-config
   - cp /etc/dhcp/dhcpd.conf /root/lab-stock-config/dhcpd.conf.stock
   - cp /etc/default/isc-dhcp-server /root/lab-stock-config/isc-dhcp-server.stock
   - touch /etc/dhcp/lab-reservations.conf /var/lib/dhcp/dhcpd6.leases
+  # E3b (#15): the VLAN 100 subnet lives in its own file so the ISC
+  # adapter's subnet regexes still see exactly one subnet in dhcpd.conf.
+  - |
+    cat >/etc/dhcp/lab-vlan.conf <<'VLANEOF'
+    subnet 10.200.152.0 netmask 255.255.255.0 {
+      range 10.200.152.100 10.200.152.200;
+    }
+    VLANEOF
   - |
     cat >/etc/dhcp/dhcpd.conf <<'DHCPDEOF'
     default-lease-time 600;
@@ -73,6 +95,7 @@ runcmd:
     }
     include "/etc/dhcp/lab-reservations.conf";
     DHCPDEOF
+  - echo 'include "/etc/dhcp/lab-vlan.conf";' >>/etc/dhcp/dhcpd.conf
   # DHCPv6 (#23 group D). The two "#lab-" lines are the anchors the rapid commit
   # and temporary address features uncomment; the init script runs -4 and -6 together.
   - |
@@ -106,7 +129,7 @@ runcmd:
     RADVDEOF
   - |
     cat >/etc/default/isc-dhcp-server <<'DHCPDEOF'
-    INTERFACESv4="eth1"
+    INTERFACESv4="eth1 eth1.100"
     INTERFACESv6="eth1"
     DHCPDEOF
   # The primary alone serves v6: two unpaired DHCPv6 servers would share # lab-fo

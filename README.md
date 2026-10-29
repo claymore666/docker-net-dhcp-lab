@@ -8,15 +8,18 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
-**[1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)**
-in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
-Most BLOCKED rows come from lab infrastructure under load (test hosts
-unreachable over ssh), confirmed by rerunning those cells alone. Most FAIL
-rows are lab defects (the verdict writer and source adapters), fixed in
-this release. The plugin finding is the CreateEndpoint client timeout
-described on the results page.
+**[1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md)**
+in the newest host run: plugin v2.6.0-rc2 on the lab as it stood before the
+v0.3.0 fixes (lab 98899a0), fourteen cells, thirteen of them with verdicts.
+It is not a run of this release: the v0.3.0 changes have no host run yet,
+and the first is planned for v0.4.0 (#104). Many FAIL and BLOCKED rows are
+lab defects, listed on the page, several of them fixed since. The plugin
+findings are on the page too.
 
-Earlier run, for history: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
+Earlier run: [1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)
+in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
+
+Oldest run: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
 docker-net-dhcp-lab v0.1.0 over 3 DHCP servers, 2 Docker hosts, 5 network
 shapes, 17 scenarios per shape.
 
@@ -121,7 +124,7 @@ files carry these IDs.
 | B | router-side features: reservations, DNS registration, requested address, vendor class, option changes on renewal, lease release, ipvlan identity | B1 to B8 | v0.2.0, #23 |
 | C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12b | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
 | D | IPv6: DHCPv6, SLAAC, managed flag, two prefixes | D1 to D4 | v0.2.0, #23 |
-| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 | v0.3.0, #15 |
+| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 (E1 to E3 in v0.3.0; E4 and E5 planned) | v0.3.0 for E1 to E3, v0.4.0 for E4 and E5, #15 |
 | F | server-side support for the plugin's v2.4.0 client features | one per feature, numbered in #20 | v0.2.0, #20 (#21 FORCERENEW sender) |
 
 Group A runs today:
@@ -171,11 +174,11 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 | C2 | source down past T1 | the source stops after the bind and returns between T1 and T2; the client tried to renew while it was down and keeps its address |
 | C3 | source down past expiry | the source stays down past the lease's expiry; within 120 s of its return the container carries an address the source's table shows for it |
 | C4 | restart without lease file | the source restarts with an empty lease file; 135 s after the bind it holds exactly one lease for the container, on the address the container carries |
-| C5 | failover, granting peer stopped | on the `kea-ha` and `isc-failover` cells: the peer that granted the lease stops 10 s after the bind; the client's renewals to it go unanswered, its rebind after T2 is answered by the other peer, and the container keeps its address throughout (T1 and T2 from the lease time the ACK itself carries) |
+| C5 | failover, granting peer stopped | on the `kea-ha` and `isc-failover` cells: the peer that granted the lease stops 10 s after the bind; a renewal unicast to it goes unanswered and the rebind after T2 is answered by the other peer, or the client renews with the other peer and that peer ACKs it (the verdict names the partner); the container keeps its address throughout (T1 and T2 from the lease time the ACK itself carries) |
 | C5b | failover, primary down at create | with the primary stopped and the partner taken over, a new container is leased by the partner within C1's bound, and the partner's table holds it |
 | C5c | failover, primary returns | C5b's container is kept while the primary returns; the primary's table holds the outage lease, the container keeps its address through its next renewal, and a new container is leased |
 | C5d | failover, no address given twice | 18 containers (10 with both peers up, 4 with the primary down, 4 after its return) carry 18 distinct addresses; no peer's table and no pair of ACKs gives one address to two clients at once |
-| C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it |
+| C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it (N/A on ipvlan: the plugin refuses `conflict_check=wait` there, because an ipvlan child does not receive the ARP replies to its own probes, RFC 5227 section 2.1.1) |
 | C6b | late squatter | with `conflict_check=async`, a host takes the container's address and announces it; within 30 s the client declines it and moves to an address the source leases to it |
 | C7 | rogue server | a second DHCP server answers on the segment; a network with `dhcp_deny_servers` and one with `dhcp_servers` both lease from the real source, and the second server's lease file stays empty for them |
 | C8 | pool exhausted | the pool is cut to two addresses, both held; a third container fails with no endpoint or link left, gets no lease once the pool is back, and a fourth container is leased |
@@ -191,18 +194,18 @@ Group D runs today (IPv6; each row creates its own network with the plugin's `ip
 
 | ID | Scenario | What it does |
 |---|---|---|
-| D1 | DHCPv6 address | with `ipv6_mode=dhcp` the container leases an address over DHCPv6 (IA_NA); it sits on the link as a /128 with the server's lifetimes counting down, the source's table holds it for the container's DUID, docker inspect shows it, the default route goes via the advertising router, and it answers a ping from the source |
+| D1 | DHCPv6 address | with `ipv6_mode=dhcp` the container leases an address over DHCPv6 (IA_NA); it sits on the link as a /128 with the server's finite lifetimes (read once the persistent client has installed them, plugin #1369), the source's table holds it for the container's DUID, docker inspect shows it, the default route goes via the advertising router, and it answers a ping from the source |
 | D1b | DHCPv6 address, ipv6=true | the same checks with the older `ipv6=true` option instead of `ipv6_mode` |
 | D1c | DHCPv6 mode without router advertisements | the source stops advertising; with `ipv6_mode=dhcp` the container still starts, and carries no IPv6 address unless the source's DHCPv6 server, which keeps running, answered it (recorded) |
 | D2 | SLAAC address | with `ipv6_mode=slaac` the container forms its address from the advertised prefix and its own MAC (modified EUI-64), sends no DHCPv6 request and gets no lease; on ipvlan the network create must be refused |
 | D2b | SLAAC mode without router advertisements | the source stops advertising; with `ipv6_mode=slaac` the container must fail to start (N/A on ipvlan, which refuses the mode) |
 | D3a | auto mode, managed flag only | the source advertises the managed flag and no autonomous prefix; with `ipv6_mode=auto` the container must lease over DHCPv6 and pass the D1 checks. The flags are read from the captured advertisement, never from the source's config |
 | D3b | auto mode, autonomous prefix only | the source advertises an autonomous prefix and no managed flag; with `ipv6_mode=auto` the container must form its address from the prefix as in D2 and send no DHCPv6 request |
-| D3c | auto mode, DHCPv6 server silent | the source's DHCPv6 server is stopped while both flags stay advertised; with `ipv6_mode=auto` the container must fall back to the prefix (`/Plugin.Health` `dhcpv6_auto_fallbacks` corroborates), then with `ipv6_auto_strict=true` and with `ipv6_mode=dhcp` it must fail to start. N/A on dnsmasq, whose one daemon serves both |
+| D3c | auto mode, DHCPv6 server silent | the source's DHCPv6 server is stopped while both flags stay advertised; with `ipv6_mode=auto` the container must fall back to the prefix with one Solicit transaction and finite lifetimes no longer than the last advertisement's (`/Plugin.Health` `dhcpv6_auto_fallbacks` corroborates), then with `ipv6_auto_strict=true` and with `ipv6_mode=dhcp` it must fail to start. N/A on dnsmasq, whose one daemon serves both |
 | D3d | managed flag turned on at runtime | the container starts on an autonomous prefix, then the source turns the managed flag on; what the container does is recorded, not judged, because the plugin documents no behaviour for it |
 | D4 | two advertised prefixes | the source advertises a second autonomous prefix; with `ipv6_mode=slaac` the container must form one address in each, and docker inspect must show the one in the first prefix of the advertisement as captured |
 | D4m | two prefixes, ipv6_main_prefix | as D4 with `ipv6_main_prefix` naming the second prefix; docker inspect must show the address in that prefix |
-| D4b | advertised prefix withdrawn | as D4, then the source stops advertising the second prefix: its address must go and, from plugin v2.2.3, its on-link route must stay; then the source advertises it with valid lifetime 0 and the route must go too. dnsmasq cannot send the second step, so there the first is judged alone |
+| D4b | advertised prefix withdrawn | as D4, then the source stops advertising the second prefix: its address must stay while its valid lifetime counts down (plugin #1368) and, from plugin v2.2.3, its on-link route must stay; then the source advertises it with valid lifetime 0 and the route must go too; the address is either gone or kept with at most two hours left, since that option cuts what is left to two hours and is otherwise ignored (plugin #1368). dnsmasq cannot send the second step, so there the first is judged alone |
 
 Every source serves the same IPv6 baseline on the segment: router advertisements with the managed and autonomous flags set (radvd beside Kea and ISC, dnsmasq's own), and a DHCPv6 range in the lab's private prefix. A source VM built before group D must be rebuilt to carry it. The D3 and D4 rows change the source's advertisement for the row (managed and autonomous flags, a second prefix, a NAT64 prefix) and put it back afterwards, as group F does with the source's settings. On `bridge-ipam` and `macvlan-ipam`, which refuse a second network, D1, D1b and D2 recreate the cell's main network with the IPv6 option and rebuild it afterwards (BLOCKED if the rebuild fails); the other group D rows report N/A there, as they do on a plugin tag before v2.2.0, the release that added `ipv6_mode`. A row that still sees a router advertisement after the source stopped sending them is BLOCKED, not judged.
 
@@ -214,15 +217,26 @@ Group F runs today (the plugin's client options, judged by the bytes the contain
 | F2a | IPv6-only preferred, not asked for | the source has option 108 ("this network is IPv6 only, IPv4 is optional") set; the client never asks for it, so it never appears in its request list and the container keeps its IPv4 lease |
 | F2b | IPv6-only preferred, sent unasked | the source sends option 108 to one client that did not ask; the client must ignore it and finish with an IPv4 lease, and a second client started meanwhile must not be sent it |
 | F3 | rapid commit, IPv4 | with `rapid_commit` the client asks for a two-message lease (option 80); dnsmasq grants it, Pi-hole's embedded dnsmasq grants it too (v0.2.0 run: PASS on bridge and macvlan, FAIL on ipvlan, N/A on bridge-ipam), Kea and ISC answer as usual and the normal four messages follow |
-| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source that serves DHCPv6 grants it (not udhcpd or Pi-hole, whose cells are DHCPv4 only), so the exchange is a Solicit and a Reply, then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
+| F4 | rapid commit, IPv6 | with `rapid_commit` and `ipv6_mode=dhcp` the client asks for a two-message DHCPv6 lease (option 14); every source that serves DHCPv6 grants it (not udhcpd or Pi-hole, whose cells are DHCPv4 only), so the exchange is a Solicit and a Reply, then at most one Confirm and its Reply from the persistent client (plugin #1371), then the D1 checks. Before v2.4.0 the client must not ask and the four messages follow |
 | F5 | temporary address | with `ipv6_temporary` the client also asks for a temporary address (IA_TA); ISC and dnsmasq grant one, which must be on the link beside the stable address, in the source's table and on `/Plugin.Health`, never in docker inspect. Kea grants none, so there the container must run as without the option |
-| F6 | prefix delegation | with `ipv6_mode=dhcp` and `ipv6_pd=64` the client also asks for a delegated prefix (IA_PD); Kea and ISC delegate one, which must be in the Reply, in the source's table, as an `unreachable` route in the container and on `/Plugin.Health` `delegated_prefixes`. dnsmasq delegates none, so there the container must run with no delegated prefix. On ipvlan the network create must be refused. From plugin v2.5.0 |
+| F6 | prefix delegation | with `ipv6_mode=dhcp` and `ipv6_pd=64` the client also asks for a delegated prefix (IA_PD); Kea and ISC delegate one, which must be in the Reply, in the source's table, as an `unreachable` route with `proto dhcp` in the container (read through `nsenter`, BusyBox `ip` prints no protocol; plugin #1370) and on `/Plugin.Health` `delegated_prefixes`. dnsmasq delegates none, so there the container must run with no delegated prefix. On ipvlan the network create must be refused. From plugin v2.5.0 |
 | F7 | NAT64 prefix | with `ipv6_mode=slaac` a first container reads its routes and resolv.conf, then the source's advertisement adds a NAT64 prefix (RFC 8781) and a second container starts. The second container's bind is a lease event, so its `/Plugin.Health` `nat64_prefixes` must equal the prefix. The first container's field may still be empty: an advertisement whose only news is a NAT64 prefix is not a lease event (plugin [#1028](https://github.com/claymore666/docker-net-dhcp/issues/1028)). Nothing is installed in either container. dnsmasq's advertisement cannot carry one, so there the field must stay absent. N/A on ipvlan. From plugin v2.4.0 |
 | F8 | FORCERENEW, signed and unsigned | FORCERENEW is a server telling a client "renew your lease now", trusted only when signed with a secret the server put in the lease (RFC 6704); the lab sends the container one unsigned, one wrongly signed and one correctly signed: it must ignore the first two and renew on the third, keeping its address. Before v2.4.0 the client must ignore the unsigned one |
 
 The user class, forced 108, rapid commit and temporary address rows run on their own network, removed afterwards, and report N/A on `bridge-ipam` and `macvlan-ipam` for the same reason as group B. The user class, rapid commit and temporary address rows read the plugin tag in `lab.yaml`: a release before v2.4.0 must send none of these options, and a tag that is not a release leaves them BLOCKED. The two IPv6 rows also need v2.2.0 and are N/A before it. A source VM needs no rebuild for group F; the settings are written at run time.
 
 The dnsmasq PASS for F6-prefix-delegation and F7-pref64 is a negative (no prefix delegated, no NAT64 prefix reported) and means something only next to the Kea or ISC PASS of the same row in the same matrix: a client that ignores delegation or NAT64 entirely would also pass on dnsmasq.
+
+Group E runs today (the plugin's own records, checked against what the source logged itself; E1 and E2 on Kea, ISC and dnsmasq only, every other source reports N/A for them; a source whose journal is switched off is BLOCKED, not passed. E3a needs no server input and runs on every source; E3b runs on Kea, ISC and dnsmasq, whose templates carry a VLAN 100 pool on the source's own `eth1.100`, and is N/A for the appliances, the failover and HA pairs and the relay cell):
+
+| ID | Scenario | What it does |
+|---|---|---|
+| E1 | audit ledger | with `audit_log` on, one container gets a lease on a shortened lease time, outlives its renewal time and is stopped. The plugin's ledger must hold exactly one bound entry and the renewals, in the order the source logged its own acknowledgements, matched by MAC address and IP and never by clock; no release-like entry may appear and no decline may reach the source |
+| E2 | metrics against the source | the same run, reading the plugin's counters before and after. Leases obtained, renewed and released must move by exactly the number of acknowledgements and releases the source logged, no timeout, unanswered request, refusal or lease change may count, and the health view and the metrics view must agree |
+| E3a | host link names | bridge: the host-side link of a container is `dh-` plus the first 12 characters of its endpoint ID, on the network's bridge, and nothing is left after it stops. A second network with `host_ifname=container_name` renames it on a kernel from 6.2 (the old name stays as an altname, `host_ifnames_applied` moves by one); on an older kernel the rename fails, the `dh-` name stays and `host_ifname_failures` moves by one, which passes. The kernel is read on the docker host. macvlan and ipvlan: no host-side link is named, and `host_ifname` is refused with `host_ifname cannot be set in mode=<mode>` |
+| E3b | VLAN parent | macvlan and ipvlan with `-o vlan=100`: the plugin makes `eth1.100`, an 802.1Q VLAN 100 link on `eth1` with its own alias, the container leases from the VLAN pool the source serves on its own `eth1.100` (an address from the untagged pool fails), the observer's tagged capture shows the reply, and the link is gone when the network is. Two precondition links, `vlan100` and a dummy `eth1.100`, each make the create fail with the documented text, and the dummy must still exist afterwards. A segment bridge with `vlan_filtering` on makes the row BLOCKED. Bridge shapes are N/A |
+
+The ledger rows are read from the plugin's state directory on the docker host. A host where that directory is not the plugin's default, a missing ledger, a suppressed source journal, another endpoint alive on the plugin, or a plugin restart during the run is BLOCKED with the reason. Both scenarios need one address each and report N/A on `bridge-ipam` and `macvlan-ipam`, which cannot carry the extra network.
 
 ## Reading a result
 
@@ -277,27 +291,33 @@ scripts/down-cell.sh kea <work-dir>
 
 | Source | Cell | Host run |
 |---|---|---|
-| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
-| udhcpd | `udhcpd` | v0.2.0 results page |
-| Pi-hole | `pihole` | v0.2.0 results page |
-| MikroTik CHR | `chr` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
-| OpenWrt 25.12 | `openwrt` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
-| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages |
-| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages |
-| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages |
-| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only) |
-| Kea behind a relay | `kea-relay` | run on 2026-10-11, no verdicts: it stopped at its relay probe (no relayed ACK reached the client observer, a lab error, so no shape ran), see the v0.2.0 results page |
-| A physical Fritz.Box (v0.3.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
+| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| udhcpd | `udhcpd` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| Pi-hole | `pihole` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes (macvlan shape only: 29 FAIL, no PASS; the other shapes stopped on lab-side faults, a firewall-rule check, an image pull and the FTL restart limit, fixed in v0.3.0 (#93) and not re-run) |
+| MikroTik CHR | `chr` | no verdicts in the v0.3.0 page's run (2026-10-13): the base image could not be built, a lab defect (#92) fixed in v0.3.0 and not re-run; see the [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| OpenWrt 25.12 | `openwrt` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: 117 FAIL, 37 PASS, mostly the lab's own source probe ("ping: permission denied"); the probe was fixed in v0.3.0 (#98) and not re-run |
+| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only); newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| Kea behind a relay | `kea-relay` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: no PASS. The relay VM had no `sysctl`, so its rows read BLOCKED (#91, fixed in v0.3.0, not re-run); the relay probe itself passed. The 2026-10-11 run stopped at the probe, see the v0.2.0 results page |
+| Kea failover pair (hot standby) | `kea-ha` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| ISC dhcpd failover pair | `isc-failover` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes; C5 FAIL on all five shapes was the judge, fixed in v0.3.0 (#100) and not re-run |
+| Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built; its adapter does not exist yet |
+| A physical Fritz.Box (v0.4.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
 
-Work for v0.3.0 is on `dev` and has no host run yet, so none of it
-appears on a results page:
+Work for v0.3.0 and v0.4.0 is on `dev` and has no host run yet, so none of
+it appears on a results page:
 
-- **Fritz.Box cell** (#13): the `fritzbox` cell and its schema are in
+- **Fritz.Box cell** (#13, v0.4.0): the `fritzbox` cell and its schema are in
   `lab.yaml`; the adapter is a placeholder that reads nothing.
-- **Windows Server 2025 image** (#14): `scripts/build-windows-image.sh`
-  builds the evaluation image a Windows DHCP cell would boot; no cell uses it yet.
-- **Server events** (#15): Kea, ISC dhcpd and dnsmasq can list the DHCP
-  messages they logged; no scenario reads them yet.
+- **Windows Server 2025 image** (#14, v0.4.0): `scripts/build-windows-image.sh`
+  builds the evaluation image the `windows` cell boots. The cell is in
+  `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
+  first host build are still to come, and `labctl` refuses the cell until then.
+- **Server events** (#15): Kea, ISC dhcpd and dnsmasq list the DHCP
+  messages they logged, and E1 and E2 judge the plugin's ledger and metrics
+  against them (group E above). E3a and E3b need no server events.
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
@@ -395,7 +415,8 @@ later calls to the same guest try once each until one succeeds. Starts are space
 `--stagger` seconds apart (default 60, `0` disables) so that the guests do
 not all boot, install the plugin and open ssh at the same moment. A cell
 that fails does not stop the others, is torn down with `down-cell.sh` as
-soon as it exits, and the exit code is 1 if any cell's was not 0.
+soon as it exits, and the exit code is 1 if any cell's was not 0, except
+`skipped-image` (below), which is not a failure.
 Before the first start it resolves every cell and refuses if two share a
 name, VM name, bridge, management address, observer container, observer
 veth or directory, or if any of those VMs or containers already exists on
@@ -403,10 +424,16 @@ the host; `--check` prints that table and stops there. Before each start it
 wants 15 GiB free under the root (`LAB_MIN_FREE_GIB`), waits up to ten
 minutes for it, and otherwise marks the cell `skipped-disk`; it also looks
 again for that cell's VMs and observer and marks the cell `skipped-exists`
-if they have appeared meanwhile. Before each cell start, and before each
-shape inside a cell, it waits while the one-minute load average is at or
-above half the vCPUs, up to `--load-wait` seconds (default 900, `0` disables;
-a cell that waited the bound out still starts) and logs each wait. The cells
+if they have appeared meanwhile. A cell whose base image is a `built` one
+(the Windows image, or OpenWrt's) that is not in the image cache
+(`/srv/lab/images/<name>.qcow2`, or `LAB_IMAGE_CACHE`) is marked
+`skipped-image` before anything else: it never starts, the log says which
+image to build, and it leaves `evidence/<cell>/image-not-built.json`
+(`cell`, `reason`, `detail`, `date`) so `labctl matrix` shows the cell as one
+BLOCKED column, "image not built". `--check` names such cells too. Before
+each cell start, and before each shape inside a cell, it waits while the
+one-minute load average is at or above half the vCPUs, up to `--load-wait`
+seconds (default 900, `0` disables; a cell that waited the bound out still starts) and logs each wait. The cells
 start longest first, by the seconds in `--durations FILE` (default
 `<root>/durations.tsv` if it exists; every run updates that file with the
 cells that finished 0, and cells it does not know start last, `--check`
@@ -414,7 +441,13 @@ prints the order). After all cells finish, a cell with a verdict whose
 reason carries `CreateEndpoint` and `Client.Timeout` (the load signature)
 gets one more run, two cells at a time: those verdicts are moved to
 `<evidence>/retried/`, the log lists them, and the second result is final
-(`--no-retry` skips the pass). On the two IPAM shapes `labctl run` writes the
+(`--no-retry` skips the pass). The retry pass keeps the first pass's plugin
+journal and packet capture beside its own (#95). When a shape aborts before
+its scenarios ran, the script has `labctl` write a BLOCKED row, with the abort
+reason, for every scenario the shape never reached (#101). At the first
+"device or resource busy" refusal on a parent NIC, the lab lists the links of
+every network namespace on the docker host in `<cell>-parent-busy-links.txt`
+in the cell's evidence (#97). On the two IPAM shapes `labctl run` writes the
 N/A verdicts the shape alone decides without running the scenario. INT or TERM
 stops every running cell and tears it down with `down-cell.sh`. Two
 `run-cells.sh` started within the same minutes on overlapping cells are only
@@ -443,7 +476,11 @@ timestamp: 2026-01-01T00:00:00Z
 evidence.lease_after: <path>
 ```
 
-`result` is `PASS`, `FAIL` or `N/A`. A `PASS` always carries at least
+A free-text value is written on one line: runs of line breaks and tabs become a
+single space, and `labctl` joins a continuation line of an older file to the
+value before it (#94).
+
+`result` is `PASS`, `FAIL`, `N/A` or `BLOCKED`. A `PASS` always carries at least
 one `evidence.<label>: <path>` line pointing at a real, non-empty file
 in the bundle; an `N/A` carries none, only a `reason`. The results page
 shows each scenario by its plain name.
@@ -459,10 +496,15 @@ relative to `--root` so the same page still resolves once `--root` is a
 packed bundle's own extracted directory, and refused outright if
 `--root` is not an ancestor of a bundle, so no link leaves it. A verdict `labctl matrix` cannot find for a
 scenario x column prints `(missing)`; it is never left out of the
-table. `--asset` names the release asset the page's relative links live
+table. A shape that aborted early writes BLOCKED rows (#101), so `(missing)`
+now means no verdict file at all, as in the rc2 run, which predates that change. `--asset` names the release asset the page's relative links live
 in, printed once in the header; it is optional, and the header is
 unchanged without it. The plain-word names live in one place,
 `internal/matrix/names.go`.
+
+Every Kea, ISC dhcpd, dnsmasq and udhcpd cell, single or pair, writes a
+`<peer> package <name>:` line per peer in `versions.txt`, with the server
+package version (#99).
 
 The relay cell's `versions.txt` carries a `relay isc-dhcp-relay:` line with the
 package version. C12 and C12b results hold for that relay version only; read it there

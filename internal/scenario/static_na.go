@@ -26,6 +26,13 @@ var ipamStaticNA = map[string]string{
 	NameF7: optionNetworkWhat, NameF8: optionNetworkWhat,
 }
 
+// shapeStaticNA lists the scenarios whose first act is a shape N/A other
+// than the ipam one, each with the function the scenario body calls. The
+// set is read off the scenario bodies by TestShapeStaticNATableMatchesTheScenarios.
+var shapeStaticNA = map[string]func(Env) (Verdict, bool){
+	NameC6: c6IpvlanNA,
+}
+
 // StaticNA returns the verdict RunOne would produce for s, when the shape
 // alone decides it and nothing RunOne checks first can change it: the
 // source declares what s needs (else the capability N/A keeps its own
@@ -35,8 +42,9 @@ var ipamStaticNA = map[string]string{
 // false for every other scenario, whose path stays as it was. e needs
 // Cell, Shape, GitSHA, Source and HostInfo.
 func StaticNA(s Scenario, e Env) (Verdict, bool) {
-	network, ok := ipamStaticNA[s.Name]
-	if !ok {
+	network, ipam := ipamStaticNA[s.Name]
+	shapeNA, shape := shapeStaticNA[s.Name]
+	if !ipam && !shape {
 		return Verdict{}, false
 	}
 	if ok, _ := Applicable(s, e.Source); !ok {
@@ -45,7 +53,14 @@ func StaticNA(s Scenario, e Env) (Verdict, bool) {
 	if sr, ok := e.Source.(sourceadapter.ShapeNAReasoner); ok && sr.NAShapeReason(string(e.Shape), s.Name) != "" {
 		return Verdict{}, false
 	}
-	v, ok := ipamNA(s.Name, e, network)
+	var v Verdict
+	var ok bool
+	if ipam {
+		v, ok = ipamNA(s.Name, e, network)
+	}
+	if !ok && shape {
+		v, ok = shapeNA(e)
+	}
 	if !ok {
 		return Verdict{}, false
 	}

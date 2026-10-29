@@ -42,8 +42,34 @@ var (
 // parentChildren reads `ip -d -o link show` output and returns the
 // macvlan, ipvlan and macvtap links whose parent is the named NIC.
 func parentChildren(out, parent string) []ParentChild {
+	return childrenWithPrefix(out, "@"+parent+":")
+}
+
+// parentIndex is the ifindex of the named link in the host's listing.
+func parentIndex(out, parent string) string {
+	m := regexp.MustCompile(`(?m)^(\d+):\s+` + regexp.QuoteMeta(parent) + `[@:]`).FindStringSubmatch(out)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// childrenInNamespace returns the links of another namespace whose lower
+// device is the parent: there ip prints the lower device as @if<ifindex>,
+// the name not being visible (#97).
+func childrenInNamespace(ns NamespaceLinks, idx string) []ParentChild {
+	if idx == "" || ns.Err != nil {
+		return nil
+	}
+	kids := childrenWithPrefix(ns.Links, "@if"+idx+":")
+	for i := range kids {
+		kids[i].Owner = "namespace " + ns.Name
+	}
+	return kids
+}
+
+func childrenWithPrefix(out, prefix string) []ParentChild {
 	var kids []ParentChild
-	prefix := "@" + parent + ":"
 	for _, line := range strings.Split(out, "\n") {
 		head, _, ok := strings.Cut(line, prefix)
 		if !ok {
@@ -80,9 +106,29 @@ func WaitParentClean(ctx context.Context, r sourceadapter.Runner, parent string,
 			return b.String(), nil, fmt.Errorf("parent-clean wait: ip -d -o link show: %w", rerr)
 		}
 		left = parentChildren(out, parent)
+		// A child in a container or named namespace is not in the host's
+		// listing (#97); only a host view with no child needs the rest.
+		unreadable := ""
+		if len(left) == 0 {
+			others, lerr := listOtherNamespaces(ctx, r)
+			if lerr != nil {
+				return b.String(), nil, fmt.Errorf("parent-clean wait: %w", lerr)
+			}
+			idx := parentIndex(out, parent)
+			var bad []string
+			for _, ns := range others {
+				if ns.Err != nil {
+					bad = append(bad, ns.Name)
+				}
+				left = append(left, childrenInNamespace(ns, idx)...)
+			}
+			if len(bad) > 0 {
+				unreadable = fmt.Sprintf(" (%d namespaces unreadable: %s)", len(bad), strings.Join(bad, ", "))
+			}
+		}
 		elapsed := time.Since(start).Round(10 * time.Millisecond)
 		if len(left) == 0 {
-			fmt.Fprintf(&b, "poll %d at %s: clean\nwaited %s\n", n, elapsed, elapsed)
+			fmt.Fprintf(&b, "poll %d at %s: clean%s\nwaited %s\n", n, elapsed, unreadable, elapsed)
 			return b.String(), nil, nil
 		}
 		names := make([]string, len(left))

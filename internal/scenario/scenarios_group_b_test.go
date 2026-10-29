@@ -1,10 +1,12 @@
 package scenario
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -28,6 +30,7 @@ type bRunner struct {
 	netErr      error
 	nslookup    string
 	nslookupErr error
+	nslookupSh  func(cmd string) (string, error) // runs the command in a shell, as the lab's SSHRunner does
 	resolv      []string
 	resolvN     int
 	runErr      error
@@ -107,6 +110,9 @@ func (f *bRunner) Run(_ context.Context, cmd string) (string, error) {
 		}
 		return b.String(), f.ownErr
 	case strings.Contains(cmd, "nslookup"):
+		if f.nslookupSh != nil {
+			return f.nslookupSh(cmd)
+		}
 		return f.nslookup, f.nslookupErr
 	case strings.Contains(cmd, "cat /etc/resolv.conf"):
 		if len(f.resolv) == 0 {
@@ -623,12 +629,74 @@ func TestRunB3NamesTheExecErrorInTheVerdictAndTheEvidence(t *testing.T) {
 	}
 }
 
-// A non-zero exit that still printed an answer keeps the answer.
-func TestRunB3KeepsTheAnswerOfALookupThatExitedNonZero(t *testing.T) {
+// sshLikeDocker runs a docker-exec command line in a real shell, with sudo
+// and docker replaced by shims that print out and exit with code, and
+// returns what the lab's SSHRunner would: stdout only on exit 0, else an
+// error and no stdout (internal/sourceadapter/ssh.go).
+func sshLikeDocker(t *testing.T, out string, code int) func(string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"sudo":   "#!/bin/sh\nexec \"$@\"\n",
+		"docker": "#!/bin/sh\nprintf '%s' \"$B3_OUT\"\nexit \"$B3_EXIT\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return func(cmd string) (string, error) {
+		c := exec.Command("sh", "-c", cmd)
+		c.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "B3_OUT="+out, "B3_EXIT="+strconv.Itoa(code))
+		var so, se bytes.Buffer
+		c.Stdout, c.Stderr = &so, &se
+		if err := c.Run(); err != nil {
+			return "", fmt.Errorf("ssh lab@host: %w: %s", err, se.String())
+		}
+		return so.String(), nil
+	}
+}
+
+// busybox nslookup prints the A answer and exits 1 when the AAAA half of
+// its pair fails; SSHRunner drops stdout on a non-zero exit, so the
+// command must carry the output and the exit code itself.
+func TestRunB3PassesWhenNslookupPrintsTheAnswerAndExitsNonZero(t *testing.T) {
 	h, _, e := b3Fixture(t, ShapeBridge)
-	h.nslookup = nslookupOK
-	h.nslookupErr = errors.New("exit status 1")
-	needResult(t, runB3Tuned(context.Background(), e, 2, time.Millisecond), PASS)
+	h.nslookupSh = sshLikeDocker(t, nslookupOK+"\n** server can't find labb3-dnsmasq-bridge: REFUSED\n", 1)
+	v := runB3Tuned(context.Background(), e, 2, time.Millisecond)
+	needResult(t, v, PASS)
+	b, err := os.ReadFile(evidencePath(e, NameB3, "dns-answer"))
+	if err != nil || !strings.Contains(string(b), "Address: 10.200.1.101") || !strings.Contains(string(b), "# nslookup exit 1") {
+		t.Errorf("dns-answer evidence %q (%v)", b, err)
+	}
+}
+
+// A registration that is missing still fails, and the verdict and the
+// evidence carry what nslookup said instead of an empty exit-1 line.
+func TestRunB3FailsOnANonZeroExitWithNoAnswerAndKeepsWhatNslookupSaid(t *testing.T) {
+	for name, out := range map[string]string{
+		"nxdomain": "Server:\t\t10.200.1.1\nAddress:\t10.200.1.1:53\n\n** server can't find labb3-dnsmasq-bridge: NXDOMAIN\n",
+		"timeout":  ";; connection timed out; no servers could be reached\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _, e := b3Fixture(t, ShapeBridge)
+			h.nslookupSh = sshLikeDocker(t, out, 1)
+			v := runB3Tuned(context.Background(), e, 2, time.Millisecond)
+			needResult(t, v, FAIL)
+			needReason(t, v, "nslookup said:")
+			needReason(t, v, strings.Fields(out)[len(strings.Fields(out))-1])
+			b, err := os.ReadFile(evidencePath(e, NameB3, "dns-answer"))
+			if err != nil || !strings.Contains(string(b), strings.TrimSpace(out)) || !strings.Contains(string(b), "# nslookup exit 1") {
+				t.Errorf("dns-answer evidence %q (%v)", b, err)
+			}
+		})
+	}
+}
+
+// A different address in the answer is still a FAIL when the exit is 0.
+func TestRunB3FailsWhenTheAnswerIsAnotherAddressAndExitsZero(t *testing.T) {
+	h, _, e := b3Fixture(t, ShapeBridge)
+	h.nslookupSh = sshLikeDocker(t, strings.Replace(nslookupOK, "10.200.1.101", "10.200.1.77", 1), 0)
+	needResult(t, runB3Tuned(context.Background(), e, 2, time.Millisecond), FAIL)
 }
 
 func TestRunB3FailsWithoutASourceAddress(t *testing.T) {

@@ -17,6 +17,9 @@ const (
 	relayServerNIC    = "eth2"
 	RelayDefaultsPath = "/etc/default/isc-dhcp-relay"
 	RelayNftPath      = "/etc/nftables.conf"
+	// relayForwardProc is read and written directly: a sysctl binary is
+	// not on the relay user's path (run 2, lab #91).
+	relayForwardProc = "/proc/sys/net/ipv4/ip_forward"
 )
 
 // RelayParams is what WithRelay holds the relay and the source to, all
@@ -110,7 +113,7 @@ func WithRelay(inner Adapter, relay Runner, p RelayParams) Adapter {
 // not the client one, and C9 cannot renumber a source that is not on
 // the client segment, so C6, C6b, C7 and C9 are N/A there. dhcrelay
 // relays v4 only and an RA never crosses the relay, so group D is too.
-var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop}
+var relayDropped = []Capability{CapSquatter, CapRogueServer, CapRenumber, CapV6, CapRapidCommit6, CapTemporary6, CapPD, CapPref64, CapV6ServerStop, CapVLANPool}
 
 func (a *relayAdapter) Capabilities() []Capability {
 	var caps []Capability
@@ -130,6 +133,7 @@ var relayNAReasons = map[Capability]string{
 	CapRogueServer:     "relay cell: a squatter on the server segment is invisible to clients, by design",
 	CapRenumber:        "relay cell: renumbering needs the relay leg renumbered too",
 	CapFailoverPair:    "relay cell: one source behind one relay, no failover peer; the failover pair cell carries C5 (claymore666/docker-net-dhcp-lab#12)",
+	CapVLANPool:        "relay cell: the source's eth1.100 sits on the relay's server segment, not on the docker host's segment, so a tagged request never reaches it (claymore666/docker-net-dhcp-lab#15)",
 	CapDNSRegistration: "relay cell: the Kea source serves no DNS, so register_dns has nothing to register with",
 }
 
@@ -175,7 +179,7 @@ func (a *relayAdapter) relayReady(ctx context.Context) error {
 	if _, err := a.relay.Run(ctx, "sudo systemctl is-active --quiet "+relayService+" && pgrep -x dhcrelay"); err != nil {
 		return fmt.Errorf("relay: is-active %s && pgrep dhcrelay failed (service down, no dhcrelay, or relay unreachable): %w", relayService, err)
 	}
-	fwd, err := a.relay.Run(ctx, "sysctl -n net.ipv4.ip_forward")
+	fwd, err := a.relay.Run(ctx, "cat "+relayForwardProc)
 	if err != nil {
 		return fmt.Errorf("relay: read ip_forward: %w", err)
 	}
@@ -245,7 +249,7 @@ func (a *relayAdapter) Recover(ctx context.Context) error {
 	}
 	for _, cmd := range []string{
 		"sudo nft -f " + RelayNftPath,
-		"sudo sysctl -qw net.ipv4.ip_forward=1",
+		"echo 1 | sudo tee " + relayForwardProc + " >/dev/null",
 		"sudo systemctl restart " + relayService,
 	} {
 		if _, err := a.relay.Run(ctx, cmd); err != nil {

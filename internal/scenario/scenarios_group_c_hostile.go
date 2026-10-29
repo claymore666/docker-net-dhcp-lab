@@ -47,11 +47,25 @@ func leasedOn(leases []sourceadapter.Lease, addr string) bool {
 
 func runC6(ctx context.Context, e Env) Verdict { return runC6Tuned(ctx, e, cDefault) }
 
+// c6IpvlanNA is C6's answer on ipvlan: the plugin refuses
+// conflict_check=wait there at network create (docs/reference.md,
+// RFC 5227 section 2.1.1, plugin #1347, lab #117), so the pre-bind squatter test
+// has no network to run on. C6b drives async, which ipvlan accepts.
+func c6IpvlanNA(e Env) (Verdict, bool) {
+	if e.Shape != ShapeIpvlan {
+		return Verdict{}, false
+	}
+	return na(NameC6, e.Cell, e.Shape, "plugin docs/reference.md (conflict_check): conflict_check=wait is refused on ipvlan at docker network create, because an ipvlan child does not receive the ARP replies to its own probes (RFC 5227 section 2.1.1); the lab cannot create the wait network in this shape, and C6b covers async", e.GitSHA), true
+}
+
 // runC6Tuned -- conflict_check=wait: the source offers X, reserved for
 // the network's client id, while a squatter holds X and ignores ping;
 // the client must DECLINE X and never carry it.
 func runC6Tuned(ctx context.Context, e Env, _ cTiming) Verdict {
 	if v, ok := bIPAMNA(NameC6, e); ok {
+		return v
+	}
+	if v, ok := c6IpvlanNA(e); ok {
 		return v
 	}
 	i, err := shapeIndex(e.Shape)

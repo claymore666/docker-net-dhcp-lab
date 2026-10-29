@@ -123,28 +123,76 @@ func TestJudgeD4mInspectFollowsTheMainPrefix(t *testing.T) {
 	needF(t, judgeD4(o), BLOCKED, "not among the advertised")
 }
 
+// d4Reads is the container's address reads after the drop: one per
+// entry of valids, 10 s apart from t=30, a2 holding that valid lifetime
+// (0 = absent). The lines are synthetic, shaped as plugin #1368 describes
+// a withdrawn prefix's address.
+func d4Reads(t *testing.T, valids ...int64) []d6Read {
+	t.Helper()
+	var out []d6Read
+	for i, v := range valids {
+		as := []addr6{d6LL, {Addr: mustEUI(t, d4P1), Bits: 64, Scope: "global", Valid: 7000, Pref: 3000}}
+		if v != 0 {
+			as = append(as, addr6{Addr: mustEUI(t, d4P2), Bits: 64, Scope: "global", Valid: v, Pref: v / 2})
+		}
+		at := d6At(float64(30 + 10*i))
+		out = append(out, d6Read{At: at, Got: at.Add(time.Second), Addrs: as})
+	}
+	return out
+}
+
 func TestJudgeD4bDropAndExpiry(t *testing.T) {
-	a1, a2 := mustEUI(t, d4P1), mustEUI(t, d4P2)
-	only1 := []addr6{d6LL, {Addr: a1, Bits: 64, Scope: "global"}}
-	both := append(only1, addr6{Addr: a2, Bits: 64, Scope: "global"})
+	a2 := mustEUI(t, d4P2)
+	only1 := []addr6{d6LL, {Addr: mustEUI(t, d4P1), Bits: 64, Scope: "global"}}
 	after := []RAMsg{raWith(30, true, pio(d4P1, true))}
 	kept := "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\nfd42:200:0:101::/64 dev eth0 proto ra metric 1024 expires 7100sec\n"
 	gone := "fd42:200:0:100::/64 dev eth0 proto kernel metric 256\n"
-	needF(t, judgeD4bDrop(after, only1, kept, d4P1, d4P2, d2MAC, true), PASS, "route for "+d4P2.String()+" kept")
-	needF(t, judgeD4bDrop(after, only1, gone, d4P1, d4P2, d2MAC, true), FAIL, "#1088")
-	needF(t, judgeD4bDrop(after, only1, gone, d4P1, d4P2, d2MAC, false), PASS, "not judged before v2.2.3")
-	needF(t, judgeD4bDrop(after, both, kept, d4P1, d4P2, d2MAC, true), FAIL, "docs/reference.md:967")
-	needF(t, judgeD4bDrop(after, only1, kept, d4P1, d4P2, d2MAC, true), PASS, "docs/reference.md:1824-1828")
-	needF(t, judgeD4bDrop(after, []addr6{d6LL}, kept, d4P1, d4P2, d2MAC, true), FAIL, "left the link")
-	needF(t, judgeD4bDrop(nil, only1, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "no RA after")
-	needF(t, judgeD4bDrop([]RAMsg{raWith(30, true, pio(d4P1, true), pio(d4P2, true))}, only1, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "still carries")
+	stays := d4Reads(t, 7000, 6990, 6980, 6970)
+	needF(t, judgeD4bDrop(after, stays, kept, d4P1, d4P2, d2MAC, true), PASS, a2.String()+" stayed with valid 6970, counting down")
+	needF(t, judgeD4bDrop(after, stays, kept, d4P1, d4P2, d2MAC, true), PASS, "docs/reference.md:1824-1828")
+	needF(t, judgeD4bDrop(after, stays, gone, d4P1, d4P2, d2MAC, true), FAIL, "#1088")
+	needF(t, judgeD4bDrop(after, stays, gone, d4P1, d4P2, d2MAC, false), PASS, "not judged before v2.2.3")
+	// removed on cessation, the old judge's PASS: gone at the first read, or gone with lifetime left.
+	needF(t, judgeD4bDrop(after, d4Reads(t, 0, 0, 0, 0), kept, d4P1, d4P2, d2MAC, true), FAIL, "gone at the first read")
+	needF(t, judgeD4bDrop(after, d4Reads(t, 7000, 6990, 0), kept, d4P1, d4P2, d2MAC, true), FAIL, "goes only at expiry")
+	// leaving at expiry is allowed: 15 s left at t=50, gone at t=70.
+	needF(t, judgeD4bDrop(after, d4Reads(t, 40, 30, 15, 0, 0), kept, d4P1, d4P2, d2MAC, true), PASS, "left only as its valid lifetime ran out")
+	// the lifetime does not count down, is forever, or the reads are too close to tell.
+	needF(t, judgeD4bDrop(after, d4Reads(t, 7000, 7000, 7000, 7000), kept, d4P1, d4P2, d2MAC, true), FAIL, "does not count down")
+	needF(t, judgeD4bDrop(after, d4Reads(t, forever, forever, forever, forever), kept, d4P1, d4P2, d2MAC, true), FAIL, "-1 is forever")
+	needF(t, judgeD4bDrop(after, d4Reads(t, 7000, 6990)[:1], kept, d4P1, d4P2, d2MAC, true), BLOCKED, "cannot be seen")
+	close := d4Reads(t, 7000, 6997)
+	close[1].At = close[0].At.Add(3 * time.Second)
+	close[1].Got = close[1].At.Add(time.Second)
+	needF(t, judgeD4bDrop(after, close, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "cannot be seen")
+	// forever, then gone: not an expiry.
+	needF(t, judgeD4bDrop(after, d4Reads(t, forever, forever, 0), kept, d4P1, d4P2, d2MAC, true), FAIL, "goes only at expiry")
+	// the first prefix must stay, the capture must show a drop.
+	noFirst := d4Reads(t, 7000, 6990, 6980)
+	for i := range noFirst {
+		noFirst[i].Addrs = noFirst[i].Addrs[2:]
+		noFirst[i].Addrs = append([]addr6{d6LL}, noFirst[i].Addrs...)
+	}
+	needF(t, judgeD4bDrop(after, noFirst, kept, d4P1, d4P2, d2MAC, true), FAIL, "left the link")
+	needF(t, judgeD4bDrop(nil, stays, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "no RA after")
+	needF(t, judgeD4bDrop([]RAMsg{raWith(30, true, pio(d4P1, true), pio(d4P2, true))}, stays, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "still carries")
+	needF(t, judgeD4bDrop(after, nil, kept, d4P1, d4P2, d2MAC, true), BLOCKED, "no address read")
 
 	exp := pio(d4P2, true)
 	exp.Valid, exp.Pref = 0, 0
 	afterExp := []RAMsg{raWith(60, true, pio(d4P1, true), exp)}
-	needF(t, judgeD4bExpired(afterExp, only1, gone, d4P2, d2MAC), PASS, "address and route gone")
+	needF(t, judgeD4bExpired(afterExp, only1, gone, d4P2, d2MAC), PASS, "address gone, route gone")
 	needF(t, judgeD4bExpired(afterExp, only1, kept, d4P2, d2MAC), FAIL, "still in the container")
-	needF(t, judgeD4bExpired(afterExp, both, gone, d4P2, d2MAC), FAIL, "still on the link")
+	// The documented shape (plugin #1368, synthetic lines): under two hours
+	// left the option is ignored, the address stays, the route goes.
+	held := func(valid int64) []addr6 {
+		return append(slices.Clone(only1), addr6{Addr: a2, Bits: 64, Scope: "global", Valid: valid, Pref: 0})
+	}
+	needF(t, judgeD4bExpired(afterExp, held(6950), gone, d4P2, d2MAC), PASS, "address kept with valid 6950")
+	needF(t, judgeD4bExpired(afterExp, held(7200), gone, d4P2, d2MAC), PASS, "within the two hours")
+	needF(t, judgeD4bExpired(afterExp, held(6950), kept, d4P2, d2MAC), FAIL, "still in the container")
+	needF(t, judgeD4bExpired(afterExp, held(forever), gone, d4P2, d2MAC), FAIL, "-1 is forever")
+	needF(t, judgeD4bExpired(afterExp, held(86000), gone, d4P2, d2MAC), FAIL, "cuts what is left to two hours")
 	needF(t, judgeD4bExpired(after, only1, gone, d4P2, d2MAC), BLOCKED, "valid lifetime 0")
 }
 
@@ -249,7 +297,9 @@ func TestJudgeF6(t *testing.T) {
 	pool := netip.MustParsePrefix("fd42:200:0:180::/57")
 	o, routes, h := goodF6()
 	needF(t, judgeF6(o, true, pool, routes, h, true), PASS, "IA_PD "+f6PD.String())
-	needF(t, judgeF6(o, true, pool, "unreachable fd42:200:0:180::/64 dev lo proto 16 metric 1024\n", h, true), PASS, "IA_PD")
+	// BusyBox ip prints no protocol; a number is not proto dhcp either (plugin #1370, lab #102).
+	needF(t, judgeF6(o, true, pool, "unreachable fd42:200:0:180::/64 dev lo metric 1024 pref medium\n", h, true), FAIL, "proto dhcp")
+	needF(t, judgeF6(o, true, pool, "unreachable fd42:200:0:180::/64 dev lo proto 16 metric 1024\n", h, true), FAIL, "proto dhcp")
 	needF(t, judgeF6(o, true, pool, "", h, true), FAIL, "unreachable")
 	needF(t, judgeF6(o, true, pool, routes, healthEndpoint{}, true), FAIL, "delegated_prefixes")
 	needF(t, judgeF6(o, true, pool, routes, h, false), FAIL, "no entry")
@@ -399,4 +449,38 @@ func TestLftWithinEdges(t *testing.T) {
 			t.Errorf("lftWithin(%d, %d, %s) = %v, want %v", c.got, stated, elapsed, got, c.want)
 		}
 	}
+}
+
+// D3c after plugin #1369: one Solicit transaction (the one-shot's) per
+// container and the settled lifetimes at most the last PIO's, which is
+// tighter than the largest PIO seen. Capture lines are synthetic.
+func TestJudgeD3cAutoWantsOneTransactionAndTheLastPIOCeiling(t *testing.T) {
+	sol := func(at float64, xid string) DHCP6Msg {
+		m := d6Msg(at, "SOLICIT", false, []IA6{{IAID: 1}}, nil)
+		m.XID = xid
+		return m
+	}
+	o, want := goodD2(t)
+	o.Msgs = []DHCP6Msg{sol(0, "aaa111"), sol(1, "aaa111"), sol(2, "aaa111")}
+	needF(t, judgeD3cAuto(o, "+1"), PASS, "3 Solicits unanswered (one transaction)")
+
+	two, _ := goodD2(t)
+	two.Msgs = []DHCP6Msg{sol(0, "aaa111"), sol(1, "bbb222")}
+	needF(t, judgeD3cAuto(two, "+1"), FAIL, "2 Solicit transactions")
+
+	// 7195 is under the largest PIO (7200) and over the last one (7190).
+	hi, _ := goodD2(t)
+	hi.Msgs = o.Msgs
+	hi.Settled.Addrs[1].Valid = 7195
+	needF(t, judgeD3cAuto(hi, "+1"), FAIL, "above the last PIO's 7190/3590")
+	hi.Settled.Addrs[1].Valid, hi.Settled.Addrs[1].Pref = 7190, 3595
+	needF(t, judgeD3cAuto(hi, "+1"), FAIL, "above the last PIO's 7190/3590")
+	hi.Settled.Addrs[1].Valid, hi.Settled.Addrs[1].Pref = 7190, 3590
+	needF(t, judgeD3cAuto(hi, "+1"), PASS, want.String())
+
+	// The persistent client's install left the address with no end.
+	fv, _ := goodD2(t)
+	fv.Msgs = o.Msgs
+	fv.Settled.Addrs[1].Valid, fv.Settled.Addrs[1].Pref = forever, forever
+	needF(t, judgeD3cAuto(fv, "+1"), FAIL, "valid -1")
 }

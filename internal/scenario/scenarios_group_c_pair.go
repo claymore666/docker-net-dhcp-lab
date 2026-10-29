@@ -107,6 +107,19 @@ func c5Rebind(msgs []DHCPMsg, addr, serverID string, from, until time.Time) (DHC
 	return DHCPMsg{}, DHCPMsg{}, false
 }
 
+// c5SurvivorAnswer finds the first of reqs the survivor ACKed for addr
+// (same xid, not before the REQUEST, before until).
+func c5SurvivorAnswer(msgs, reqs []DHCPMsg, addr, survivorID string, until time.Time) (DHCPMsg, DHCPMsg, bool) {
+	for _, r := range reqs {
+		for _, a := range messagesOfType(msgs, "ACK") {
+			if a.XID == r.XID && a.Server == survivorID && a.YIAddr == addr && !a.At.Before(r.At) && a.At.Before(until) {
+				return r, a, true
+			}
+		}
+	}
+	return DHCPMsg{}, DHCPMsg{}, false
+}
+
 // c5Windows is T1, T2 and the expiry of a lease the ACK gave for lease
 // (RFC 2131 4.4.5). An ISC pair's first lease is its 60 s MCLT whatever
 // default-lease-time says, so the windows come from option 51 alone
@@ -187,21 +200,40 @@ func runC5Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 			return blocked(NameC5, e.Cell, e.Shape, fmt.Sprintf("the capture shows an ACK from the stopped peer %s at %s: the stop did not land", deadID, m.At.UTC().Format("15:04:05.000")), e.GitSHA)
 		}
 	}
-	renewals := 0
+	var toGranting, toSurvivor []DHCPMsg
 	for _, m := range messagesOfType(messagesBetween(msgs, t1.Add(-cJitter), t2), "REQUEST") {
-		if m.Dst == deadID {
-			renewals++
+		switch m.Dst {
+		case deadID:
+			toGranting = append(toGranting, m)
+		case survivorID:
+			toSurvivor = append(toSurvivor, m)
 		}
 	}
-	if renewals == 0 {
+	renewals := len(toGranting)
+	if renewals == 0 && len(toSurvivor) == 0 {
 		all, err := readCapture(ctx, e, NameC5, "capture-all", "*", b.ev)
 		if err != nil {
 			return blocked(NameC5, e.Cell, e.Shape, fmt.Sprintf("could not read the whole capture: %v", err), e.GitSHA)
 		}
 		if !sawClientUnicast(all) {
-			return blocked(NameC5, e.Cell, e.Shape, "the capture holds no REQUEST to "+deadID+" between T1 and T2 and no client-sent unicast frame from any client: the observer cannot see a unicast renewal, so its absence is not judged", e.GitSHA)
+			return blocked(NameC5, e.Cell, e.Shape, "the capture holds no REQUEST to "+deadID+" or "+survivorID+" between T1 and T2 and no client-sent unicast frame from any client: the observer cannot see a unicast renewal, so its absence is not judged", e.GitSHA)
 		}
-		return fail(NameC5, e.Cell, e.Shape, fmt.Sprintf("no REQUEST from %s unicast to the granting server %s between T1 (%s) and T2 (%s) of the bound ACK's %s lease", b.ident, deadID, t1.UTC().Format("15:04:05"), t2.UTC().Format("15:04:05"), lease), b.ev, e.GitSHA)
+		return fail(NameC5, e.Cell, e.Shape, fmt.Sprintf("no REQUEST from %s unicast to either partner (the granting server %s or %s) between T1 (%s) and T2 (%s) of the bound ACK's %s lease", b.ident, deadID, survivorID, t1.UTC().Format("15:04:05"), t2.UTC().Format("15:04:05"), lease), b.ev, e.GitSHA)
+	}
+	if renewals == 0 {
+		// #100: a client may renew with the partner that did not grant
+		// the lease; the survivor then has to answer that renewal.
+		req, ack, ok := c5SurvivorAnswer(msgs, toSurvivor, b.addr, survivorID, expiry)
+		if !ok {
+			return fail(NameC5, e.Cell, e.Shape, fmt.Sprintf("%d REQUEST(s) from %s unicast to the survivor %s between T1 (%s) and T2 (%s), none ACKed by it for %s before the expiry (%s)", len(toSurvivor), b.ident, survivorID, t1.UTC().Format("15:04:05"), t2.UTC().Format("15:04:05"), b.addr, expiry.UTC().Format("15:04:05")), b.ev, e.GitSHA)
+		}
+		secs, err := reachableWithRetry(ctx, e.Source, b.addr)
+		if err != nil {
+			return fail(NameC5, e.Cell, e.Shape, fmt.Sprintf("%s renewed with the survivor but not reachable after %ds: %v", b.addr, secs, err), b.ev, e.GitSHA)
+		}
+		return pass(NameC5, e.Cell, e.Shape, fmt.Sprintf("%s bound by %s for %s; its renewal at bind + %s went unicast to the other partner %s after the granting peer's stop and was ACKed by %s with %s; the survivor's expiry moved from %s to %s; %s held at all %d polls; reachable after %ds",
+			b.ident, deadID, lease, req.At.Sub(b.bindAt).Round(10*time.Millisecond), survivorID, ack.Server, ack.YIAddr,
+			b.before.Expires.UTC().Format("15:04:05"), after.Expires.UTC().Format("15:04:05"), b.addr, polls, secs), b.ev, e.GitSHA)
 	}
 	req, ack, ok := c5Rebind(msgs, b.addr, survivorID, t2.Add(-cJitter), expiry)
 	if !ok {

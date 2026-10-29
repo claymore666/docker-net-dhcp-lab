@@ -92,7 +92,14 @@ const (
 	// back as DHCPv4 events (lab #15). Declared by the Debian cells only;
 	// the appliances and the failover pairs report it absent with a reason.
 	CapServerEvents Capability = "server-events"
+	// CapVLANPool declares a second pool on the source's own eth1.100
+	// (VLAN 100, lab #15 E3b). Its cloud-init template carries it; the
+	// appliances, the pairs and the relay cell report it absent.
+	CapVLANPool Capability = "vlan-pool"
 )
+
+// vlanPoolNA is the reason a source without the VLAN 100 template gives. (#15)
+const vlanPoolNA = "the lab carries the VLAN 100 pool in the cloud-init template of the Debian kea, isc-dhcp and dnsmasq cells; this source has no such template (claymore666/docker-net-dhcp-lab#15)"
 
 // Lease is one entry from a source's own table, normalized across the
 // three source shapes (JSON, dhcpd.leases, dnsmasq.leases). ClientID is
@@ -285,13 +292,20 @@ func validateAddr(addr string) (string, error) {
 // through validateAddr first, so it is stdlib's own normalized form
 // before it ever reaches the command line.
 func reachable(ctx context.Context, r Runner, addr string) error {
-	ping := "ping -c1 -W2 "
+	return reachableAs(ctx, r, addr, "")
+}
+
+// reachableAs is reachable with prefix in front of ping: OpenWrt's busybox
+// ping needs root, every other source image pings unprivileged (run 2,
+// lab #98).
+func reachableAs(ctx context.Context, r Runner, addr, prefix string) error {
+	ping := prefix + "ping -c1 -W2 "
 	ip, err := validateAddr(addr)
 	if err != nil {
 		if ip, err = validateAddr6(addr); err != nil {
 			return err
 		}
-		ping = "ping -6 -c1 -W2 "
+		ping = prefix + "ping -6 -c1 -W2 "
 	}
 	if _, err := r.Run(ctx, ping+ip); err != nil {
 		return fmt.Errorf("ping %s: %w", ip, err)

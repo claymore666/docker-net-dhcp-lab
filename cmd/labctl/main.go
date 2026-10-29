@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,6 +43,8 @@ func main() {
 		os.Exit(cmdRun(os.Args[2:]))
 	case "remaining":
 		os.Exit(cmdRemaining(os.Args[2:]))
+	case "abort-blocked":
+		os.Exit(cmdAbortBlocked(os.Args[2:]))
 	case "matrix":
 		os.Exit(cmdMatrix(os.Args[2:]))
 	case "coverage":
@@ -57,6 +60,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
 	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
+	fmt.Fprintln(os.Stderr, "       labctl abort-blocked <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir> <reason>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
 	fmt.Fprintln(os.Stderr, "       labctl coverage (--tag vX.Y.Z | --file path/to/reference.md | --pinned vX.Y.Z) [--regen]")
 	fmt.Fprintln(os.Stderr, "       labctl coverage pin --plugin-tree <dir> --tag vX.Y.Z")
@@ -225,6 +229,7 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		PoolStart: cell.Source.PoolStart,
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
+		VLAN:      scenario.ObserverVLAN{Cell: cellName, Bridge: cell.Segment.Bridge},
 	}
 	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
 	if err != nil {
@@ -268,6 +273,10 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 		return &sourceadapter.OpenwrtAdapter{Runner: runner}, nil
 	case "fritzbox":
 		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
+	case "windows":
+		// run-cells.sh skips the cell while its image is absent (lab #14),
+		// so a run never reaches this; the adapter is the next change.
+		return nil, fmt.Errorf("source type windows has no adapter yet (lab #14); the cell is wired and cannot run")
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}
@@ -353,23 +362,104 @@ func cmdRemaining(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl remaining:", err)
 		return 1
 	}
-	matches, err := filepath.Glob(filepath.Join(evidenceDir, "*.verdict"))
+	done, err := scenariosWithVerdict(evidenceDir, cellName, shapeArg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "labctl remaining:", err)
 		return 1
+	}
+	fmt.Println(strings.Join(remainingScenarioNames(scenario.Catalog, done), ","))
+	return 0
+}
+
+// abortReasonPrefix starts the reason of every row writeAbortRows
+// writes, so a results page tells an aborted shape from a plugin-side
+// BLOCKED (#101).
+const abortReasonPrefix = "the shape was aborted by an infrastructure error before this scenario ran: "
+
+// scenariosWithVerdict is the set of scenario names cell/shape already has
+// a verdict for in evidenceDir, read from each *.verdict file's own
+// content, never its file name. An abort row (writeAbortRows) does not
+// count: the scenario never ran, so a resumed or retry pass still lists it
+// and its real verdict replaces the row (#101).
+func scenariosWithVerdict(evidenceDir, cellName, shape string) (map[string]bool, error) {
+	matches, err := filepath.Glob(filepath.Join(evidenceDir, "*.verdict"))
+	if err != nil {
+		return nil, err
 	}
 	done := map[string]bool{}
 	for _, m := range matches {
 		v, err := scenario.ReadVerdict(m)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "labctl remaining:", err)
-			return 1
+			return nil, err
 		}
-		if v.Cell == cellName && string(v.Shape) == shapeArg {
+		if v.Cell == cellName && string(v.Shape) == shape && !isAbortRow(v) {
 			done[v.Scenario] = true
 		}
 	}
-	fmt.Println(strings.Join(remainingScenarioNames(scenario.Catalog, done), ","))
+	return done, nil
+}
+
+func isAbortRow(v scenario.Verdict) bool {
+	return v.Result == scenario.BLOCKED && strings.HasPrefix(v.Reason, abortReasonPrefix)
+}
+
+// writeAbortRows writes a BLOCKED verdict carrying reason for every
+// catalog scenario of cell/shape that has no verdict in evidenceDir yet
+// and returns their names. A verdict that exists is never touched.
+func writeAbortRows(evidenceDir, cellName string, shape scenario.Shape, gitSHA, reason string, now time.Time) ([]string, error) {
+	done, err := scenariosWithVerdict(evidenceDir, cellName, string(shape))
+	if err != nil {
+		return nil, err
+	}
+	names := remainingScenarioNames(scenario.Catalog, done)
+	for _, name := range names {
+		v := scenario.Verdict{
+			Scenario: name, Cell: cellName, Shape: shape,
+			Result: scenario.BLOCKED, Reason: abortReasonPrefix + reason,
+			GitSHA: gitSHA, Timestamp: now,
+		}
+		if err := scenario.Write(evidenceDir, v); err != nil {
+			return nil, err
+		}
+	}
+	return names, nil
+}
+
+// cmdAbortBlocked is what run-cell.sh calls after `labctl run` exits on an
+// infrastructure error: the shape's scenarios that wrote no verdict read
+// BLOCKED with the abort reason instead of (missing) (#101).
+func cmdAbortBlocked(args []string) int {
+	if len(args) != 6 {
+		usage()
+	}
+	labYAML, repoRoot, cellName, shapeArg, evidenceDir, reason := args[0], args[1], args[2], args[3], args[4], args[5]
+	shape := scenario.Shape(shapeArg)
+	if !slices.Contains(scenario.Shapes, shape) {
+		fmt.Fprintf(os.Stderr, "labctl abort-blocked: unknown shape %q\n", shapeArg)
+		return 2
+	}
+	cfg, err := labyaml.Load(labYAML)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl abort-blocked:", err)
+		return 1
+	}
+	if _, err := cfg.CellByName(cellName); err != nil {
+		fmt.Fprintln(os.Stderr, "labctl abort-blocked:", err)
+		return 1
+	}
+	gitSHA, err := gitRevParseHEAD(repoRoot)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl abort-blocked: git rev-parse HEAD:", err)
+		return 1
+	}
+	names, err := writeAbortRows(evidenceDir, cellName, shape, gitSHA, reason, time.Now())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl abort-blocked:", err)
+		return 1
+	}
+	for _, n := range names {
+		fmt.Printf("%s %s %s: %s\n", cellName, shape, n, scenario.BLOCKED)
+	}
 	return 0
 }
 
@@ -460,8 +550,10 @@ func cmdRun(args []string) int {
 	keyPath := os.ExpandEnv("$HOME/.ssh/id_ed25519_lab")
 	hostMgmtIP := strings.SplitN(cell.DockerHost.MgmtAddress, "/", 2)[0]
 	// 5 min covers the longest new-connection outage the #38 -j 6 run measured (about 4 min).
-	hostRunner := &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
-		Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
+	// The first parent EBUSY of the cell captures every namespace's links (#97).
+	hostRunner := &scenario.BusyCapture{Cell: cellName, EvidenceDir: evidenceDir, Log: os.Stderr,
+		Inner: &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
+			Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}}
 	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
 		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}

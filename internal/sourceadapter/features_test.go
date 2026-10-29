@@ -35,6 +35,8 @@ func baselineConfig(t *testing.T, tmpl, path string) string {
 		"__SEG_SUBNET__": "10.200.1.0/24", "__SEG_NETWORK__": "10.200.1.0", "__SEG_NETMASK__": "255.255.255.0",
 		"__SEG_GATEWAY__": "10.200.1.1", "__POOL_START__": "10.200.1.100", "__POOL_END__": "10.200.1.200",
 		"__CLASS_POOL_START__": "10.200.1.221", "__CLASS_POOL_END__": "10.200.1.230",
+		"__VLAN_ID__": "100", "__VLAN_SUBNET__": "10.200.151.0/24", "__VLAN_ADDR__": "10.200.151.2", "__VLAN_PREFIX__": "10.200.151",
+		"__VLAN_POOL_START__": "10.200.151.100", "__VLAN_POOL_END__": "10.200.151.200",
 		"__SEG_SUBNET6__": "fd42:200:0:100::/64", "__POOL6_START__": "fd42:200:0:100::100",
 		"__POOL6_END__": "fd42:200:0:100::1ff", "__TEMP6_POOL__": "fd42:200:0:100::200/120",
 		"__HA_THIS__": "primary", "__HA_PRIMARY_SEG__": "10.200.1.2", "__HA_PARTNER_SEG__": "10.200.1.3",

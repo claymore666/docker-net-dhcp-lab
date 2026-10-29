@@ -38,6 +38,7 @@ var udhcpdNAReasons = map[Capability]string{
 	CapForceRenewNonce: "udhcpd does not implement FORCERENEW (RFC 3203/6704)",
 	CapV6:              "udhcpd is DHCPv4 only",
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 }
 
 func (a *UdhcpdAdapter) NAReason(c Capability) (string, bool) {

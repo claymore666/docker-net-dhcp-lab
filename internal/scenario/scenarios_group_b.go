@@ -228,7 +228,11 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 	if !ok {
 		return fail(NameB3, e.Cell, e.Shape, leaseFailReason(e.Shape, mac, addr, endpointID), ev, e.GitSHA)
 	}
-	query := fmt.Sprintf("sudo docker exec %s nslookup %s %s", name, host, e.SourceAddr)
+	// busybox nslookup exits 1 when the AAAA half of its A+AAAA pair fails
+	// even though the A answer printed, and SSHRunner drops stdout on a
+	// non-zero exit; stderr is merged and the exit code travels in the
+	// output so the answer is judged and kept either way (#116).
+	query := fmt.Sprintf("sudo docker exec %s nslookup %s %s 2>&1; echo \"# nslookup exit $?\"", name, host, e.SourceAddr)
 	var out string
 	var answers []string
 	var runErr error
@@ -257,6 +261,11 @@ func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdic
 	cause := ""
 	if runErr != nil && len(answers) == 0 {
 		cause = fmt.Sprintf(" (the lookup failed: %v)", runErr)
+	} else if t := strings.Join(strings.Fields(out), " "); t != "" {
+		if len(t) > 240 {
+			t = t[:240]
+		}
+		cause = fmt.Sprintf(" (nslookup said: %s)", t)
 	}
 	return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("the source at %s answered %s with %v, want the leased address %s%s", e.SourceAddr, host, answers, addr, cause), ev, e.GitSHA)
 }

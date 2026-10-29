@@ -33,6 +33,7 @@ fresh() {
 	rm -rf "$tmp/repo" "$tmp/cache"
 	mkdir -p "$tmp/repo/scripts" "$tmp/repo/images" "$tmp/cache"
 	cp "$REPO_ROOT/scripts/fetch-base-image.sh" "$tmp/repo/scripts/"
+	cp "$REPO_ROOT/scripts/image-path.sh" "$tmp/repo/scripts/"
 	: >"$tmp/qemu.log"
 }
 
@@ -43,6 +44,13 @@ fetch() {
 		bash "$tmp/repo/scripts/fetch-base-image.sh" "$@" >"$tmp/out" 2>"$tmp/err"
 	rc=$?
 	set -e
+}
+
+# only_path LABEL WANT: stdout of the last fetch is the image path and
+# nothing else; callers capture it whole as the qemu-img backing file (#92).
+only_path() {
+	{ [ "$(wc -l <"$tmp/out")" -eq 1 ] && [ "$(cat "$tmp/out")" = "$2" ]; } ||
+		bad "$1: stdout is not just $2: $(tr '\n' '|' <"$tmp/out")"
 }
 
 for ext in zip gz bz2; do
@@ -62,7 +70,8 @@ for ext in zip gz bz2; do
 	fresh
 	fetch "img-$ext" "file://$arch" archive "file://$tmp/up/good-$ext.sums"
 	[ "$rc" -eq 0 ] || bad "$ext matching sum: exit $rc: $(cat "$tmp/err")"
-	[ "$(tail -1 "$tmp/out")" = "$dest" ] || bad "$ext: printed $(tail -1 "$tmp/out"), want $dest"
+	only_path "$ext cold fetch" "$dest"
+	grep -q 'converting' "$tmp/err" || bad "$ext: the progress lines are gone from stderr"
 	[ "$(cat "$dest" 2>/dev/null)" = "$want" ] || bad "$ext: the cached image is not the converted disk"
 	cmp -s "$dest" "$arch" && bad "$ext: the archive was left in place as the image"
 	grep -qx "$(sha256sum "$arch" | awk '{print $1}')  disk-$ext.img.$ext" "$tmp/repo/images/img-$ext.sha256" ||
@@ -118,7 +127,8 @@ compgen -G "$tmp/cache/*.part" >/dev/null && bad "a qcow2 payload left a .part f
 fresh
 arch="$tmp/up/disk-gz.img.gz"
 fetch tofu "file://$arch" archive
-{ [ "$rc" -eq 0 ] && grep -q 'pinning the checksum' "$tmp/out"; } || bad "TOFU archive: exit $rc"
+{ [ "$rc" -eq 0 ] && grep -q 'pinning the checksum' "$tmp/err"; } || bad "TOFU archive: exit $rc"
+only_path "TOFU archive" "$tmp/cache/tofu.qcow2"
 rm -f "$tmp/cache/tofu.gz"
 printf 'other' | gzip -c >"$arch"
 fetch tofu "file://$arch" archive
@@ -129,6 +139,8 @@ fresh
 printf 'QFI-plain' >"$tmp/up/plain.qcow2"
 fetch plain "file://$tmp/up/plain.qcow2"
 { [ "$rc" -eq 0 ] && cmp -s "$tmp/cache/plain.qcow2" "$tmp/up/plain.qcow2"; } || bad "qcow2: exit $rc"
+only_path "qcow2 cold fetch" "$tmp/cache/plain.qcow2"
+grep -q 'downloading plain' "$tmp/err" || bad "qcow2: the download line is gone from stderr"
 grep -qx "$(sha256sum "$tmp/up/plain.qcow2" | awk '{print $1}')  plain.qcow2" "$tmp/repo/images/plain.sha256" || bad "qcow2: pin line"
 printf 'swapped' >"$tmp/cache/plain.qcow2"
 fetch plain "file://$tmp/up/plain.qcow2"
@@ -146,6 +158,43 @@ fetch odd "file://$tmp/up/plain.qcow2" iso
 { [ "$rc" -eq 1 ] && grep -q "unknown image kind" "$tmp/err"; } || bad "unknown kind: exit $rc"
 fetch odd "file://$tmp/up/plain.qcow2" archive
 { [ "$rc" -eq 1 ] && grep -q "not a .zip" "$tmp/err"; } || bad "archive without an archive suffix: exit $rc"
+
+# The callers' capture, end to end (#92): a cold chr-style archive fetch
+# captured as base_path=$(...) names an existing absolute file, and the
+# real qemu-img records exactly that file as the overlay's backing file.
+# Run 2 had "fetch-base-image: converting ..." in the string, which
+# qemu-img parsed as the protocol "fetch-base-image".
+if real=$(command -v qemu-img); then
+	fresh
+	rm -rf "$tmp/real"
+	mkdir -p "$tmp/real"
+	"$real" create -q -f raw "$tmp/real/disk.img" 1M
+	(cd "$tmp/real" && python3 -I -m zipfile -c disk.img.zip disk.img)
+	# the stub tags its input; this section needs the real tool
+	rm -f "$tmp/bin/qemu-img"
+	ln -s "$real" "$tmp/bin/qemu-img"
+	base_path=$(LAB_IMAGE_CACHE="$tmp/cache" PATH="$tmp/bin:$PATH" bash "$tmp/repo/scripts/fetch-base-image.sh" real-chr "file://$tmp/real/disk.img.zip" archive 2>/dev/null)
+	case "$base_path" in
+	/*) [ -f "$base_path" ] || bad "captured base path $base_path is not a file" ;;
+	*) bad "captured base path is not absolute: $base_path" ;;
+	esac
+	if "$real" create -q -f qcow2 -F qcow2 -b "$base_path" "$tmp/real/overlay.qcow2" 2M 2>"$tmp/real/err"; then
+		[ "$("$real" info --output=json "$tmp/real/overlay.qcow2" | jq -r '."full-backing-filename"')" = "$base_path" ] ||
+			bad "the overlay's backing file is not $base_path"
+	else
+		bad "qemu-img refused the captured base path: $(cat "$tmp/real/err")"
+	fi
+else
+	echo "fetch-base-image-kinds-test: no qemu-img on this box, overlay check skipped"
+fi
+
+# Every caller captures the script's stdout whole and nothing else, so the
+# stdout contract above is what they get (#92).
+for caller in up-cell up-relay up-source; do
+	# shellcheck disable=SC2016  # the pattern matches the callers' literal text
+	grep -qE '^[[:space:]]*base_path=\$\("\$REPO_ROOT/scripts/fetch-base-image\.sh" ' "$REPO_ROOT/scripts/$caller.sh" ||
+		bad "$caller.sh no longer captures fetch-base-image.sh as base_path=\$(...)"
+done
 
 [ "$fail" -eq 0 ]
 echo "fetch-base-image-kinds-test: PASS"

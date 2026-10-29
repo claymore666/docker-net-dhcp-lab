@@ -253,7 +253,7 @@ func c6Rig(t *testing.T, shape Shape) (*hRig, string, string) {
 }
 
 func TestRunC6PassesWhenTheClientDeclinesTheSquattedAddress(t *testing.T) {
-	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan} {
 		t.Run(string(shape), func(t *testing.T) {
 			r, x, wire := c6Rig(t, shape)
 			v := runC6Tuned(context.Background(), r.e, cFast)
@@ -270,6 +270,32 @@ func TestRunC6PassesWhenTheClientDeclinesTheSquattedAddress(t *testing.T) {
 			needStops(t, "squatter", f.squatStops, 1)
 			needCleanup(t, r.h.bRunner, "c6", containerName(r.e, NameC6))
 		})
+	}
+}
+
+// The plugin refuses conflict_check=wait on ipvlan at network create, so
+// C6 is N/A there with that reason and touches neither the source nor the
+// host; the same rig on the other shapes still runs.
+func TestRunC6IsNAOnIpvlanBeforeTouchingAnything(t *testing.T) {
+	r, _, _ := c6Rig(t, ShapeIpvlan)
+	v := runC6Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, NA)
+	needWritten(t, r.e, v)
+	for _, want := range []string{"conflict_check=wait", "refused on ipvlan", "RFC 5227 section 2.1.1", "C6b covers async"} {
+		needReason(t, v, want)
+	}
+	f := r.src.fakeAdapter
+	if len(f.reservedID) != 0 || len(f.squats) != 0 || len(r.h.cmds) != 0 {
+		t.Errorf("ipvlan C6 acted before answering: reserved %v squats %v host cmds %v", f.reservedID, f.squats, r.h.cmds)
+	}
+}
+
+// C6b drives async, which ipvlan accepts, so it stays a real run there.
+func TestRunC6bIsNotNAOnIpvlan(t *testing.T) {
+	r := hSetup(t, ShapeIpvlan)
+	r.cap.fn = func(string) []DHCPMsg { return nil }
+	if v := runC6bTuned(context.Background(), r.e, cFast); v.Result == NA {
+		t.Errorf("C6b on ipvlan answered N/A: %s", v.Reason)
 	}
 }
 

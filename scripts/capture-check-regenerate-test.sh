@@ -111,6 +111,22 @@ if [[ "$got_missing" == *"disagreement"* ]]; then
 	fail=1
 fi
 
+# Case H: a retry pass passes its own capture as the third argument; the
+# deferred file is judged against that pcap, not <cell>.pcap (#95). The
+# main pass's pcap here is a different exchange, so reading it instead
+# could not give the clean verdict.
+work3=$(mktemp -d)
+trap 'rm -rf "$work" "$work2" "$work3"' EXIT
+cp "$DATA/dhcp-wrong-mac.pcap" "$work3/cellH.pcap"
+cp "$DATA/dhcp-good.pcap" "$work3/cellH.retry.pcap"
+echo "capture check deferred to the final pcap, mac $GOOD_MAC" >"$work3/cellH-bridge-A1-capture-check.txt"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" cellH "$work3" "$work3/cellH.retry.pcap" >/dev/null
+got_retry=$(cat "$work3/cellH-bridge-A1-capture-check.txt")
+if [[ "$got_retry" != *"clean 4-message exchange"* ]]; then
+	echo "capture-check-regenerate-test: FAIL -- case H (third argument): the retry capture was not the one replayed, got \"$got_retry\"" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

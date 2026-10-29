@@ -147,6 +147,11 @@ type c5Rig struct {
 	lateRenewal, noRebind, rebindByDead bool
 	noSurvivorRenew, renewToSurvivor    bool
 	earlyRenewal                        bool
+	survNoAck, survAckOtherXID          bool
+	survAckOtherAddr                    bool
+	survAckFrom                         string
+	survAckBefore                       bool
+	renewTo                             string
 	bindServer                          string
 	lease                               time.Duration
 }
@@ -178,21 +183,44 @@ func newC5Rig(t *testing.T, shape Shape, grant string) *c5Rig {
 		}
 		out := []DHCPMsg{ack(b.bind, "b", addr, bs, lease)}
 		t1, t2 := b.bind.Add(r.lease/2), b.bind.Add(r.lease*7/8)
+		dst := gid
+		if r.renewToSurvivor {
+			dst = sid
+		}
+		if r.renewTo != "" {
+			dst = r.renewTo
+		}
 		switch {
 		case r.noRenewal:
 		case r.earlyRenewal:
-			out = append(out, req(b.bind.Add(100*ms), "r", addr, gid))
+			out = append(out, req(b.bind.Add(100*ms), "r", addr, dst))
 		case r.lateRenewal:
-			out = append(out, req(t2.Add(5*ms), "r", addr, gid))
-		case r.renewToSurvivor:
-			out = append(out, req(t1.Add(10*ms), "r", addr, sid))
+			out = append(out, req(t2.Add(5*ms), "r", addr, dst))
 		default:
-			out = append(out, req(t1.Add(10*ms), "r", addr, gid))
+			out = append(out, req(t1.Add(10*ms), "r", addr, dst))
+		}
+		if r.renewToSurvivor && !r.noRenewal && !r.survNoAck {
+			xid, yi := "r", addr
+			if r.survAckOtherXID {
+				xid = "z"
+			}
+			if r.survAckOtherAddr {
+				yi = "10.200.1.99"
+			}
+			from := sid
+			if r.survAckFrom != "" {
+				from = r.survAckFrom
+			}
+			at := t1.Add(20 * ms)
+			if r.survAckBefore {
+				at = t1.Add(-5 * ms)
+			}
+			out = append(out, ack(at, xid, yi, from, r.lease))
 		}
 		if r.deadACK {
 			out = append(out, ack(b.bind.Add(r.lease/4), "r", addr, gid, r.lease))
 		}
-		if !r.noRebind {
+		if !r.noRebind && !r.renewToSurvivor {
 			by := sid
 			if r.rebindByDead {
 				by = gid
@@ -228,6 +256,28 @@ func TestRunC5PassesWhenTheSurvivorAnswersTheRebind(t *testing.T) {
 	}
 }
 
+// #100: the client renewed with the partner that did not grant the lease
+// and that partner, alive, ACKed it; no T2 rebind follows. The verdict
+// names the partner that answered.
+func TestRunC5PassesWhenTheClientRenewsWithTheSurvivor(t *testing.T) {
+	for _, tc := range []struct {
+		shape Shape
+		grant string
+	}{{ShapeMacvlan, "primary"}, {ShapeBridge, "partner"}} {
+		t.Run(string(tc.shape)+"-"+tc.grant, func(t *testing.T) {
+			r := newC5Rig(t, tc.shape, tc.grant)
+			r.renewToSurvivor = true
+			v := runC5Tuned(context.Background(), r.e, cFast)
+			needResult(t, v, PASS)
+			needWritten(t, r.e, v)
+			needReason(t, v, "unicast to the other partner "+r.p.ids[r.p.other(tc.grant)])
+			needReason(t, v, "ACKed by "+r.p.ids[r.p.other(tc.grant)])
+			needOps(t, r.p, "stop "+tc.grant, "start "+tc.grant, "restore")
+			needCleanup(t, r.h.bRunner, "", r.name)
+		})
+	}
+}
+
 func TestRunC5Judges(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -244,7 +294,16 @@ func TestRunC5Judges(t *testing.T) {
 		{"renewal only after T2", func(r *c5Rig) { r.lateRenewal = true }, FAIL, "between T1"},
 		// T1 less the 1 s jitter must fall after bind + 100 ms, so this lease is 2.4 s (#12).
 		{"renewal only before T1", func(r *c5Rig) { r.earlyRenewal, r.lease = true, 2400*ms }, FAIL, "between T1"},
-		{"renewal unicast to the survivor", func(r *c5Rig) { r.renewToSurvivor = true }, FAIL, "no REQUEST from"},
+		{"renewal to a server that is not a partner", func(r *c5Rig) { r.renewTo = "10.200.1.9" }, FAIL, "no REQUEST from"},
+		{"renewal to the survivor never ACKed", func(r *c5Rig) { r.renewToSurvivor, r.survNoAck = true, true }, FAIL, "none ACKed by it"},
+		{"renewal to the survivor ACKed under another xid", func(r *c5Rig) { r.renewToSurvivor, r.survAckOtherXID = true, true }, FAIL, "none ACKed by it"},
+		{"renewal to the survivor ACKed for another address", func(r *c5Rig) { r.renewToSurvivor, r.survAckOtherAddr = true, true }, FAIL, "none ACKed by it"},
+		{"renewal to the survivor ACKed by a third server", func(r *c5Rig) { r.renewToSurvivor, r.survAckFrom = true, "10.200.1.9" }, FAIL, "none ACKed by it"},
+		{"renewal to the survivor with the only ACK older than the REQUEST", func(r *c5Rig) { r.renewToSurvivor, r.survAckBefore = true, true }, FAIL, "none ACKed by it"},
+		{"renewal to the survivor ACKed but the address is unreachable", func(r *c5Rig) { r.renewToSurvivor = true; r.src.reachErr = errors.New("no route") }, FAIL, "renewed with the survivor but not reachable"},
+		{"renewal to the survivor only after T2", func(r *c5Rig) { r.renewToSurvivor, r.lateRenewal = true, true }, FAIL, "between T1"},
+		{"renewal to the survivor only before T1", func(r *c5Rig) { r.renewToSurvivor, r.earlyRenewal, r.lease = true, true, 2400*ms }, FAIL, "between T1"},
+		{"renewal to the survivor while the stopped peer ACKs", func(r *c5Rig) { r.renewToSurvivor, r.deadACK = true, true }, BLOCKED, "the stop did not land"},
 		{"no rebind", func(r *c5Rig) { r.noRebind = true }, FAIL, "no broadcast REQUEST"},
 		{"rebind ACKed by the stopped peer", func(r *c5Rig) { r.rebindByDead, r.deadACK = true, false }, BLOCKED, "the stop did not land"},
 		{"the survivor never extends", func(r *c5Rig) { r.noSurvivorRenew = true }, FAIL, "shows no renewed lease"},

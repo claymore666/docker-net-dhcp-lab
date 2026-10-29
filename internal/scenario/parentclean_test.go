@@ -32,6 +32,16 @@ type ipRunner struct {
 }
 
 func (f *ipRunner) Run(_ context.Context, cmd string) (string, error) {
+	// The other-namespace listing (#97): no netns, no container, the
+	// plugin in the host's namespace.
+	switch {
+	case cmd == "ip netns list", cmd == "sudo docker ps -q":
+		return "", nil
+	case cmd == "sudo pgrep -x net-dhcp":
+		return "42\n", nil
+	case strings.HasPrefix(cmd, "sudo nsenter -t 42 -n "):
+		return ipLinkClean, nil
+	}
 	if !strings.HasPrefix(cmd, "ip -d -o link show") {
 		return "", fmt.Errorf("unexpected command %q", cmd)
 	}

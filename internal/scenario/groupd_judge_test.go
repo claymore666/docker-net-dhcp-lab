@@ -3,6 +3,7 @@ package scenario
 import (
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,13 @@ func d6At(s float64) time.Time { return d6T0.Add(time.Duration(s * float64(time.
 
 func d6Msg(at float64, typ string, rapid bool, na, ta []IA6) DHCP6Msg {
 	return DHCP6Msg{At: d6At(at), Type: typ, XID: "abc123", ClientDUID: d6DUID, Rapid: rapid, NA: na, TA: ta}
+}
+
+// confirmPair is the persistent client's Confirm and the server's Reply
+// to it, which carries a Status Code and no IA (RFC 8415 section 18.2.12;
+// synthetic, plugin #1369).
+func confirmPair(at float64) []DHCP6Msg {
+	return []DHCP6Msg{d6Msg(at, "CONFIRM", false, []IA6{{IAID: 1, Addr: d6NA}}, nil), d6Msg(at+0.1, "REPLY", false, nil, nil)}
 }
 
 func d6IA(a netip.Addr) []IA6 { return []IA6{{IAID: 1, Addr: a, Pref: 3600, Valid: 7200}} }
@@ -463,4 +471,70 @@ func TestD2SlowStartReadKeepsTheRACutoff(t *testing.T) {
 	o.Start.At = d6At(1)
 	o.Start.Got = d6At(80)
 	needF(t, judgeD2(o), FAIL, "no RA with fd42:200:0:100::/64 before it")
+}
+
+// The lines are synthetic, shaped as RFC 8415 section 18.2.12 and plugin
+// #1371 describe them: the Reply to a Confirm carries a Status Code and no IA.
+func TestJudgeF4WireAcceptsTheTrailingConfirm(t *testing.T) {
+	confirm := confirmPair
+	two := []DHCP6Msg{d6Msg(0, "SOLICIT", true, []IA6{{IAID: 1}}, nil), d6Msg(0.1, "REPLY", true, d6IA(d6NA), nil)}
+	four := goodD1().Msgs
+	asked := goodD1().Msgs
+	asked[0].Rapid = true
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(slices.Clone(two), confirm(1)...))), PASS, "Confirm and its Reply")
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(slices.Clone(two), append(confirm(1), confirm(2)...)...))), FAIL, "at most one CONFIRM REPLY")
+	needF(t, judgeF4Wire(false, false, rapidX(t, append(slices.Clone(four), confirm(1)...))), PASS, "Confirm and its Reply")
+	needF(t, judgeF4Wire(true, false, rapidX(t, append(slices.Clone(asked), confirm(1)...))), PASS, "Confirm and its Reply")
+	// ADVERTISE and REQUEST stay refused under rapid commit, Confirm or not.
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(slices.Clone(asked), confirm(1)...))), FAIL, "want SOLICIT REPLY")
+	// A Confirm nothing answers is not the persistent client's pair.
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(slices.Clone(two), confirm(1)[0]))), FAIL, "want SOLICIT REPLY")
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(slices.Clone(two), confirm(1)[0], d6Msg(1.1, "RENEW", false, d6IA(d6NA), nil)))), FAIL, "want SOLICIT REPLY")
+	// A Solicit that repeats under load collapses to one.
+	rep := []DHCP6Msg{two[0], d6Msg(0.05, "SOLICIT", true, []IA6{{IAID: 1}}, nil), two[1]}
+	needF(t, judgeF4Wire(true, true, rapidX(t, append(rep, confirm(1)...))), PASS, "two messages")
+}
+
+// D1 reads the lifetimes the persistent client installs; a row with no
+// Confirm, Renew or Rebind inside the window is an attach failure (plugin
+// #1369, lab #102). The Confirm lines are synthetic.
+func TestJudgeD1PersistentSeparatesAttachFromLifetimes(t *testing.T) {
+	o := goodD1()
+	o.Msgs = append(o.Msgs, confirmPair(1)...)
+	out, _ := judgeD1Persistent(o)
+	needF(t, out, PASS, "IA_NA")
+
+	bare := goodD1()
+	out, _ = judgeD1Persistent(bare)
+	needF(t, out, FAIL, "attach failure")
+	if out.Reason == "" || strings.Contains(out.Reason, "carries valid") {
+		t.Errorf("an attach failure reads as a lifetime fault: %q", out.Reason)
+	}
+
+	late := goodD1()
+	late.Msgs = append(late.Msgs, confirmPair(30)...)
+	out, _ = judgeD1Persistent(late)
+	needF(t, out, FAIL, "attach failure")
+
+	early := goodD1()
+	early.Msgs = append(early.Msgs, confirmPair(0.05)...)
+	out, _ = judgeD1Persistent(early)
+	needF(t, out, FAIL, "attach failure")
+
+	rebind := goodD1()
+	rebind.Msgs = append(rebind.Msgs, d6Msg(1, "REBIND", false, d6IA(d6NA), nil), d6Msg(1.1, "REPLY", false, d6IA(d6NA), nil))
+	out, _ = judgeD1Persistent(rebind)
+	needF(t, out, PASS, "IA_NA")
+
+	stuck := goodD1()
+	stuck.Msgs = append(stuck.Msgs, confirmPair(1)...)
+	stuck.Settled.Addrs[1].Valid, stuck.Settled.Addrs[1].Pref = forever, forever
+	out, _ = judgeD1Persistent(stuck)
+	needF(t, out, FAIL, "-1 is forever")
+
+	above := goodD1()
+	above.Msgs = append(above.Msgs, confirmPair(1)...)
+	above.Settled.Addrs[1].Valid = 7300
+	out, _ = judgeD1Persistent(above)
+	needF(t, out, FAIL, "carries valid 7300")
 }
