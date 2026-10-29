@@ -181,6 +181,9 @@ echo "== relay cell: source network-config, probe, run-cell abort (#11) =="
 ./scripts/relay-probe-test.sh
 ./scripts/run-cell-relay-test.sh
 
+echo "== run-cell.sh: a retry pass keeps the earlier journal, each peer's package version, BLOCKED rows after an abort (#95 #99 #101) =="
+./scripts/run-cell-pass-test.sh
+
 echo "== capture-start/capture-stop orchestration and sudo -n tests =="
 ./scripts/capture-lifecycle-test.sh
 
