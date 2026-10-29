@@ -203,6 +203,23 @@ func TestReadVerdictJoinsAContinuationLine(t *testing.T) {
 	}
 }
 
+// An empty value written as a bare "key:" (an editor trimmed the space) is
+// a field, not a continuation of the line before it (#94).
+func TestReadVerdictKeepsABareKeyAsAField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.verdict")
+	body := "scenario: A1-first-lease\ncell: kea\nshape: bridge\nresult: PASS\nisolation: recreated\nreason:\ngit_sha: abc123\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	v, err := ReadVerdict(path)
+	if err != nil {
+		t.Fatalf("ReadVerdict: %v", err)
+	}
+	if v.IsolationMethod != "recreated" || v.Reason != "" || v.GitSHA != "abc123" {
+		t.Fatalf("bare key glued onto the line before it: %+v", v)
+	}
+}
+
 // A broken-off line may itself hold ": " (ssh prints "port 22: timed
 // out"); its prefix is not a key, so it still joins the value (#94).
 func TestReadVerdictJoinsAContinuationLineHoldingAColon(t *testing.T) {
