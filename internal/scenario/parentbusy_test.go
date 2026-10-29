@@ -268,3 +268,23 @@ func TestNamespaceNamesAreValidated(t *testing.T) {
 		t.Fatalf("want 3 refused sections (netns name, container id, pid), got %d: %+v", bad, nss)
 	}
 }
+
+func TestBusyCaptureSaysWhichNamespaceCouldNotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	f := newNSFake(ipLinkClean, ipLinkClean)
+	f.errs[cmdCtrLinks] = errors.New("no such process")
+	c := &BusyCapture{Inner: f, Cell: "kea", EvidenceDir: dir}
+	_, _ = c.Run(context.Background(), cmdDockerRun)
+	if got := readBusyFile(t, dir); !strings.Contains(got, "== container web (pid 777) ==\nunreadable: no such process\n") {
+		t.Fatalf("an unreadable namespace must be named, not left blank:\n%s", got)
+	}
+}
+
+// @if30 is another device than @if3 (#97).
+func TestParentCleanDoesNotMatchALongerIfindex(t *testing.T) {
+	other := strings.ReplaceAll(ipLinkChildInContainer, "eth0@if3:", "eth0@if30:")
+	f := newNSFake(other, ipLinkClean)
+	if _, left, err := WaitParentClean(context.Background(), f, "eth1", time.Second, time.Millisecond); err != nil || len(left) != 0 {
+		t.Fatalf("a child of ifindex 30 is not a child of ifindex 3: %v %v", left, err)
+	}
+}
