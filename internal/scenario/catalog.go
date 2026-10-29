@@ -198,6 +198,9 @@ const (
 	NameF6  = "F6-prefix-delegation"
 	NameF7  = "F7-pref64"
 	NameF8  = "F8-forcerenew"
+
+	NameE1 = "E1-audit-ledger"
+	NameE2 = "E2-metrics-vs-server"
 )
 
 // MinPoolAddresses is the most pool addresses one full pass under one
@@ -230,13 +233,14 @@ const (
 // plus group F's 12: one each for the user class, 108 not asked, both rapid commits,
 // the temporary address and prefix delegation, two each for 108 forced and
 // FORCERENEW (their control clients, #21) and for PREF64, whose second
-// container binds after the RA (#23).
+// container binds after the RA (#23),
+// plus group E's 2: one each for E1 and E2, each on its own network (#15).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against PoolDemand, this sum less what the cell's source cannot run
 // (the C5 family's 22 count only on a failover pair, lab #12), and
 // aborts the cell as a lab error, never as a scenario FAIL.
 // TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 117
+const MinPoolAddresses = 119
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -255,6 +259,7 @@ var poolDemand = map[string]int{
 	NameD4b: 1,
 	NameF1:  1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 1, NameF5: 1, NameF6: 1, NameF7: 2, NameF8: 2,
+	NameE1: 1, NameE2: 1,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -414,6 +419,8 @@ var Catalog = []Scenario{
 	{Name: NameF6, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runF6},
 	{Name: NameF7, Needs: []sourceadapter.Capability{sourceadapter.CapV6}, Run: runF7},
 	{Name: NameF8, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapForceRenewNonce}, Run: runF8},
+	{Name: NameE1, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE1},
+	{Name: NameE2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE2},
 }
 
 // PoolDemand is the worst-case pool need of the scenarios in ss that source can run (lab #12).
