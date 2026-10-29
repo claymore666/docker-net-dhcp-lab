@@ -206,7 +206,7 @@ func TestOpenwrtEditsWriteOnlyUCIAndDnsmasqConf(t *testing.T) {
 // (lab #9 D14): a rule over commands never sent proves nothing.
 func TestOpenwrtExerciseReachesTheRestoreAndReachable(t *testing.T) {
 	want := map[string]bool{"sudo tee " + openwrtNetConf: false, "sudo tee " + openwrtDHCPConf: false,
-		"sudo tee " + openwrtLabConf: false, "ping -c1 -W2 10.200.15.129": false}
+		"sudo tee " + openwrtLabConf: false, "sudo ping -c1 -W2 10.200.15.129": false}
 	for _, c := range owExercise(t) {
 		for w := range want {
 			if strings.HasPrefix(c, w) {
@@ -381,5 +381,53 @@ func TestOpenwrtLeaseLineParses(t *testing.T) {
 	if err != nil || len(ls) != 2 || ls[0].Address != "10.200.15.129" || ls[0].ClientID != "01:02:00:00:00:09:01" ||
 		ls[1].MAC != "02:00:00:00:09:03" || ls[1].Address != "10.200.15.131" || ls[1].ClientID != "" {
 		t.Errorf("leases = %+v, %v", ls, err)
+	}
+}
+
+// OpenWrt's busybox ping needs root (run 2, lab #98); every other source
+// keeps the unprivileged command byte for byte.
+func TestReachableSudoOnlyOnOpenwrt(t *testing.T) {
+	cases := []struct {
+		name string
+		a    func(Runner) Adapter
+		addr string
+		want string
+	}{
+		{"openwrt", func(r Runner) Adapter { return &OpenwrtAdapter{Runner: r} }, "10.200.15.129", "sudo ping -c1 -W2 10.200.15.129"},
+		{"kea", func(r Runner) Adapter { return &KeaAdapter{Runner: r} }, "10.200.1.150", "ping -c1 -W2 10.200.1.150"},
+		{"isc-dhcp", func(r Runner) Adapter { return &ISCDHCPAdapter{Runner: r} }, "10.200.1.150", "ping -c1 -W2 10.200.1.150"},
+		{"dnsmasq", func(r Runner) Adapter { return &DnsmasqAdapter{Runner: r} }, "10.200.1.150", "ping -c1 -W2 10.200.1.150"},
+		{"pihole", func(r Runner) Adapter { return &PiholeAdapter{Runner: r} }, "10.200.1.150", "ping -c1 -W2 10.200.1.150"},
+		{"udhcpd", func(r Runner) Adapter { return &UdhcpdAdapter{Runner: r} }, "10.200.1.150", "ping -c1 -W2 10.200.1.150"},
+	}
+	for _, tc := range cases {
+		r := &fakeRunner{}
+		if err := tc.a(r).Reachable(context.Background(), tc.addr); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(r.calls) != 1 || r.calls[0] != tc.want {
+			t.Errorf("%s: sent %q, want exactly %q", tc.name, r.calls, tc.want)
+		}
+	}
+}
+
+// The prefix reaches both address families and never the validation:
+// a bad address stops before any command, on OpenWrt too (lab #98).
+func TestReachableAsPrefixesBothFamiliesAndKeepsTheGuard(t *testing.T) {
+	r := &fakeRunner{}
+	if err := reachableAs(context.Background(), r, "fd42:200:0:300::1f1", "sudo "); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls[0] != "sudo ping -6 -c1 -W2 fd42:200:0:300::1f1" {
+		t.Errorf("v6 command %q", r.calls[0])
+	}
+	r = &fakeRunner{}
+	for _, bad := range []string{"10.200.15.129; reboot", "not-an-ip", ""} {
+		if err := (&OpenwrtAdapter{Runner: r}).Reachable(context.Background(), bad); err == nil {
+			t.Errorf("Reachable(%q) accepted", bad)
+		}
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("a bad address reached the runner: %q", r.calls)
 	}
 }

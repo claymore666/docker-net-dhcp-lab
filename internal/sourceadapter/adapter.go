@@ -285,13 +285,20 @@ func validateAddr(addr string) (string, error) {
 // through validateAddr first, so it is stdlib's own normalized form
 // before it ever reaches the command line.
 func reachable(ctx context.Context, r Runner, addr string) error {
-	ping := "ping -c1 -W2 "
+	return reachableAs(ctx, r, addr, "")
+}
+
+// reachableAs is reachable with prefix in front of ping: OpenWrt's busybox
+// ping needs root, every other source image pings unprivileged (run 2,
+// lab #98).
+func reachableAs(ctx context.Context, r Runner, addr, prefix string) error {
+	ping := prefix + "ping -c1 -W2 "
 	ip, err := validateAddr(addr)
 	if err != nil {
 		if ip, err = validateAddr6(addr); err != nil {
 			return err
 		}
-		ping = "ping -6 -c1 -W2 "
+		ping = prefix + "ping -6 -c1 -W2 "
 	}
 	if _, err := r.Run(ctx, ping+ip); err != nil {
 		return fmt.Errorf("ping %s: %w", ip, err)
