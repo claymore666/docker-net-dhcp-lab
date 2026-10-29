@@ -9,6 +9,9 @@
 # BaseImage.Kind and .ChecksumURL (#9); kind defaults to qcow2.
 set -euo pipefail
 
+# stdout carries the image path and nothing else: callers capture it as
+# `base_path=$(...)` and hand it to `qemu-img create -b`, which reads a
+# progress line there as a protocol prefix (lab #92). Progress goes to stderr.
 usage='usage: fetch-base-image.sh <name> <url> [qcow2|archive|built] [checksum-url]'
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE_DIR=${LAB_IMAGE_CACHE:-/srv/lab/images}
@@ -27,10 +30,10 @@ check_pin() {
 	sum=$(sha256sum "$file" | awk '{print $1}')
 	pinned=$(awk 'NF && $1 !~ /^#/ {print $1; exit}' "$PINNED" 2>/dev/null || true)
 	if [ -z "$pinned" ]; then
-		echo "fetch-base-image: no checksum pinned yet in $PINNED"
-		echo "fetch-base-image: pinning the checksum of this download: $sum"
+		echo "fetch-base-image: no checksum pinned yet in $PINNED" >&2
+		echo "fetch-base-image: pinning the checksum of this download: $sum" >&2
 		printf '%s  %s\n' "$sum" "$label" >>"$PINNED"
-		echo "fetch-base-image: commit $PINNED before this image is trusted again"
+		echo "fetch-base-image: commit $PINNED before this image is trusted again" >&2
 	elif [ "$sum" != "$pinned" ]; then
 		echo "fetch-base-image: REFUSED -- $file is $sum, pinned value is $pinned" >&2
 		rm -f "$file" "$DEST" "$DEST.sha256"
@@ -47,7 +50,7 @@ download() {
 		exec 9>"$CACHE_DIR/$NAME.lock"
 		flock 9
 		if [ ! -f "$out" ]; then
-			echo "fetch-base-image: downloading $NAME"
+			echo "fetch-base-image: downloading $NAME" >&2
 			curl -fsSL -o "$out.part" "$url"
 			mv "$out.part" "$out"
 		fi
@@ -93,7 +96,7 @@ archive)
 	exec 9>"$CACHE_DIR/$NAME.lock"
 	flock 9
 	if [ ! -f "$DEST" ] || ! (cd "$CACHE_DIR" && sha256sum --status -c "$DEST.sha256" 2>/dev/null); then
-		echo "fetch-base-image: converting $ARCHIVE"
+		echo "fetch-base-image: converting $ARCHIVE" >&2
 		raw="$DEST.raw.part"
 		case "$ext" in
 		zip)
