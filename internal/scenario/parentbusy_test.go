@@ -288,3 +288,19 @@ func TestParentCleanDoesNotMatchALongerIfindex(t *testing.T) {
 		t.Fatalf("a child of ifindex 30 is not a child of ifindex 3: %v %v", left, err)
 	}
 }
+
+func TestBusyCaptureSaysWhenNamespacesCannotBeListed(t *testing.T) {
+	dir := t.TempDir()
+	f := newNSFake(ipLinkClean, ipLinkChildInContainer)
+	f.errs["ip netns list"] = errors.New("ssh: connection reset")
+	c := &BusyCapture{Inner: f, Cell: "kea", EvidenceDir: dir}
+	if _, err := c.Run(context.Background(), cmdDockerRun); err == nil {
+		t.Fatal("the EBUSY must reach the caller")
+	}
+	got := readBusyFile(t, dir)
+	for _, want := range []string{"== host ==", "== other namespaces ==", "unreadable: ", "connection reset"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file lacks %q:\n%s", want, got)
+		}
+	}
+}
