@@ -366,9 +366,16 @@ func cmdRemaining(args []string) int {
 	return 0
 }
 
+// abortReasonPrefix starts the reason of every row writeAbortRows
+// writes, so a results page tells an aborted shape from a plugin-side
+// BLOCKED (#101).
+const abortReasonPrefix = "the shape was aborted by an infrastructure error before this scenario ran: "
+
 // scenariosWithVerdict is the set of scenario names cell/shape already has
 // a verdict for in evidenceDir, read from each *.verdict file's own
-// content, never its file name.
+// content, never its file name. An abort row (writeAbortRows) does not
+// count: the scenario never ran, so a resumed or retry pass still lists it
+// and its real verdict replaces the row (#101).
 func scenariosWithVerdict(evidenceDir, cellName, shape string) (map[string]bool, error) {
 	matches, err := filepath.Glob(filepath.Join(evidenceDir, "*.verdict"))
 	if err != nil {
@@ -380,17 +387,16 @@ func scenariosWithVerdict(evidenceDir, cellName, shape string) (map[string]bool,
 		if err != nil {
 			return nil, err
 		}
-		if v.Cell == cellName && string(v.Shape) == shape {
+		if v.Cell == cellName && string(v.Shape) == shape && !isAbortRow(v) {
 			done[v.Scenario] = true
 		}
 	}
 	return done, nil
 }
 
-// abortReasonPrefix starts the reason of every row writeAbortRows
-// writes, so a results page tells an aborted shape from a plugin-side
-// BLOCKED (#101).
-const abortReasonPrefix = "the shape was aborted by an infrastructure error before this scenario ran: "
+func isAbortRow(v scenario.Verdict) bool {
+	return v.Result == scenario.BLOCKED && strings.HasPrefix(v.Reason, abortReasonPrefix)
+}
 
 // writeAbortRows writes a BLOCKED verdict carrying reason for every
 // catalog scenario of cell/shape that has no verdict in evidenceDir yet

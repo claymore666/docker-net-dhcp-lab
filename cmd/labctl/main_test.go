@@ -446,8 +446,52 @@ func TestWriteAbortRowsFillsOnlyTheMissingScenarios(t *testing.T) {
 			t.Fatalf("%s: result %s reason %q", s.Name, v.Result, v.Reason)
 		}
 	}
-	if left, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM)); err != nil || len(left) != len(scenario.Catalog) {
-		t.Fatalf("after the abort the shape still lacks rows: %d of %d, err %v", len(left), len(scenario.Catalog), err)
+	if left, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM)); err != nil || len(left) != 2 {
+		t.Fatalf("after the abort %d scenarios count as done, want only the 2 real verdicts, err %v", len(left), err)
+	}
+}
+
+// #101: an abort row is not a verdict. A second pass over the same
+// evidence directory (a resume, or run-cells.sh's retry pass) must still
+// list the scenarios the abort covered, and the real verdict it writes
+// replaces the row.
+func TestAbortRowsDoNotStopASecondPassFromRunningTheScenarios(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	first := scenario.Catalog[0].Name
+	if err := scenario.Write(dir, scenario.Verdict{Scenario: first, Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.NA, Reason: "ran before the abort", GitSHA: "a", Timestamp: at}); err != nil {
+		t.Fatal(err)
+	}
+	aborted, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "b", "boom", at)
+	if err != nil || len(aborted) != len(scenario.Catalog)-1 {
+		t.Fatalf("abort wrote %d rows, err %v", len(aborted), err)
+	}
+
+	done, err := scenariosWithVerdict(dir, "dnsmasq", string(scenario.ShapeBridgeIPAM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := remainingScenarioNames(scenario.Catalog, done)
+	if len(again) != len(aborted) || again[0] != aborted[0] {
+		t.Fatalf("second pass would run %d scenarios, want the %d the abort covered", len(again), len(aborted))
+	}
+
+	real := scenario.Verdict{Scenario: again[0], Cell: "dnsmasq", Shape: scenario.ShapeBridgeIPAM, Result: scenario.FAIL, Reason: "ran on the second pass", GitSHA: "c", Timestamp: at}
+	if err := scenario.Write(dir, real); err != nil {
+		t.Fatal(err)
+	}
+	v, err := scenario.ReadVerdict(filepath.Join(dir, real.FileName()))
+	if err != nil || v.Result != scenario.FAIL || isAbortRow(v) {
+		t.Fatalf("after the second pass %s reads %s %q (err %v), want the real verdict", again[0], v.Result, v.Reason, err)
+	}
+
+	rows, err := writeAbortRows(dir, "dnsmasq", scenario.ShapeBridgeIPAM, "d", "boom again", at)
+	if err != nil || len(rows) != len(aborted)-1 {
+		t.Fatalf("a second abort rewrote %d rows, want %d, err %v", len(rows), len(aborted)-1, err)
+	}
+	v, err = scenario.ReadVerdict(filepath.Join(dir, real.FileName()))
+	if err != nil || v.Result != scenario.FAIL {
+		t.Fatalf("a second abort replaced a real verdict: %s (err %v)", v.Result, err)
 	}
 }
 
