@@ -43,7 +43,7 @@ runcmd:
         eth1.100:
           id: 100
           link: eth1
-          addresses: [10.200.152.2/24]
+          addresses: [10.200.152.3/24]
     NETEOF
   - chmod 600 /etc/netplan/60-lab-vlan.yaml
   - netplan apply

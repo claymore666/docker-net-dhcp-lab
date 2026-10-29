@@ -125,9 +125,8 @@ func (h *e3Host) Run(ctx context.Context, cmd string) (string, error) {
 				h.links = append(h.links, e3Link{name: f[4], kind: "vlan", vlanID: 100, parent: "eth1"})
 			}
 		case "del":
-			if i := h.find(f[4]); i >= 0 && h.links[i].kind == f[6] {
-				h.del(f[4])
-			}
+			// ip(8) does not refuse a link of another kind here (measured).
+			h.del(f[4])
 		}
 		return "", nil
 	case strings.Contains(cmd, "docker network create"):
@@ -662,4 +661,80 @@ func TestRunE3bWaitsForTheTaggedCapture(t *testing.T) {
 	t3 := e3Fast
 	t3.captureWait = 200 * time.Millisecond
 	needResult(t, runE3bTuned(context.Background(), r.e, t3), PASS)
+}
+
+// Row 9, measured: `ip link del NAME type dummy` deletes a VLAN of that
+// name too, so the cleanup must not run it for a name that is not ours.
+// Here the plugin wrongly accepted refusal 1 and left an eth1.100 VLAN;
+// the dummy pre-create then fails on it and nothing of ours is on the host.
+func TestRunE3bCleanupKeepsALinkItDidNotMake(t *testing.T) {
+	r := e3Setup(t, ShapeMacvlan, "6.12.1")
+	r.e.Host = &acceptsAndLeaves{r.h}
+	v := runE3bTuned(context.Background(), r.e, e3Fast)
+	if v.Result == PASS {
+		t.Fatalf("a wrongly accepted create passed")
+	}
+	if r.h.find("eth1.100") < 0 {
+		t.Errorf("the cleanup deleted an eth1.100 it did not make")
+	}
+}
+
+type acceptsAndLeaves struct{ *e3Host }
+
+func (u *acceptsAndLeaves) Run(ctx context.Context, cmd string) (string, error) {
+	if strings.Contains(cmd, "docker network create") && strings.Contains(cmd, "-r1") {
+		u.cmds = append(u.cmds, cmd)
+		u.links = append(u.links, e3Link{name: "eth1.100", kind: "vlan", vlanID: 100, parent: "eth1", alias: "docker-net-dhcp"})
+		return "", nil
+	}
+	return u.e3Host.Run(ctx, cmd)
+}
+
+// Row 8, counters: a plugin that has counted renames before this run is
+// judged on the change, not on the total.
+func TestRunE3aJudgesCounterChangesNotTotals(t *testing.T) {
+	for _, kernel := range []string{"6.12.1", "6.1.0"} {
+		t.Run(kernel, func(t *testing.T) {
+			r := e3Setup(t, ShapeBridge, kernel)
+			r.h.applied, r.h.failures = 5, 7
+			needResult(t, runE3aTuned(context.Background(), r.e, e3Fast), PASS)
+		})
+	}
+}
+
+// Row 9: the plugin swaps the user's dummy for its own VLAN under the
+// same name; the verdict is FAIL and the cleanup leaves the VLAN alone
+// instead of deleting it by name. (#15)
+func TestRunE3bCleanupKeepsAVLANThatTookTheDummysName(t *testing.T) {
+	r := e3Setup(t, ShapeMacvlan, "6.12.1")
+	r.e.Host = &swapsDummy{r.h}
+	if v := runE3bTuned(context.Background(), r.e, e3Fast); v.Result != FAIL {
+		t.Fatalf("got %s %q, want FAIL", v.Result, v.Reason)
+	}
+	if i := r.h.find("eth1.100"); i < 0 || r.h.links[i].kind != "vlan" {
+		t.Errorf("the cleanup deleted the plugin's VLAN")
+	}
+}
+
+type swapsDummy struct{ *e3Host }
+
+func (u *swapsDummy) Run(ctx context.Context, cmd string) (string, error) {
+	out, err := u.e3Host.Run(ctx, cmd)
+	if strings.Contains(cmd, "docker network create") && strings.Contains(cmd, "-r2") {
+		u.del("eth1.100")
+		u.links = append(u.links, e3Link{name: "eth1.100", kind: "vlan", vlanID: 100, parent: "eth1", alias: "docker-net-dhcp"})
+	}
+	return out, err
+}
+
+// Row 9: a link that is already gone is not deleted again. (#15)
+func TestRunE3bCleanupSkipsALinkThatIsGone(t *testing.T) {
+	r := e3Setup(t, ShapeMacvlan, "6.12.1")
+	r.e.Host = &eatsDummy{r.h}
+	needResult(t, runE3bTuned(context.Background(), r.e, e3Fast), FAIL)
+	for _, c := range r.h.cmds {
+		if strings.HasPrefix(c, "sudo ip link del eth1.100") {
+			t.Errorf("a delete for a link that was gone: %s", c)
+		}
+	}
 }

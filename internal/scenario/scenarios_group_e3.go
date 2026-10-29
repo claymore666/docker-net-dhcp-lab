@@ -208,14 +208,27 @@ func runE3b(ctx context.Context, e Env) Verdict { return runE3bTuned(ctx, e, e3R
 // removes exactly those and never a link the plugin owns (#15 row 9).
 type e3bMade struct{ vlan100, dummy bool }
 
-// e3bCleanup removes the links the scenario pre-created. `type vlan` and
-// `type dummy` make ip refuse anything else under that name. (#15)
+// e3bCleanup removes the links the scenario pre-created and only those:
+// a link is deleted when this run made it and the name still carries the
+// kind it made. `ip link del NAME type K` does not refuse another kind
+// (measured in a netns), so the kind is read first. (#15)
 func e3bCleanup(ctx context.Context, e Env, m *e3bMade) {
-	if m.vlan100 {
-		_, _ = e.Host.Run(ctx, "sudo ip link del "+e3bUserVlan+" type vlan")
+	var links []ipLink
+	read := false
+	if out, err := e.Host.Run(ctx, "ip -d -o link show"); err == nil {
+		links, read = parseIPLinks(out), true
 	}
-	if m.dummy {
-		_, _ = e.Host.Run(ctx, "sudo ip link del "+e3bVLANName+" type dummy")
+	for _, c := range []struct {
+		made       bool
+		name, kind string
+	}{{m.vlan100, e3bUserVlan, "vlan"}, {m.dummy, e3bVLANName, "dummy"}} {
+		if !c.made {
+			continue
+		}
+		if l, there := findLink(links, c.name); read && (!there || l.Kind != c.kind) {
+			continue
+		}
+		_, _ = e.Host.Run(ctx, "sudo ip link del "+c.name+" type "+c.kind)
 	}
 }
 
@@ -311,10 +324,10 @@ func runE3bTuned(ctx context.Context, e Env, t e3Tune) Verdict {
 	}
 
 	// Refusal 1: the same VLAN ID already exists under another name. (#15)
-	made.vlan100 = true
 	if _, err := e.Host.Run(ctx, fmt.Sprintf("sudo ip link add %s link %s type vlan id 100", e3bUserVlan, SegmentNIC)); err != nil {
 		return blk("could not pre-create %s: %v", e3bUserVlan, err)
 	}
+	made.vlan100 = true
 	_, r1 := NetworkUpExtra(ctx, e.Host, e.Network, e.Shape, e3bNetSuffix+"-r1", []string{"vlan=100"})
 	defer NetworkDownExtra(bCleanupCtx(ctx), e.Host, e.Network, e3bNetSuffix+"-r1")
 	if r1 == nil {
@@ -329,10 +342,10 @@ func runE3bTuned(ctx context.Context, e Env, t e3Tune) Verdict {
 	made.vlan100 = false
 
 	// Refusal 2: a user-made dummy sits where the plugin would put the VLAN. (#15)
-	made.dummy = true
 	if _, err := e.Host.Run(ctx, "sudo ip link add "+e3bVLANName+" type dummy"); err != nil {
 		return blk("could not pre-create the dummy %s: %v", e3bVLANName, err)
 	}
+	made.dummy = true
 	_, r2 := NetworkUpExtra(ctx, e.Host, e.Network, e.Shape, e3bNetSuffix+"-r2", []string{"vlan=100"})
 	defer NetworkDownExtra(bCleanupCtx(ctx), e.Host, e.Network, e3bNetSuffix+"-r2")
 	if r2 == nil {

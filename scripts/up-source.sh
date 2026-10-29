@@ -144,14 +144,16 @@ class_pool_start="$class_prefix.$class_first_host"
 class_pool_end="$class_prefix.$class_last_host"
 
 # E3b (#15): the VLAN 100 pool on the source's eth1.100 sits at segment
-# third octet + 150 (C9 already uses +100) (internal/labyaml/vlan.go carries the rule and a test
-# pins this derivation to it). Source at .2, pool .100-.200 like the main.
+# third octet + 150 (C9 already uses +100); internal/labyaml/vlan.go carries
+# the rule and a test pins this derivation to it. The source keeps its own
+# last octet (a failover partner is .3, not a second .2); pool .100-.200.
 vlan_id=100
 vlan_third=${seg_network#10.200.}
 vlan_third=$(( ${vlan_third%%.*} + 150 ))
 vlan_prefix=10.200.$vlan_third
 vlan_subnet=$vlan_prefix.0/24
-vlan_addr=$vlan_prefix.2
+vlan_host=${seg_addr%%/*}
+vlan_addr=$vlan_prefix.${vlan_host##*.}
 vlan_pool_start=$vlan_prefix.100
 vlan_pool_end=$vlan_prefix.200
 

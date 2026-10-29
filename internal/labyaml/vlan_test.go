@@ -91,13 +91,20 @@ func TestVLANShellDerivationMatchesGo(t *testing.T) {
 	}
 	for _, seg := range []string{"10.200.0.0/24", "10.200.3.0/24", "10.200.11.0/24", "10.200.16.0/24", "10.200.17.0/24"} {
 		want, _ := VLANSubnet(seg)
-		script := "seg_network=" + strings.TrimSuffix(seg, "/24") + "\n" + strings.Join(lines, "\n") + "\necho \"$vlan_subnet\"\n"
-		out, err := exec.Command("bash", "-c", script).Output()
-		if err != nil {
-			t.Fatalf("%s: %v", seg, err)
-		}
-		if got := strings.TrimSpace(string(out)); got != want {
-			t.Errorf("%s: shell %q, Go %q", seg, got, want)
+		base := strings.TrimSuffix(seg, ".0/24")
+		// A failover partner sits at .3 on the segment and must not share
+		// the primary's VLAN address (lab #15).
+		for _, host := range []string{"2", "3"} {
+			script := "seg_network=" + strings.TrimSuffix(seg, "/24") + "\nseg_addr=" + base + "." + host + "/24\n" +
+				strings.Join(lines, "\n") + "\necho \"$vlan_subnet $vlan_addr\"\n"
+			out, err := exec.Command("bash", "-c", script).Output()
+			if err != nil {
+				t.Fatalf("%s: %v", seg, err)
+			}
+			wantAddr := strings.TrimSuffix(want, ".0/24") + "." + host
+			if got := strings.TrimSpace(string(out)); got != want+" "+wantAddr {
+				t.Errorf("%s host .%s: shell %q, Go %q", seg, host, got, want+" "+wantAddr)
+			}
 		}
 	}
 }

@@ -146,8 +146,8 @@ func (p *PairAdapter) NAReason(c Capability) (string, bool) {
 		return "a pair keeps two journals: an ISC peer may answer either client, and a Kea standby answers after a failover, " +
 			"so one peer's log undercounts and the two logs have no common clock to merge on (claymore666/docker-net-dhcp-lab#15)", true
 	case CapVLANPool:
-		return "the VLAN 100 pool is on one peer's eth1.100 only: a lease from it would not exist on the other peer, " +
-			"so the pair's failover would judge the lab's config, not the plugin (claymore666/docker-net-dhcp-lab#15)", true
+		return "each peer serves the VLAN 100 pool from its own eth1.100 with no failover or HA peering for it, so a client " +
+			"could be answered by either peer and the verdict would judge the lab's double assignment, not the plugin (claymore666/docker-net-dhcp-lab#15)", true
 	}
 	return "", false
 }

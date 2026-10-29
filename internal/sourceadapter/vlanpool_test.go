@@ -1,6 +1,8 @@
 package sourceadapter
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -43,8 +45,8 @@ func TestVLANPoolIsDeclaredOrExplained(t *testing.T) {
 	}
 }
 
-// A failover or HA pair has two sources; the VLAN pool is on one peer
-// only, so the pair withholds it with a reason (lab #15 E3b).
+// A failover or HA pair has two sources serving the VLAN pool with no
+// peering for it, so the pair withholds it with a reason (lab #15 E3b).
 func TestPairWithholdsTheVLANPool(t *testing.T) {
 	fp := newFakePair()
 	fp.a.caps = append(append([]Capability{}, fp.a.caps...), CapVLANPool)
@@ -54,5 +56,26 @@ func TestPairWithholdsTheVLANPool(t *testing.T) {
 	}
 	if why, ok := fp.pair.NAReason(CapVLANPool); !ok || !strings.Contains(why, "eth1.100") {
 		t.Fatalf("pair reason %q %v", why, ok)
+	}
+}
+
+// The two failover peers must not both take the same address on eth1.100;
+// the rendered seeds say which (lab #15 E3b).
+func TestFailoverPeersGetDifferentVLANAddresses(t *testing.T) {
+	re := regexp.MustCompile(`addresses: \[(10\.200\.\d+\.\d+)/24\]\s*\n\s*NETEOF`)
+	var got []string
+	for _, peer := range []string{"primary", "partner"} {
+		b, err := os.ReadFile("../../scripts/testdata/up-source-golden/isc-failover-" + peer + ".golden")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := re.FindSubmatch(b)
+		if m == nil {
+			t.Fatalf("%s: no eth1.100 address in the rendered seed", peer)
+		}
+		got = append(got, string(m[1]))
+	}
+	if got[0] == got[1] {
+		t.Errorf("both peers take %s on eth1.100", got[0])
 	}
 }
