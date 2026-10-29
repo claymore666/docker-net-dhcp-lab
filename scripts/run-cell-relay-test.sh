@@ -96,6 +96,26 @@ for case in probe-fails probe-passes; do
 		fail=1
 	fi
 done
+# #95: a retry pass keeps the earlier captures, the failed-probe path
+# included, and both captures agree on the pass.
+for case in retry-probe-fails retry-probe-passes; do
+	mkdir -p "$tmp/$case/evidence"
+	echo MAIN-PCAP >"$tmp/$case/evidence/t-relay.pcap"
+	echo MAIN-SRV >"$tmp/$case/evidence/t-relay-server.pcap"
+done
+run retry-probe-fails PROBE_RC=1 || true
+run retry-probe-passes PROBE_RC=0 || true
+for case in retry-probe-fails retry-probe-passes; do
+	e="$tmp/$case/evidence"
+	if [ "$(cat "$e/t-relay.pcap")" != MAIN-PCAP ] || [ "$(cat "$e/t-relay-server.pcap")" != MAIN-SRV ]; then
+		echo "run-cell-relay-test: FAIL -- $case: an earlier pass's capture was overwritten" >&2
+		fail=1
+	fi
+	if [ "$(cat "$e/t-relay.retry.pcap" 2>/dev/null)" != t-relay ] || [ "$(cat "$e/t-relay-server.retry.pcap" 2>/dev/null)" != t-relay-srv ]; then
+		echo "run-cell-relay-test: FAIL -- $case: the retry's captures are not t-relay.retry.pcap and t-relay-server.retry.pcap" >&2
+		fail=1
+	fi
+done
 # the per-shape load gate (#79): a busy host is waited out before every
 # shape, never after one; the probe is not a shape.
 LOAD_START=busy run gate-order GATE_CASE=1 || {

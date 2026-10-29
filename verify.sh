@@ -202,7 +202,7 @@ echo "== run-cell.sh regenerates capture checks only after the final pcap is in 
 # matters -- regenerate must run after capture-stop has written the
 # final, whole-cell pcap, never against a capture still in progress.
 stop_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-stop\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$WORK"[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
-regen_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-check-regenerate\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$EVIDENCE_DIR"[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
+regen_line=$(grep -nE '^[[:space:]]*"\$REPO_ROOT/scripts/capture-check-regenerate\.sh"[[:space:]]+"\$CELL"[[:space:]]+"\$EVIDENCE_DIR"[[:space:]]+"\$cell_pcap"[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$stop_line" ] || [ -z "$regen_line" ]; then
 	echo "verify.sh: run-cell.sh does not call capture-stop.sh and capture-check-regenerate.sh as their own, unmodified commands" >&2
 	exit 1
@@ -212,13 +212,18 @@ if [ "$regen_line" -le "$stop_line" ]; then
 	exit 1
 fi
 
-# regenerate reads $EVIDENCE_DIR/<cell>.pcap, which this cp line writes
+# regenerate reads $cell_pcap (<cell>.pcap, or <cell>.retry.pcap on a
+# retry pass, #95), which this cp line writes
 # (capture-stop.sh only writes the copy inside $WORK): ordered after
 # capture-stop.sh alone is not enough, the copy into the evidence dir
 # must itself come before the regenerate call.
-cp_line=$(grep -nE '^cp[[:space:]]+"\$WORK/observer\.pcap"[[:space:]]+"\$EVIDENCE_DIR/\$\{CELL\}\.pcap"[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+true[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
+cp_line=$(grep -nE '^cp[[:space:]]+"\$WORK/observer\.pcap"[[:space:]]+"\$cell_pcap"[[:space:]]+2>/dev/null[[:space:]]+\|\|[[:space:]]+true[[:space:]]*$' scripts/run-cell.sh | head -1 | cut -d: -f1)
 if [ -z "$cp_line" ]; then
 	echo "verify.sh: run-cell.sh does not copy the final pcap into the evidence dir as its own, unmodified command" >&2
+	exit 1
+fi
+if ! grep -qE '^cell_pcap="\$EVIDENCE_DIR/\$\{CELL\}\$\{pcap_sfx\}\.pcap"$' scripts/run-cell.sh; then
+	echo "verify.sh: run-cell.sh does not derive cell_pcap from the evidence dir, the cell and the pass suffix as its own, unmodified line" >&2
 	exit 1
 fi
 if [ "$regen_line" -le "$cp_line" ]; then
