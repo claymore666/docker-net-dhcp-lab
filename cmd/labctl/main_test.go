@@ -80,6 +80,9 @@ func TestPoolHasCapacityForEveryLabCell(t *testing.T) {
 		if c.Source == nil {
 			continue
 		}
+		if c.Source.Type == "windows" {
+			continue // refused until its adapter lands (lab #14), see TestNewSourceAdapterWindowsRefuses
+		}
 		src, err := newCellSourceAdapter(c.Source, runnerFor)
 		if err != nil {
 			t.Fatalf("%s: %v", c.Name, err)
@@ -271,6 +274,27 @@ func TestNewSourceAdapterFritzbox(t *testing.T) {
 	a, err := newSourceAdapter("fritzbox", mgmtRunner("10.200.255.171/24"))
 	if f, ok := a.(*sourceadapter.FritzboxAdapter); err != nil || !ok || f.Runner != mgmtRunner("10.200.255.171/24") {
 		t.Fatalf("fritzbox: %#v, %v", a, err)
+	}
+}
+
+// The windows cell loads and validates, but no adapter exists yet: the
+// mapping refuses with its own reason, never the unknown-type text and
+// never a placeholder that judges against nothing (lab #14).
+func TestNewSourceAdapterWindowsRefuses(t *testing.T) {
+	a, err := newSourceAdapter("windows", mgmtRunner("10.200.255.161/24"))
+	if a != nil || err == nil || !strings.Contains(err.Error(), "has no adapter yet") || strings.Contains(err.Error(), "unknown source type") {
+		t.Fatalf("windows: adapter %#v, err %v", a, err)
+	}
+	cfg, lerr := labyaml.Load(filepath.Join("..", "..", "lab.yaml"))
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	cell, lerr := cfg.CellByName("windows")
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if _, err := newCellSourceAdapter(cell.Source, func(m string) sourceadapter.Runner { return mgmtRunner(m) }); err == nil {
+		t.Fatal("the shipped windows cell built an adapter")
 	}
 }
 

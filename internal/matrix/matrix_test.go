@@ -339,3 +339,146 @@ func TestRenderKeaHAColumnsCarryTheC5Rows(t *testing.T) {
 		}
 	}
 }
+
+// writeBlocked writes the marker run-cells.sh leaves for a skipped-image
+// cell (lab #14).
+func writeBlocked(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, BlockedFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const blockedWindows = `{"cell":"windows","reason":"image not built","detail":"built image windows-2025-eval is not on this host","date":"2026-10-28T09:30:00Z"}`
+
+// A cell without a result bundle is one BLOCKED column, not a dropped or
+// empty one (lab #14). Cell and reason come from the marker's content:
+// the directory is named for a different cell on purpose.
+func TestBlockedBundleRendersOneBlockedColumn(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "evidence", "not-the-cell")
+	writeBlocked(t, dir, blockedWindows)
+
+	b, err := LoadBundle(dir)
+	if err != nil {
+		t.Fatalf("LoadBundle: %v", err)
+	}
+	if b.Cell != "windows" || b.Blocked == nil || b.Blocked.Reason != "image not built" {
+		t.Fatalf("marker not read from content: %+v", b)
+	}
+	page, err := Render(root, "", []Bundle{b})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(page, "| scenario | windows |") {
+		t.Fatalf("expected a single column labelled with the cell only:\n%s", page)
+	}
+	if !strings.Contains(page, "- **windows**: not run, image not built, 2026-10-28") {
+		t.Fatalf("header does not say why the cell did not run:\n%s", page)
+	}
+	rows := 0
+	for _, line := range strings.Split(page, "\n") {
+		if strings.HasPrefix(line, "| ") && !strings.HasPrefix(line, "| scenario") && !strings.HasPrefix(line, "| ---") {
+			rows++
+			if !strings.HasSuffix(line, " [BLOCKED](evidence/not-the-cell/image-not-built.json) |") {
+				t.Fatalf("catalog row is not a linked BLOCKED: %q", line)
+			}
+		}
+	}
+	if rows != len(Order()) {
+		t.Fatalf("got %d catalog rows, want %d:\n%s", rows, len(Order()), page)
+	}
+	if strings.Contains(page, "(missing)") {
+		t.Fatalf("a blocked cell must not render (missing):\n%s", page)
+	}
+}
+
+// It sits next to a real bundle without disturbing it.
+func TestBlockedBundleBesideARunBundle(t *testing.T) {
+	root := t.TempDir()
+	kdir := filepath.Join(root, "kea")
+	writeResolvedLab(t, mkdir(t, kdir), "kea", "tag", "")
+	writeVerdict(t, kdir, scenario.Verdict{
+		Scenario: scenario.NameA1, Cell: "kea", Shape: scenario.ShapeBridge,
+		Result: scenario.PASS, Reason: "ok", Evidence: map[string]string{"e": mustFile(t, kdir, "e.txt")},
+	})
+	wdir := filepath.Join(root, "windows")
+	writeBlocked(t, wdir, blockedWindows)
+	kb, err := LoadBundle(kdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wb, err := LoadBundle(wdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := Render(root, "", []Bundle{kb, wb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| scenario | kea / bridge | windows |", "[PASS](kea/kea-bridge-A1-first-lease.verdict)", "[BLOCKED](windows/image-not-built.json)"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("page lacks %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestLoadBundleRefusesBadMarkers(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty reason": `{"cell":"windows","reason":"","date":"2026-10-28T09:30:00Z"}`,
+		"no cell":      `{"reason":"image not built","date":"2026-10-28T09:30:00Z"}`,
+		"no date":      `{"cell":"windows","reason":"image not built"}`,
+		"not json":     `image not built`,
+	} {
+		dir := filepath.Join(t.TempDir(), "w")
+		writeBlocked(t, dir, body)
+		if _, err := LoadBundle(dir); err == nil {
+			t.Errorf("%s: marker accepted", name)
+		}
+	}
+}
+
+// run-cells.sh never leaves both; if both are there one is stale and
+// rendering either would mislead.
+func TestLoadBundleRefusesMarkerBesideVerdicts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "windows")
+	writeResolvedLab(t, mkdir(t, dir), "windows", "tag", "")
+	writeVerdict(t, dir, scenario.Verdict{
+		Scenario: scenario.NameA1, Cell: "windows", Shape: scenario.ShapeBridge,
+		Result: scenario.FAIL, Reason: "x",
+	})
+	writeBlocked(t, dir, blockedWindows)
+	if _, err := LoadBundle(dir); err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("marker plus verdicts: %v", err)
+	}
+}
+
+func TestRenderRefusesBlockedCellAlsoInARunBundle(t *testing.T) {
+	blocked := Bundle{Dir: "b1", Cell: "windows", Blocked: &Blocked{Cell: "windows", Reason: "image not built"}}
+	run := Bundle{Dir: "b2", Cell: "windows", Verdicts: []scenario.Verdict{
+		{Scenario: scenario.NameA1, Cell: "windows", Shape: scenario.ShapeBridge, Result: scenario.PASS, Reason: "x", Evidence: map[string]string{"e": "x"}},
+	}}
+	for name, bs := range map[string][]Bundle{"blocked first": {blocked, run}, "run first": {run, blocked}, "twice": {blocked, blocked}} {
+		if _, err := Render("", "", bs); err == nil {
+			t.Errorf("%s: rendered one cell twice", name)
+		}
+	}
+}
+
+func TestRenderRefusesBlockedWithoutReason(t *testing.T) {
+	b := Bundle{Dir: "b", Cell: "windows", Blocked: &Blocked{Cell: "windows"}}
+	if _, err := Render("", "", []Bundle{b}); err == nil {
+		t.Fatal("blocked bundle with no reason rendered")
+	}
+}
+
+func mkdir(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}

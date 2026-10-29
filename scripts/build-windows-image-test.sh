@@ -19,16 +19,11 @@ bad() {
 export LAB_PUBKEY="ssh-ed25519 AAAA render-only"
 B=./scripts/build-windows-image.sh
 
-# A windows cell the way the cell wiring will declare it, derived from the
-# openwrt block (its source type stays one lab.yaml accepts today).
-awk '/^  - name: openwrt$/{on=1} on && /^  - name: isc-failover$/{exit} on' lab.yaml |
-	sed -e 's/name: openwrt/name: windows/' -e 's/lab-br-openwrt/lab-br-windows/' \
-		-e 's#10\.200\.15\.#10.200.16.#g' -e 's/openwrt-25.12.5-x86-64/windows-2025-eval/' \
-		-e 's/10\.200\.255\.151/10.200.255.160/' -e 's/10\.200\.255\.150/10.200.255.161/' \
-		-e '/^    source:/,/^    docker_host:/{s/memory_mib: 256/memory_mib: 4096/;s/vcpus: 1/vcpus: 2/;s/disk_gib: 1$/disk_gib: 20/}' >"$tmp/cell.yaml"
-{ cat lab.yaml; echo; cat "$tmp/cell.yaml"; } >"$tmp/lab.yaml"
+# The windows cell is the one lab.yaml declares (lab #14); a copy lets the
+# test edit it without touching the file.
+cp lab.yaml "$tmp/lab.yaml"
 export LAB_YAML="$tmp/lab.yaml"
-go run ./cmd/labctl validate "$LAB_YAML" >/dev/null || bad "the derived windows cell does not validate"
+go run ./cmd/labctl validate "$LAB_YAML" >/dev/null || bad "lab.yaml does not validate"
 
 # --- stubs -----------------------------------------------------------------
 stub=$tmp/stub
@@ -134,7 +129,7 @@ grep -qF "Mac = '$want_mgmt'" "$fl" || bad "no mgmt MAC $want_mgmt in the first-
 grep -qF "Mac = '$want_seg'" "$fl" || bad "no segment MAC $want_seg in the first-logon script"
 grep -qE "Name 'Ethernet|InterfaceAlias '?Ethernet|-Name Ethernet" "$fl" && bad "an adapter is addressed by its Windows name"
 grep -qF "Ip = '10.200.16.2'; Prefix = 24" "$fl" || bad "no segment address in the first-logon script"
-grep -qF "Ip = '10.200.255.160'; Prefix = 24; Gw = '10.200.255.1'" "$fl" || grep -qE "Ip = '10.200.255.160'; Prefix = 24; Gw = '[0-9.]+'" "$fl" || bad "no management address in the first-logon script"
+grep -qF "Ip = '10.200.255.161'; Prefix = 24; Gw = '10.200.255.1'" "$fl" || grep -qE "Ip = '10.200.255.161'; Prefix = 24; Gw = '[0-9.]+'" "$fl" || bad "no management address in the first-logon script"
 grep -qF -- "-StartRange '10.200.16.100' -EndRange '10.200.16.200'" "$fl" || bad "no scope in the first-logon script"
 grep -qF -- "-ConflictDetectionAttempts 0" "$fl" || bad "conflict detection is not the stock default"
 grep -qF "'PasswordAuthentication no'" "$fl" || bad "sshd keeps password authentication"
@@ -175,6 +170,12 @@ printf '%s  windows-server-2025-eval.iso\n' "$(printf a | sha256sum | cut -d' ' 
 [ "$(LAB_WINDOWS_ISO_PIN="$tmp/pin-a" $B --id windows)" != "$id" ] || bad "a pin change left the id unchanged"
 if $B --id dnsmasq >"$tmp/o" 2>&1; then bad "a dnsmasq cell was accepted"; fi
 grep -q REFUSED "$tmp/o" || bad "the dnsmasq refusal is not worded: $(cat "$tmp/o")"
+
+# The image under another source type is refused, with the type named.
+sed '/^  - name: windows$/,$ s/^      type: windows$/      type: dnsmasq/' "$tmp/lab.yaml" >"$tmp/lab3.yaml"
+if cmp -s "$tmp/lab.yaml" "$tmp/lab3.yaml"; then bad "the source type edit did not apply"; fi
+if LAB_YAML="$tmp/lab3.yaml" $B --id windows >"$tmp/o" 2>&1; then bad "a windows image under type dnsmasq was accepted"; fi
+grep -q "has source type 'dnsmasq', not windows" "$tmp/o" || bad "the type refusal is not worded: $(cat "$tmp/o")"
 
 # --- build refusals: a VM is never started -------------------------------------
 export LAB_IMAGE_CACHE=$tmp/cache WINDOWS_BUILD_DIR=$tmp/cache/windows-build
@@ -294,10 +295,18 @@ if $B --record windows "$tmp/rec" >/dev/null 2>&1; then bad "--record overwrote 
 if STUB_FAIL_ON=Get-Service $B --record windows "$tmp/rec2" >/dev/null 2>&1; then bad "--record kept going after a failed read"; fi
 [ ! -e "$tmp/rec2" ] || bad "a failed recording left a directory"
 
-# --- up-source.sh: the render path accepts the kind, the run path refuses it ---------
+# --- up-source.sh: the seed is baked (lab #14) ---------------------------------
+# No sidecar, no cell; with the current id the render path passes; the run
+# path stops at the missing image before any VM.
+rm -f "$LAB_IMAGE_CACHE/windows-2025-eval.build-id"
+if UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh windows "$tmp/w" >"$tmp/o" 2>&1; then bad "up-source.sh render-only accepted a windows cell with no build id"; fi
+grep -qF "run scripts/build-windows-image.sh windows" "$tmp/o" || bad "the missing build id is not worded: $(cat "$tmp/o")"
+printf '%s\n' "$id" >"$LAB_IMAGE_CACHE/windows-2025-eval.build-id"
 if ! UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh windows "$tmp/w" >"$tmp/o" 2>&1; then bad "up-source.sh render-only refused the windows seed: $(cat "$tmp/o")"; fi
-if ./scripts/up-source.sh windows "$tmp/w2" >"$tmp/o" 2>&1; then bad "up-source.sh brought a windows cell up"; fi
-grep -qF "land in a later change" "$tmp/o" || bad "the run-path refusal is not worded: $(cat "$tmp/o")"
+: >"$STUB_LOG"
+if ./scripts/up-source.sh windows "$tmp/w2" >"$tmp/o" 2>&1; then bad "up-source.sh brought a windows cell up without its image"; fi
+grep -qF "is a built image and is not there" "$tmp/o" || bad "the run-path refusal is not worded: $(cat "$tmp/o")"
+grep -q '^virt-install' "$STUB_LOG" && bad "up-source.sh started a VM without the image"
 [ ! -e "$tmp/w2/lab-windows-source.qcow2" ] || bad "the refused run path made an overlay"
 
 [ "$fail" -eq 0 ] && echo "build-windows-image-test: PASS"

@@ -97,7 +97,7 @@ new_env() {
 	local d
 	d=$(mktemp -d "$tmp/env-XXXXXX")
 	mkdir -p "$d/repo/scripts" "$d/state" "$d/root"
-	cp "$REPO_ROOT/scripts/run-cells.sh" "$REPO_ROOT/scripts/load-gate.sh" "$d/repo/scripts/"
+	cp "$REPO_ROOT/scripts/run-cells.sh" "$REPO_ROOT/scripts/load-gate.sh" "$REPO_ROOT/scripts/image-path.sh" "$d/repo/scripts/"
 	write_stub_run_cell "$d/repo/scripts/run-cell.sh"
 	write_stub_down_cell "$d/repo/scripts/down-cell.sh"
 	chmod +x "$d/repo/scripts/"*.sh
@@ -891,6 +891,148 @@ cells "$e" -j 1 a
 expect "case 21i (durations of a retried cell)" 0 "$e"
 secs=$(awk -F'\t' '$1=="a"{print $2}' "$e/root/durations.tsv" 2>/dev/null)
 if [[ ! "$secs" =~ ^[0-9]+$ ]] || [ "$secs" -gt 3 ]; then bad "case 21i: durations.tsv has '$secs' seconds for a; the first run took about 1, the retry about 5"; fi
+
+# Case 22 (lab #14): a cell on a built base image that is not on this host
+# is skipped-image, never started, never a failure by itself.
+# built_cell ENV CELL SRC_KIND SRC_IMAGE [HOST_KIND HOST_IMAGE]: resolve
+# fixture with the images the gate reads; bridge and addresses unique per cell.
+built_cell() {
+	local idx
+	idx=$(($(echo -n "$2" | cksum | cut -d' ' -f1) % 200 + 10))
+	jq -n --arg c "$2" --arg d "10.200.255.$idx/24" --arg s "10.200.254.$idx/24" \
+		--arg sk "$3" --arg sn "$4" --arg hk "${5:-qcow2}" --arg hn "${6:-debian-13-generic-amd64}" \
+		'{cell:{name:$c,segment:{bridge:("lab-br-"+$c)},source:{mgmt_address:$s},docker_host:{mgmt_address:$d}},
+		  source_image:{name:$sn,kind:$sk}, docker_host_image:{name:$hn,kind:$hk}}' >"$1/state/resolve.$2"
+}
+witness() { # env cell -> number of run-cell.sh calls for the cell
+	grep -c "^start $2 " "$1/state/calls.log" || true
+}
+
+# 22a: image absent. Exit 0, rc file, table row, log line, marker, no start.
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" w built windows-2025-eval
+LAB_IMAGE_CACHE="$e/cache" cells "$e" w
+expect "case 22a (image absent)" 0 "$e"
+[ "$(cat "$e/root/logs/w.rc")" = skipped-image ] || bad "case 22a: rc file is '$(cat "$e/root/logs/w.rc" 2>/dev/null)', not skipped-image"
+has "case 22a table" "$e" "^w +skipped-image "
+has "case 22a message" "$e" "w not started: built image windows-2025-eval is not on this host \($e/cache/windows-2025-eval.qcow2 is missing\)"
+[ "$(witness "$e" w)" -eq 0 ] || bad "case 22a: run-cell.sh was called for a cell whose image is absent"
+[ ! -e "$e/root/logs/w.first.log" ] || bad "case 22a: the retry pass picked a skipped-image cell up"
+if grep -q 'retry pass: .*rerunning' "$e/out"; then bad "case 22a: a retry pass reran something"; fi
+[ ! -s "$e/state/down.log" ] || bad "case 22a: down-cell.sh ran for a cell that never started"
+if [ "$(jq -r '[.cell, .reason] | join("|")' "$e/root/evidence/w/image-not-built.json" 2>/dev/null)" != "w|image not built" ]; then
+	bad "case 22a: image-not-built.json is missing or does not carry the cell and reason"
+fi
+[[ "$(jq -r .date "$e/root/evidence/w/image-not-built.json" 2>/dev/null)" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] || bad "case 22a: the marker date is not RFC 3339 UTC"
+# The renderer reads what the runner wrote (lab #14): one BLOCKED column.
+page=$(cd "$REPO_ROOT" && go run ./cmd/labctl matrix --root "$e/root/evidence" "$e/root/evidence/w" 2>&1) || bad "case 22a: labctl matrix refused the runner's marker: $page"
+grep -q '^| scenario | w |$' <<<"$page" || bad "case 22a: the matrix has no single column for w: $page"
+grep -q '^- \*\*w\*\*: not run, image not built, ' <<<"$page" || bad "case 22a: the matrix header does not say why w did not run: $page"
+[ "$(grep -c '\[BLOCKED\](w/image-not-built.json)' <<<"$page")" -ge 1 ] || bad "case 22a: no BLOCKED link to the marker: $page"
+
+# 22b: --check says what the start says, from the same function, exit 0.
+LAB_IMAGE_CACHE="$e/cache" cells "$e" --check w
+expect "case 22b (--check, image absent)" 0 "$e"
+has "case 22b" "$e" "w would be skipped-image: built image windows-2025-eval is not on this host \($e/cache/windows-2025-eval.qcow2 is missing\)"
+has "case 22b summary" "$e" "1 cell\(s\) would be skipped-image, which is not a failure"
+want_reason=$(sed -n 's/^run-cells: w would be skipped-image: //p' "$e/out")
+LAB_IMAGE_CACHE="$e/cache" cells "$e" w
+[ "$(sed -n 's/^run-cells: w not started: //p' "$e/out")" = "$want_reason" ] || bad "case 22b: --check and the start give different reasons"
+
+# 22c: the path is the one fetch-base-image.sh uses. Another cache dir, a
+# sidecar or a directory by that name does not count; the file does.
+mkdir -p "$e/other"
+touch "$e/other/windows-2025-eval.qcow2" "$e/cache/windows-2025-eval.build-id"
+LAB_IMAGE_CACHE="$e/cache" cells "$e" w
+[ "$(cat "$e/root/logs/w.rc")" = skipped-image ] || bad "case 22c: a sidecar or another cache dir's image counted as present"
+mkdir -p "$e/dircache/windows-2025-eval.qcow2"
+LAB_IMAGE_CACHE="$e/dircache" cells "$e" w
+[ "$(cat "$e/root/logs/w.rc")" = skipped-image ] || bad "case 22c: a directory named like the image counted as present"
+fetch_err=$(LAB_IMAGE_CACHE="$e/cache" "$REPO_ROOT/scripts/fetch-base-image.sh" windows-2025-eval "" built 2>&1 >/dev/null || true)
+case "$fetch_err" in *"$e/cache/windows-2025-eval.qcow2 is a built image and is not there"*) ;; *) bad "case 22c: fetch-base-image.sh names another path: $fetch_err" ;; esac
+[ "$(env -u LAB_IMAGE_CACHE bash -c ". '$REPO_ROOT/scripts/image-path.sh'; base_image_path x")" = /srv/lab/images/x.qcow2 ] || bad "case 22c: the default path moved"
+# present: the cell starts whatever its sidecar says (stale is up-source.sh's red)
+touch "$e/cache/windows-2025-eval.qcow2"
+echo "0 0" >"$e/state/spec.w"
+echo "an-older-build-id" >"$e/cache/windows-2025-eval.build-id"
+mkdir -p "$e/root/evidence/w"
+echo stale >"$e/root/evidence/w/image-not-built.json"
+LAB_IMAGE_CACHE="$e/cache" cells "$e" w
+expect "case 22c (present, stale sidecar)" 0 "$e"
+[ "$(witness "$e" w)" -eq 1 ] || bad "case 22c: a present image with a stale sidecar was not started"
+[ ! -e "$e/root/evidence/w/image-not-built.json" ] || bad "case 22c: a stale marker survived a real start"
+[ "$(cat "$e/root/logs/w.rc")" = 0 ] || bad "case 22c: rc is not 0"
+
+# 22d: a built host image is gated like a source image; no cell name is read.
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" x qcow2 debian-13-generic-amd64 built openwrt-25.12.5-x86-64
+LAB_IMAGE_CACHE="$e/cache" cells "$e" x
+[ "$(cat "$e/root/logs/x.rc")" = skipped-image ] || bad "case 22d: a missing built docker host image was not skipped"
+has "case 22d" "$e" "built image openwrt-25.12.5-x86-64 is not on this host"
+# qcow2 and archive images are never gated: the download is their fetch
+built_cell "$e" y archive some-archive-image
+LAB_IMAGE_CACHE="$e/cache" cells "$e" y
+[ "$(witness "$e" y)" -eq 1 ] || bad "case 22d: an archive image was gated"
+
+# 22e: the gate comes before the disk wait and the load wait. With 5 s
+# bounds a gate placed after either would end as skipped-disk or start late.
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" w built windows-2025-eval
+echo 1000 >"$e/state/free_mib"
+busy "$e" 99.00
+LAB_IMAGE_CACHE="$e/cache" LAB_DISK_WAIT=5 LAB_DISK_POLL=1 LAB_LOAD_WAIT=5 cells "$e" w
+expect "case 22e (disk low, load high, image absent)" 0 "$e"
+[ "$(cat "$e/root/logs/w.rc")" = skipped-image ] || bad "case 22e: rc is '$(cat "$e/root/logs/w.rc")', not skipped-image"
+if grep -q 'waiting' "$e/out"; then bad "case 22e: the run waited before skipping"; fi
+
+# 22f: exit codes. skipped-image alone is 0 (22a); beside a failure or a
+# skipped-disk it is still 1, and beside a pass it is 0.
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" w built windows-2025-eval
+echo "0 1" >"$e/state/spec.a"
+LAB_IMAGE_CACHE="$e/cache" cells "$e" -j 1 w a
+expect "case 22f (skipped-image beside a failed cell)" 1 "$e"
+has "case 22f table w" "$e" "^w +skipped-image "
+has "case 22f table a" "$e" "^a +1 "
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" w built windows-2025-eval
+echo 1000 >"$e/state/free_mib"
+LAB_IMAGE_CACHE="$e/cache" LAB_DISK_WAIT=0 cells "$e" -j 1 w a
+expect "case 22f (skipped-image beside skipped-disk)" 1 "$e"
+has "case 22f disk" "$e" "^a +skipped-disk "
+has "case 22f image" "$e" "^w +skipped-image "
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache"
+built_cell "$e" w built windows-2025-eval
+echo "0 0" >"$e/state/spec.a"
+LAB_IMAGE_CACHE="$e/cache" cells "$e" -j 1 w a
+expect "case 22f (skipped-image beside a passing cell)" 0 "$e"
+[ "$(witness "$e" a)" -eq 1 ] || bad "case 22f: the passing cell did not run beside a skipped-image one"
+if [ -e "$e/root/durations.tsv" ] && grep -q '^w' "$e/root/durations.tsv"; then bad "case 22f: a duration was recorded for the skipped-image cell"; fi
+
+# 22g: an earlier run's verdicts are the cell's evidence and stay; the
+# retry pass leaves them and no marker is written beside them.
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/cache" "$e/root/evidence/w"
+built_cell "$e" w built windows-2025-eval
+printf 'scenario: x\nreason: %s\n' "CreateEndpoint Client.Timeout" >"$e/root/evidence/w/old.verdict"
+LAB_IMAGE_CACHE="$e/cache" cells "$e" w
+expect "case 22g (earlier verdicts, image gone)" 0 "$e"
+[ -f "$e/root/evidence/w/old.verdict" ] || bad "case 22g: an earlier verdict was moved"
+[ ! -e "$e/root/evidence/w/image-not-built.json" ] || bad "case 22g: a marker was written beside earlier verdicts"
+[ ! -e "$e/root/evidence/w/retried" ] || bad "case 22g: the retry pass touched a skipped-image cell"
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

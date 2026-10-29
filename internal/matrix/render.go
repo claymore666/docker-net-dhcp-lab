@@ -15,7 +15,12 @@ type column struct {
 	shape scenario.Shape
 }
 
-func (c column) label() string { return fmt.Sprintf("%s / %s", c.cell, c.shape) }
+func (c column) label() string {
+	if c.shape == "" {
+		return c.cell
+	}
+	return fmt.Sprintf("%s / %s", c.cell, c.shape)
+}
 
 type cellKey struct {
 	scenarioID string
@@ -56,8 +61,26 @@ func Render(root, asset string, bundles []Bundle) (string, error) {
 
 	placedAt := map[cellKey]placed{}
 	cols := map[column]bool{}
+	// blocked maps a cell to its image-not-built bundle (lab #14): one
+	// column with no shape, every scenario row BLOCKED.
+	blocked := map[column]Bundle{}
+	seenCell := map[string]string{}
 
 	for _, b := range bundles {
+		if prior, ok := seenCell[b.Cell]; ok && (b.Blocked != nil || blockedCell(blocked, b.Cell)) {
+			return "", fmt.Errorf("render: cell %s is in both %s and %s, and one is an %s marker; pass one bundle per cell",
+				b.Cell, prior, b.Dir, BlockedFile)
+		}
+		seenCell[b.Cell] = b.Dir
+		if b.Blocked != nil {
+			if b.Blocked.Reason == "" {
+				return "", fmt.Errorf("render: bundle %s: %s carries no reason", b.Dir, BlockedFile)
+			}
+			col := column{cell: b.Cell}
+			cols[col] = true
+			blocked[col] = b
+			continue
+		}
 		for _, v := range b.Verdicts {
 			if _, ok := PlainName(v.Scenario); !ok {
 				return "", fmt.Errorf("render: bundle %s: verdict %s names scenario %q, which matrix.PlainNames does not carry",
@@ -133,6 +156,14 @@ func Render(root, asset string, bundles []Bundle) (string, error) {
 		}
 		fmt.Fprintf(&out, "| %s |", name)
 		for _, c := range colList {
+			if bb, isBlocked := blocked[c]; isBlocked {
+				link, err := verdictLink(root, bb.Dir, BlockedFile)
+				if err != nil {
+					return "", err
+				}
+				fmt.Fprintf(&out, " [%s](%s) |", scenario.BLOCKED, link)
+				continue
+			}
 			p, ok := placedAt[cellKey{scenarioID: id, col: c}]
 			if !ok {
 				out.WriteString(" (missing) |")
@@ -156,6 +187,11 @@ func writeHeader(out *strings.Builder, asset string, bundles []Bundle) {
 		fmt.Fprintf(out, "Links below are relative to `%s`.\n\n", asset)
 	}
 	for _, b := range bundles {
+		if b.Blocked != nil {
+			fmt.Fprintf(out, "- **%s**: not run, %s, %s", b.Cell, b.Blocked.Reason, b.Date.UTC().Format("2006-01-02"))
+			out.WriteString("\n")
+			continue
+		}
 		fmt.Fprintf(out, "- **%s**: plugin `%s`", b.Cell, b.PluginTag)
 		if b.PreviousPluginTag != "" {
 			fmt.Fprintf(out, " (previous `%s`)", b.PreviousPluginTag)
@@ -197,4 +233,9 @@ func verdictLink(root, dir, fileName string) (string, error) {
 		return "", fmt.Errorf("render: %s is not an ancestor of %s; refusing a link that would leave it", root, abs)
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+func blockedCell(blocked map[column]Bundle, cell string) bool {
+	_, ok := blocked[column{cell: cell}]
+	return ok
 }

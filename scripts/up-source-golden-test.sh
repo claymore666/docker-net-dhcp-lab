@@ -208,5 +208,33 @@ set -e
 	bad "openwrt: a stale overlay was not refused: $(tail -5 "$tmp/got-openwrt-stale")"
 grep -q '^sudo -n virt-install' "$tmp/got-openwrt-stale" && bad "openwrt: a stale overlay booted"
 
+# windows (#14) is baked the same way: a relay or a partner is refused,
+# and so is an overlay older than its image, before any VM.
+(cd "$REPO_ROOT" && go run ./cmd/labctl resolve lab.yaml windows) >"$tmp/resolved-windows.json"
+cp -r "$REPO_ROOT/images" "$tmp/repo/images"
+wbaked=$(RESOLVED_FILE="$tmp/resolved-windows.json" PATH="$tmp/bin:$PATH" LAB_PUBKEY="$(cat "$tmp/home/.ssh/id_ed25519_lab.pub")" \
+	bash "$tmp/repo/scripts/build-windows-image.sh" --id windows)
+echo "$wbaked" >"$tmp/cache/windows-2025-eval.build-id"
+jq '.cell.relay.client_address = "10.200.16.9"' "$tmp/resolved-windows.json" >"$tmp/resolved-windows-relay.json"
+jq '.cell.source.partner = {seg_address: "10.200.16.3/24", mgmt_address: "10.200.255.162/24"}' \
+	"$tmp/resolved-windows.json" >"$tmp/resolved-windows-partner.json"
+for v in relay partner; do
+	peer=
+	[ "$v" != partner ] || peer=partner
+	set +e
+	LAB_IMAGE_CACHE="$tmp/cache" render windows "$tmp/resolved-windows-$v.json" "$tmp/got-windows-$v" "$peer"
+	set -e
+	{ grep -qx 'exit=1' "$tmp/got-windows-$v" && grep -q 'a baked image serves one plain cell' "$tmp/got-windows-$v"; } ||
+		bad "windows $v: not refused: $(tail -5 "$tmp/got-windows-$v")"
+	grep -q '^sudo -n virt-install' "$tmp/got-windows-$v" && bad "windows $v: a VM was created"
+done
+touch -d '2020-01-01' "$tmp/work-windows/lab-windows-source.qcow2"
+set +e
+STUB_BASE="$tmp/base.qcow2" LAB_IMAGE_CACHE="$tmp/cache" render windows "$tmp/resolved-windows.json" "$tmp/got-windows-stale"
+set -e
+{ grep -qx 'exit=1' "$tmp/got-windows-stale" && grep -q 'predates the image it overlays' "$tmp/got-windows-stale"; } ||
+	bad "windows: a stale overlay was not refused: $(tail -5 "$tmp/got-windows-stale")"
+grep -q '^sudo -n virt-install' "$tmp/got-windows-stale" && bad "windows: a stale overlay booted"
+
 [ "$fail" -eq 0 ]
 echo "up-source-golden-test: PASS"
