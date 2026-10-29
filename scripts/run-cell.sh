@@ -113,6 +113,18 @@ if [ -n "$relay_mgmt_ip" ]; then
 		>"$EVIDENCE_DIR/${CELL}-relay-config-diff.txt" || true
 fi
 
+# A resumed or retry pass finds the earlier pass's capture already in the
+# evidence dir and writes beside it, never over it (#95). The suffix is
+# fixed here, before either capture is copied, so both agree on the pass.
+pcap_sfx=""
+pcap_pass=1
+while [ -e "$EVIDENCE_DIR/${CELL}${pcap_sfx}.pcap" ]; do
+	pcap_pass=$((pcap_pass + 1))
+	pcap_sfx=".retry$([ "$pcap_pass" -eq 2 ] || echo "$pcap_pass")"
+done
+cell_pcap="$EVIDENCE_DIR/${CELL}${pcap_sfx}.pcap"
+server_pcap="$EVIDENCE_DIR/${CELL}-server${pcap_sfx}.pcap"
+
 echo "== capture: start (spans every shape below) =="
 wait_observer() {
 	local waited=0
@@ -137,7 +149,7 @@ fi
 stop_server_capture() {
 	if [ -n "$server_bridge" ]; then
 		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL-srv" "$WORK/srv"
-		cp "$WORK/srv/observer.pcap" "$EVIDENCE_DIR/${CELL}-server.pcap" 2>/dev/null || true
+		cp "$WORK/srv/observer.pcap" "$server_pcap" 2>/dev/null || true
 	fi
 }
 
@@ -155,7 +167,7 @@ if [ -n "$relay_mgmt_ip" ]; then
 	echo "== relay probe =="
 	if ! "$REPO_ROOT/scripts/relay-probe.sh" "$CELL" "$mgmt_ip" "$relay_mgmt_ip" "$WORK"; then
 		"$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK" || true
-		cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+		cp "$WORK/observer.pcap" "$cell_pcap" 2>/dev/null || true
 		stop_server_capture
 		relay_journal
 		LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK" || true
@@ -211,11 +223,11 @@ done
 
 echo "== capture: stop =="
 "$REPO_ROOT/scripts/capture-stop.sh" "$CELL" "$WORK"
-cp "$WORK/observer.pcap" "$EVIDENCE_DIR/${CELL}.pcap" 2>/dev/null || true
+cp "$WORK/observer.pcap" "$cell_pcap" 2>/dev/null || true
 stop_server_capture
 
 echo "== capture: regenerate the capture-check evidence against the final pcap (issue #8) =="
-"$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR"
+"$REPO_ROOT/scripts/capture-check-regenerate.sh" "$CELL" "$EVIDENCE_DIR" "$cell_pcap"
 
 echo "== plugin logs (journalctl copy, survives a plugin upgrade) =="
 # dockerd tags a managed plugin's own stdout/stderr lines with

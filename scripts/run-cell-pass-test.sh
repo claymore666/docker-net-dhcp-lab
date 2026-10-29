@@ -22,7 +22,8 @@ stub() {
 	printf '#!/bin/bash\n%s\n' "$2" >"$1"
 	chmod +x "$1"
 }
-for s in up-cell.sh capture-source-config-diff.sh capture-check-regenerate.sh down-cell.sh; do
+stub "$fake/scripts/capture-check-regenerate.sh" 'echo "regen|${3:-none}" >>"$CALLS"'
+for s in up-cell.sh capture-source-config-diff.sh down-cell.sh; do
 	stub "$fake/scripts/$s" 'exit 0'
 done
 stub "$fake/scripts/capture-start.sh" ': >"$3/observer.ready"'
@@ -87,6 +88,7 @@ expect "a main pass wrote a .retry journal" '[ ! -e "$(ev main)/t-pair-plugin-lo
 
 mkdir -p "$tmp/retry/evidence"
 echo MAIN-MARKER >"$tmp/retry/evidence/t-pair-plugin-log.txt"
+echo MAIN-PCAP >"$tmp/retry/evidence/t-pair.pcap"
 run retry pair || fail=1
 expect "the retry pass overwrote the main pass's journal" '[ "$(cat "$(ev retry)/t-pair-plugin-log.txt")" = MAIN-MARKER ]'
 expect "the retry pass's journal is not in t-pair-plugin-log.retry.txt" 'grep -q '\''J-retry'\'' "$(ev retry)/t-pair-plugin-log.retry.txt"'
@@ -94,9 +96,19 @@ expect "the retry pass's journal is not in t-pair-plugin-log.retry.txt" 'grep -q
 mkdir -p "$tmp/third/evidence"
 echo MAIN-MARKER >"$tmp/third/evidence/t-pair-plugin-log.txt"
 echo RETRY-MARKER >"$tmp/third/evidence/t-pair-plugin-log.retry.txt"
+echo MAIN-PCAP >"$tmp/third/evidence/t-pair.pcap"
+echo RETRY-PCAP >"$tmp/third/evidence/t-pair.retry.pcap"
 run third pair || fail=1
 expect "a third pass overwrote an earlier journal" '[ "$(cat "$(ev third)/t-pair-plugin-log.txt")" = MAIN-MARKER ] && [ "$(cat "$(ev third)/t-pair-plugin-log.retry.txt")" = RETRY-MARKER ]'
 expect "the third pass's journal is not in t-pair-plugin-log.retry3.txt" 'grep -q '\''J-third'\'' "$(ev third)/t-pair-plugin-log.retry3.txt"'
+
+# #95: the capture is kept the same way, and the retry's capture checks are
+# replayed against the retry's own pcap.
+expect "a main pass wrote no plain pcap" '[ -s "$(ev main)/t-pair.pcap" ] && [ ! -e "$(ev main)/t-pair.retry.pcap" ]'
+expect "the main pass's regenerate did not get the plain pcap: $(grep '^regen|' "$tmp/main/calls")" '[ "$(grep "^regen|" "$tmp/main/calls")" = "regen|$(ev main)/t-pair.pcap" ]'
+expect "the retry pass overwrote the main pass's capture" '[ "$(cat "$(ev retry)/t-pair.pcap")" = MAIN-PCAP ] && [ "$(cat "$(ev retry)/t-pair.retry.pcap")" = t-pair ]'
+expect "the retry pass's regenerate did not get t-pair.retry.pcap: $(grep '^regen|' "$tmp/retry/calls")" '[ "$(grep "^regen|" "$tmp/retry/calls")" = "regen|$(ev retry)/t-pair.retry.pcap" ]'
+expect "a third pass overwrote an earlier capture" '[ "$(cat "$(ev third)/t-pair.pcap")" = MAIN-PCAP ] && [ "$(cat "$(ev third)/t-pair.retry.pcap")" = RETRY-PCAP ] && [ "$(cat "$(ev third)/t-pair.retry3.pcap")" = t-pair ]'
 
 # #99: each peer's own package version, in a pair cell only.
 v=$(ev main)/t-pair-versions.txt
