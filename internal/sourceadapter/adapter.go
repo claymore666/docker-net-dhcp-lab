@@ -92,7 +92,14 @@ const (
 	// back as DHCPv4 events (lab #15). Declared by the Debian cells only;
 	// the appliances and the failover pairs report it absent with a reason.
 	CapServerEvents Capability = "server-events"
+	// CapVLANPool declares a second pool on the source's own eth1.100
+	// (VLAN 100, lab #15 E3b). Its cloud-init template carries it; the
+	// appliances, the pairs and the relay cell report it absent.
+	CapVLANPool Capability = "vlan-pool"
 )
+
+// vlanPoolNA is the reason a source without the VLAN 100 template gives. (#15)
+const vlanPoolNA = "the lab carries the VLAN 100 pool in the cloud-init template of the Debian kea, isc-dhcp and dnsmasq cells; this source has no such template (claymore666/docker-net-dhcp-lab#15)"
 
 // Lease is one entry from a source's own table, normalized across the
 // three source shapes (JSON, dhcpd.leases, dnsmasq.leases). ClientID is

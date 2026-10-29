@@ -23,6 +23,20 @@ runcmd:
   # debconf select prompt (auth password choice) with no frontend this
   # hangs apt-get forever waiting on stdin (measured live, 2026-09-25).
   - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd jq dnsmasq-base iputils-arping
+  # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
+  # -o vlan=100 makes the matching eth1.100 on the docker host.
+  - |
+    cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
+    network:
+      version: 2
+      vlans:
+        eth1.__VLAN_ID__:
+          id: __VLAN_ID__
+          link: eth1
+          addresses: [__VLAN_ADDR__/24]
+    NETEOF
+  - chmod 600 /etc/netplan/60-lab-vlan.yaml
+  - netplan apply
   - mkdir -p /root/lab-stock-config
   - cp /etc/kea/kea-dhcp4.conf /root/lab-stock-config/kea-dhcp4.conf.stock
   - cp /etc/kea/kea-ctrl-agent.conf /root/lab-stock-config/kea-ctrl-agent.conf.stock
@@ -69,6 +83,14 @@ runcmd:
     }
     }
     KEAEOF
+  # E3b (#15): VLAN 100 for Kea is added to the live dhcp4 config after the
+  # heredoc, so the adapter's baseline text and its tests stay untouched.
+  - |
+    cat >/etc/kea/lab-vlan-subnet.json <<'KEAEOF'
+    { "id": 2, "subnet": "__VLAN_SUBNET__", "pools": [ { "pool": "__VLAN_POOL_START__ - __VLAN_POOL_END__" } ] }
+    KEAEOF
+  - |
+    sed -i 's#"interfaces": \[ "eth1" \]#"interfaces": [ "eth1", "eth1.__VLAN_ID__" ]#; s#^\( *\)"subnet4": \[#&\n\1  <?include "/etc/kea/lab-vlan-subnet.json"?>,#' /etc/kea/kea-dhcp4.conf
   # DHCPv6 (#23 group D): IA_NA only, Kea 2.6.3 grants no IA_TA.
   # "rapid-commit": false is the anchor the DHCPv6 rapid commit feature flips.
   - |

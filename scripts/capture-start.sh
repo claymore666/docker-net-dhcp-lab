@@ -55,6 +55,10 @@ sudo -n nsenter -t "$pid" -n ip link set eth-obs up
 # file live (lab #76).
 sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs.pcap -U --immediate-mode \
 	'udp port 67 or udp port 68 or udp port 546 or udp port 547 or (icmp6 and (ip6[40] == 133 or ip6[40] == 134))'
+# E3b (#15): the filter above matches no 802.1Q frame, so VLAN 100 DHCP
+# gets its own file; the witness that a lease came over the tag.
+sudo -n docker exec -d "$CONTAINER" tcpdump -i eth-obs -w /tmp/obs-vlan.pcap -U --immediate-mode \
+	'vlan 100 and (udp port 67 or udp port 68)'
 
 # Bounded wait for tcpdump to actually be running before telling the
 # caller it is safe to generate traffic (issue #1); -x, not -f, for the

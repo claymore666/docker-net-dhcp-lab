@@ -36,6 +36,7 @@ var routerosNAReasons = map[Capability]string{
 	CapDNSRegistration: "the CHR's resolver refuses remote queries in its stock config (allow-remote-requests=no, M3) and the lab keeps it that way.",
 	CapV6:              rosV6Reason,
 	CapServerEvents:    serverEventsNA,
+	CapVLANPool:        vlanPoolNA,
 }
 
 // NAReason names why a capability is absent (DESIGN-910 5.2, #9).

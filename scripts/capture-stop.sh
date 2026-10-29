@@ -16,6 +16,7 @@ if sudo -n docker inspect "$CONTAINER" >/dev/null 2>&1; then
 	sudo -n docker exec "$CONTAINER" pkill tcpdump || true
 	sleep 1
 	sudo -n docker cp "$CONTAINER:/tmp/obs.pcap" "$PCAP" 2>/dev/null || true
+	sudo -n docker cp "$CONTAINER:/tmp/obs-vlan.pcap" "${PCAP%.pcap}-vlan.pcap" 2>/dev/null || true
 	sudo -n docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 fi
 sudo -n ip link del "$VETH_HOST" 2>/dev/null || true
