@@ -8,15 +8,18 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
-**[1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)**
-in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
-Most BLOCKED rows come from lab infrastructure under load (test hosts
-unreachable over ssh), confirmed by rerunning those cells alone. Most FAIL
-rows are lab defects (the verdict writer and source adapters), fixed in
-this release. The plugin finding is the CreateEndpoint client timeout
-described on the results page.
+**[1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md)**
+in the newest host run: plugin v2.6.0-rc2 on the lab as it stood before the
+v0.3.0 fixes (lab 98899a0), fourteen cells, thirteen of them with verdicts.
+It is not a run of this release: the v0.3.0 changes have no host run yet,
+and the first is planned for v0.4.0 (#104). Many FAIL and BLOCKED rows are
+lab defects, listed on the page, several of them fixed since. The plugin
+findings are on the page too.
 
-Earlier run, for history: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
+Earlier run: [1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)
+in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
+
+Oldest run: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
 docker-net-dhcp-lab v0.1.0 over 3 DHCP servers, 2 Docker hosts, 5 network
 shapes, 17 scenarios per shape.
 
@@ -121,7 +124,7 @@ files carry these IDs.
 | B | router-side features: reservations, DNS registration, requested address, vendor class, option changes on renewal, lease release, ipvlan identity | B1 to B8 | v0.2.0, #23 |
 | C | failure and hostile network: source down, restart without lease database, failover, squatter, rogue server, pool exhausted, renumbering, loss and latency, relay | C1 to C12b | v0.2.0, #23 (#11 relay cell, #12 failover cells) |
 | D | IPv6: DHCPv6, SLAAC, managed flag, two prefixes | D1 to D4 | v0.2.0, #23 |
-| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 (E1 to E3 built; E4 and E5 planned) | v0.3.0, #15 |
+| E | operations and soak: audit ledger, metrics, host link names, VLAN parent, weeks-long soak | E1 to E5 (E1 to E3 in v0.3.0; E4 and E5 planned) | v0.3.0 for E1 to E3, v0.4.0 for E4 and E5, #15 |
 | F | server-side support for the plugin's v2.4.0 client features | one per feature, numbered in #20 | v0.2.0, #20 (#21 FORCERENEW sender) |
 
 Group A runs today:
@@ -288,30 +291,33 @@ scripts/down-cell.sh kea <work-dir>
 
 | Source | Cell | Host run |
 |---|---|---|
-| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page |
-| udhcpd | `udhcpd` | v0.2.0 results page |
-| Pi-hole | `pihole` | v0.2.0 results page |
-| MikroTik CHR | `chr` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
-| OpenWrt 25.12 | `openwrt` | run on 2026-10-11, no verdicts (a missing base-image prerequisite on the lab host), see the v0.2.0 results page |
-| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages |
-| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages |
-| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages |
-| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only) |
-| Kea behind a relay | `kea-relay` | run on 2026-10-11, no verdicts: it stopped at its relay probe (no relayed ACK reached the client observer, a lab error, so no shape ran), see the v0.2.0 results page |
-| Windows Server 2025 DHCP (v0.3.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built; its adapter does not exist yet |
-| A physical Fritz.Box (v0.3.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
+| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| udhcpd | `udhcpd` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| Pi-hole | `pihole` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes (macvlan shape only: 29 FAIL, no PASS; the other shapes stopped on lab-side faults, a firewall-rule check, an image pull and the FTL restart limit, fixed in v0.3.0 (#93) and not re-run) |
+| MikroTik CHR | `chr` | no verdicts in the v0.3.0 page's run (2026-10-13): the base image could not be built, a lab defect (#92) fixed in v0.3.0 and not re-run; see the [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| OpenWrt 25.12 | `openwrt` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: 117 FAIL, 37 PASS, mostly the lab's own source probe ("ping: permission denied"); the probe was fixed in v0.3.0 (#98) and not re-run |
+| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only); newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
+| Kea behind a relay | `kea-relay` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: no PASS. The relay VM had no `sysctl`, so its rows read BLOCKED (#91, fixed in v0.3.0, not re-run); the relay probe itself passed. The 2026-10-11 run stopped at the probe, see the v0.2.0 results page |
+| Kea failover pair (hot standby) | `kea-ha` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
+| ISC dhcpd failover pair | `isc-failover` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes; C5 FAIL on all five shapes was the judge, fixed in v0.3.0 (#100) and not re-run |
+| Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built; its adapter does not exist yet |
+| A physical Fritz.Box (v0.4.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
 
-Work for v0.3.0 is on `dev` and has no host run yet, so none of it
-appears on a results page:
+Work for v0.3.0 and v0.4.0 is on `dev` and has no host run yet, so none of
+it appears on a results page:
 
-- **Fritz.Box cell** (#13): the `fritzbox` cell and its schema are in
+- **Fritz.Box cell** (#13, v0.4.0): the `fritzbox` cell and its schema are in
   `lab.yaml`; the adapter is a placeholder that reads nothing.
-- **Windows Server 2025 image** (#14): `scripts/build-windows-image.sh`
+- **Windows Server 2025 image** (#14, v0.4.0): `scripts/build-windows-image.sh`
   builds the evaluation image the `windows` cell boots. The cell is in
   `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
   first host build are still to come, and `labctl` refuses the cell until then.
-- **Server events** (#15): Kea, ISC dhcpd and dnsmasq can list the DHCP
-  messages they logged; no scenario reads them yet.
+- **Server events** (#15): Kea, ISC dhcpd and dnsmasq list the DHCP
+  messages they logged, and E1 and E2 judge the plugin's ledger and metrics
+  against them (group E above). E3a and E3b need no server events.
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
@@ -435,7 +441,13 @@ prints the order). After all cells finish, a cell with a verdict whose
 reason carries `CreateEndpoint` and `Client.Timeout` (the load signature)
 gets one more run, two cells at a time: those verdicts are moved to
 `<evidence>/retried/`, the log lists them, and the second result is final
-(`--no-retry` skips the pass). On the two IPAM shapes `labctl run` writes the
+(`--no-retry` skips the pass). The retry pass keeps the first pass's plugin
+journal and packet capture beside its own (#95). When a shape aborts before
+its scenarios ran, the script has `labctl` write a BLOCKED row, with the abort
+reason, for every scenario the shape never reached (#101). At the first
+"device or resource busy" refusal on a parent NIC, the lab lists the links of
+every network namespace on the docker host in `<cell>-parent-busy-links.txt`
+in the cell's evidence (#97). On the two IPAM shapes `labctl run` writes the
 N/A verdicts the shape alone decides without running the scenario. INT or TERM
 stops every running cell and tears it down with `down-cell.sh`. Two
 `run-cells.sh` started within the same minutes on overlapping cells are only
@@ -464,7 +476,11 @@ timestamp: 2026-01-01T00:00:00Z
 evidence.lease_after: <path>
 ```
 
-`result` is `PASS`, `FAIL` or `N/A`. A `PASS` always carries at least
+A free-text value is written on one line: runs of line breaks and tabs become a
+single space, and `labctl` joins a continuation line of an older file to the
+value before it (#94).
+
+`result` is `PASS`, `FAIL`, `N/A` or `BLOCKED`. A `PASS` always carries at least
 one `evidence.<label>: <path>` line pointing at a real, non-empty file
 in the bundle; an `N/A` carries none, only a `reason`. The results page
 shows each scenario by its plain name.
@@ -480,10 +496,15 @@ relative to `--root` so the same page still resolves once `--root` is a
 packed bundle's own extracted directory, and refused outright if
 `--root` is not an ancestor of a bundle, so no link leaves it. A verdict `labctl matrix` cannot find for a
 scenario x column prints `(missing)`; it is never left out of the
-table. `--asset` names the release asset the page's relative links live
+table. A shape that aborted early writes BLOCKED rows (#101), so `(missing)`
+now means no verdict file at all, as in the rc2 run, which predates that change. `--asset` names the release asset the page's relative links live
 in, printed once in the header; it is optional, and the header is
 unchanged without it. The plain-word names live in one place,
 `internal/matrix/names.go`.
+
+Every Kea, ISC dhcpd, dnsmasq and udhcpd cell, single or pair, writes a
+`<peer> package <name>:` line per peer in `versions.txt`, with the server
+package version (#99).
 
 The relay cell's `versions.txt` carries a `relay isc-dhcp-relay:` line with the
 package version. C12 and C12b results hold for that relay version only; read it there
