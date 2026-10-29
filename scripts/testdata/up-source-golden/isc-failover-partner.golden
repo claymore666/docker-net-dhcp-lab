@@ -35,6 +35,9 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y isc-dhcp-server radvd dnsmasq-base iputils-arping
   # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
   # -o vlan=100 makes the matching eth1.100 on the docker host.
+  # link names the netplan id seg0 of source-network-config.tmpl.yaml, not the
+  # kernel name eth1: netplan refuses "interface eth1 is not defined" and the
+  # VLAN never exists (#121).
   - |
     cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
     network:
@@ -42,7 +45,7 @@ runcmd:
       vlans:
         eth1.100:
           id: 100
-          link: eth1
+          link: seg0
           addresses: [10.200.152.3/24]
     NETEOF
   - chmod 600 /etc/netplan/60-lab-vlan.yaml
