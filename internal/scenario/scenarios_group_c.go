@@ -21,15 +21,22 @@ import (
 // cTiming holds every wait group C takes; the tests run it in
 // milliseconds. Bounds that judge the plugin are constants below and
 // are never tuned.
+// cLease is the lease time, in seconds, the scenarios set on the source.
+const cLease = 120
+
 type cTiming struct {
 	lease     int           // ShortenLeaseTime: T1 60 s, T2 105 s, expiry 120 s
 	anchor    time.Duration // wait for the bind's ACK to show in the capture
 	poll      time.Duration
 	stopAfter time.Duration // C2, C3: stop this long after the bind
 	c2Start   time.Duration // C2: start at bind + this (between T1 and T2)
+	c2T1      time.Duration // C2: the outage must straddle bind + this (T1, lease/2)
+	c2T2      time.Duration // C2: the latest a Start may return; the last renewing broadcast (T2, lease*7/8)
 	c2Settle  time.Duration // C2: the renewed expiry must show by bind + this
 	c3Record  time.Duration // C3: record the container's address at bind + this
 	c3Start   time.Duration // C3: start at bind + this (past expiry)
+	c3Expiry  time.Duration // C3: the outage must straddle bind + this (lease expiry)
+	margin    time.Duration // C2, C3: how far either side of that instant the source must be down
 	c3Window  time.Duration // C3: a lease within this after Start
 	c4Wait    time.Duration // C4: judge at bind + this
 	c1Settle  time.Duration // C1: wait after Start before reading the table
@@ -43,8 +50,9 @@ type cTiming struct {
 }
 
 var cDefault = cTiming{
-	lease: 120, anchor: 10 * time.Second, poll: 5 * time.Second,
+	lease: cLease, anchor: 10 * time.Second, poll: 5 * time.Second,
 	stopAfter: 10 * time.Second, c2Start: 80 * time.Second, c2Settle: 150 * time.Second,
+	c2T1: 60 * time.Second, c2T2: cLease * time.Second * 7 / 8, c3Expiry: 120 * time.Second, margin: cJitter,
 	c3Record: 140 * time.Second, c3Start: 150 * time.Second, c3Window: 120 * time.Second,
 	c4Wait: 135 * time.Second, c1Settle: 40 * time.Second, c10Lift: 20 * time.Second,
 	c6bWindow: 30 * time.Second, c8Settle: 40 * time.Second, c8Links: 10 * time.Second, c9Wait: 200 * time.Second,
@@ -293,7 +301,9 @@ func runC2Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if v != nil {
 		return *v
 	}
-	stopAt, startAt, v := cOutage(ctx, e, NameC2, b.bindAt.Add(t.stopAfter), b.bindAt.Add(t.c2Start))
+	need := t.straddle(b.bindAt, t.c2T1)
+	need.upBy = b.bindAt.Add(t.c2T2)
+	stopAt, startAt, _, v := cOutage(ctx, e, NameC2, b.bindAt.Add(t.stopAfter), b.bindAt.Add(t.c2Start), need)
 	if v != nil {
 		return *v
 	}
@@ -353,37 +363,88 @@ func runC2Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 		b.ident, b.addr, b.before.Expires.UTC().Format("15:04:05"), after.Expires.UTC().Format("15:04:05"), secs), b.ev, e.GitSHA)
 }
 
+// cSpan is the stretch of time a scenario needs the source to have been
+// down for: from is the latest the source may be stopped, to the earliest
+// it may be started again. upBy, when set, is the latest Start may return
+// for the scenario to still be the one being judged (lab #134).
+type cSpan struct{ from, to, upBy time.Time }
+
+// straddle is the span of margin either side of bind + at.
+func (t cTiming) straddle(bind time.Time, at time.Duration) cSpan {
+	return cSpan{from: bind.Add(at - t.margin), to: bind.Add(at + t.margin)}
+}
+
+// outageShort says why a source that was down from stopped until
+// started did not hold the span, or "" when it did (lab #134).
+func outageShort(stopped, started time.Time, need cSpan) string {
+	if !stopped.After(need.from) && !started.Before(need.to) {
+		return ""
+	}
+	const f = "15:04:05.000"
+	return fmt.Sprintf("lab: the source was down for %s (stop returned %s, start due %s), not across %s-%s which this scenario needs: the lab's connection to the source stalled, so the plugin was not judged",
+		started.Sub(stopped).Round(time.Millisecond), stopped.UTC().Format(f), started.UTC().Format(f), need.from.UTC().Format(f), need.to.UTC().Format(f))
+}
+
 // cOutage stops the source at stopAt and starts it at startAt, and
 // returns the lab clock's times of both. The source is started again by
-// defer if the scenario ends early.
-func cOutage(ctx context.Context, e Env, scenario string, stopAt, startAt time.Time, during ...func() *Verdict) (time.Time, time.Time, *Verdict) {
+// defer if the scenario ends early. The down time is measured from when
+// Stop returned: when it does not hold need (run 4: Stop returned after
+// the planned start and the window was 0 s, #134) the source is started
+// again and the verdict is BLOCKED. The same stall can hit Start: the
+// third time is when Start returned, which a window after Start counts
+// from, and a Start that returns after need.upBy is BLOCKED too (C2: T2, the
+// last renewing broadcast, RFC 2131 4.4.5; dhcp-golib sends none after it).
+func cOutage(ctx context.Context, e Env, scenario string, stopAt, startAt time.Time, need cSpan, during ...func() *Verdict) (time.Time, time.Time, time.Time, *Verdict) {
 	if err := sleepUntil(ctx, stopAt); err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)
-		return time.Time{}, time.Time{}, &v
+		return time.Time{}, time.Time{}, time.Time{}, &v
 	}
-	if err := e.Source.Stop(ctx); err != nil {
+	if now := time.Now(); now.After(need.from) {
+		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("lab: it is %s, past %s, the latest the source can still be stopped to straddle %s; the source was not touched",
+			now.UTC().Format("15:04:05.000"), need.from.UTC().Format("15:04:05.000"), need.to.UTC().Format("15:04:05.000")), e.GitSHA)
+		return time.Time{}, time.Time{}, time.Time{}, &v
+	}
+	stopCtx, cancel := context.WithDeadline(ctx, need.from)
+	err := e.Source.Stop(stopCtx)
+	cancel()
+	if err != nil {
 		_ = e.Source.Start(bCleanupCtx(ctx))
-		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("could not stop the source: %v", err), e.GitSHA)
-		return time.Time{}, time.Time{}, &v
+		msg := fmt.Sprintf("could not stop the source: %v", err)
+		if ctx.Err() == nil && time.Now().After(need.from) {
+			msg = fmt.Sprintf("lab: the source did not stop before %s, the latest the scenario can still straddle %s: %v", need.from.UTC().Format("15:04:05.000"), need.to.UTC().Format("15:04:05.000"), err)
+		}
+		v := blocked(scenario, e.Cell, e.Shape, msg, e.GitSHA)
+		return time.Time{}, time.Time{}, time.Time{}, &v
 	}
 	stopped := time.Now()
 	for _, f := range during {
 		if v := f(); v != nil {
 			_ = e.Source.Start(bCleanupCtx(ctx))
-			return time.Time{}, time.Time{}, v
+			return time.Time{}, time.Time{}, time.Time{}, v
 		}
 	}
 	if err := sleepUntil(ctx, startAt); err != nil {
 		_ = e.Source.Start(bCleanupCtx(ctx))
 		v := blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)
-		return time.Time{}, time.Time{}, &v
+		return time.Time{}, time.Time{}, time.Time{}, &v
 	}
 	started := time.Now()
+	if short := outageShort(stopped, started, need); short != "" {
+		_ = e.Source.Start(bCleanupCtx(ctx))
+		v := blocked(scenario, e.Cell, e.Shape, short, e.GitSHA)
+		return time.Time{}, time.Time{}, time.Time{}, &v
+	}
 	if err := e.Source.Start(ctx); err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("could not start the source again: %v", err), e.GitSHA)
-		return time.Time{}, time.Time{}, &v
+		return time.Time{}, time.Time{}, time.Time{}, &v
 	}
-	return stopped, started, nil
+	up := time.Now()
+	if !need.upBy.IsZero() && up.After(need.upBy) {
+		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("lab: the source took until %s to start again, past %s, the latest this scenario can still be judged, before T2, the last renewing broadcast: the lab's connection to the source stalled, so the plugin was not judged",
+			up.UTC().Format("15:04:05.000"), need.upBy.UTC().Format("15:04:05.000")), e.GitSHA)
+		return time.Time{}, time.Time{}, time.Time{}, &v
+	}
+	return stopped, started, up, nil
 }
 
 func runC3(ctx context.Context, e Env) Verdict { return runC3Tuned(ctx, e, cDefault) }
@@ -416,7 +477,7 @@ func runC3Tuned(ctx context.Context, e Env, t cTiming) Verdict {
 		b.ev["addr-past-expiry"] = recordPath
 		return nil
 	}
-	_, startAt, v := cOutage(ctx, e, NameC3, b.bindAt.Add(t.stopAfter), b.bindAt.Add(t.c3Start), record)
+	_, _, startAt, v := cOutage(ctx, e, NameC3, b.bindAt.Add(t.stopAfter), b.bindAt.Add(t.c3Start), t.straddle(b.bindAt, t.c3Expiry), record)
 	if v != nil {
 		return *v
 	}

@@ -54,13 +54,14 @@ type PairProfile struct {
 	StandbySilent    bool
 	// SplitPool says each peer leases from its own half of the pool
 	// while its partner is down (ISC split 128): C5b then checks the
-	// outage address against the primary's backup half (lab #12).
+	// outage address against the partner's own backup half, read from
+	// the partner's table after the takeover (lab #12, #129).
 	SplitPool bool
 }
 
 // PoolSplitReader is what a SplitPool pair offers C5b: the addresses
-// one peer's table marks as the partner's half, read before the stop
-// (RFC 3074 split pool, lab #12).
+// one peer's table marks backup: the secondary's half of the pool, read
+// from the secondary's own table (RFC 3074 split pool, lab #12, #129).
 type PoolSplitReader interface {
 	PeerBackupAddrs(ctx context.Context, name string) ([]string, error)
 }
@@ -500,7 +501,7 @@ func (p *PairAdapter) PeerState(ctx context.Context, name string) (HAState, erro
 
 // PeerBackupAddrs asks one peer's adapter for the addresses its table
 // marks backup; a peer kind without the reader is an error (lab #12,
-// RFC 3074 split pool).
+// #129, RFC 3074 split pool).
 func (p *PairAdapter) PeerBackupAddrs(ctx context.Context, name string) ([]string, error) {
 	peer, err := p.peer(name)
 	if err != nil {

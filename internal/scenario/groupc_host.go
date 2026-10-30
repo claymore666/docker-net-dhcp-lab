@@ -44,8 +44,18 @@ func timedRun(ctx context.Context, r sourceadapter.Runner, cmd string) (timedRes
 
 // timedDockerRun is runContainer's docker run, timed (C1, C10).
 func timedDockerRun(ctx context.Context, r sourceadapter.Runner, net, name string) (timedResult, error) {
+	return timedDockerRunMAC(ctx, r, net, name, "")
+}
+
+// timedDockerRunMAC is timedDockerRun with an explicit --mac-address when
+// mac is not empty (C5b and C5c, #129).
+func timedDockerRunMAC(ctx context.Context, r sourceadapter.Runner, net, name, mac string) (timedResult, error) {
 	removeContainer(ctx, r, name)
-	return timedRun(ctx, r, fmt.Sprintf("sudo docker run -d --name %s --network %s alpine:3.20 sleep 600", name, net))
+	flag := ""
+	if mac != "" {
+		flag = " --mac-address " + mac
+	}
+	return timedRun(ctx, r, fmt.Sprintf("sudo docker run -d --name %s --network %s%s alpine:3.20 sleep 600", name, net, flag))
 }
 
 // timedNetworkCreate is NetworkUpExtra's create, timed (C11). down is
