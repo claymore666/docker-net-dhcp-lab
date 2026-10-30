@@ -230,10 +230,10 @@ ready_cloud_init() {
 		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null
 }
 
-# qga (CHR, #9): RouterOS has no cloud-init. The three scripts and the key
-# go to the VM through its guest agent once it boots; seed-chr.sh does it
-# from ready_qga, which polls until the identity the seed sets last reads
-# back over ssh as lab.
+# qga (CHR, #9): RouterOS has no cloud-init. Its guest agent sets the mgmt
+# address once it boots, then the stock admin uploads the three scripts and
+# the key (#130); seed-chr.sh does it from ready_qga, which polls until
+# the identity the seed sets last reads back over ssh as lab.
 seed_qga() {
 	if [ -n "$partner_seg$relay_client" ]; then
 		echo "up-source: REFUSED -- the qga seed builds a single source with no relay" >&2

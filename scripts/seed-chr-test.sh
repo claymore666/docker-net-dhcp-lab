@@ -1,7 +1,7 @@
 #!/bin/bash
-# seed-chr.sh (#9) against a stub guest agent and a stub ssh: a seeded
-# CHR is left alone, a stock one gets the mgmt script, the three files and
-# one admin import, a run stopped after the admin line is finished, and
+# seed-chr.sh (#9) against a stub guest agent, scp and ssh: a seeded CHR
+# is left alone, a stock one gets the mgmt script, one admin upload of the
+# three files and one admin import, a run stopped after the admin line is finished, and
 # each failure maps to its exit code (1 poll again, 2 stop). No VM.
 set -euo pipefail
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -40,6 +40,8 @@ case "$req" in
 	case "$n" in 1) o=$STUB_IDENTITY ;; 2) o=${STUB_ADMIN:-false,0,0} ;; *) o='' ;; esac
 	printf '{"return":{"exitcode":0,"exited":true,"out-data":"%s"}}\n' "$(printf '%s\r\n' "$o" | base64 -w0)"
 	;;
+# Through virsh the CHR agent never answers guest-file-close (#130).
+*guest-file-close*) exit 1 ;;
 *guest-file-open*) echo '{"return":1000}' ;;
 *guest-file-write*)
 	b=$(sed 's/.*"buf-b64":"\([^"]*\)".*/\1/' <<<"$req")
@@ -53,6 +55,11 @@ cat >"$tmp/bin/ssh" <<'STUB'
 { printf 'SSH'; printf ' %q' "$@"; echo; } >>"$STUB_LOG"
 printf '%s\r\n' "$STUB_IMPORT"
 exit "${STUB_SSH_RC:-0}"
+STUB
+cat >"$tmp/bin/scp" <<'STUB'
+#!/bin/bash
+{ printf 'SCP'; printf ' %q' "$@"; echo; } >>"$STUB_LOG"
+exit "${STUB_SCP_RC:-0}"
 STUB
 cat >"$tmp/bin/sleep" <<'STUB'
 #!/bin/bash
@@ -76,14 +83,18 @@ run() {
 
 run seeded 0 STUB_IDENTITY=lab-ready
 [ "$(grep -c '"guest-exec"' "$tmp/log")" = 1 ] || bad "seeded: ran more than the identity read"
-grep -q 'guest-file-open\|^SSH' "$tmp/log" && bad "seeded: wrote files or logged in again"
+grep -q '^SCP\|^SSH' "$tmp/log" && bad "seeded: uploaded or logged in again"
 
 run stock 0
 [ "$(grep -c '"guest-exec"' "$tmp/log")" = 3 ] || bad "stock: the mgmt script did not run once"
 grep -q "$(base64 -w0 <"$tmp/seed/lab-mgmt.rsc")" "$tmp/log" || bad "stock: guest-exec did not carry lab-mgmt.rsc"
-for f in lab.pub lab-baseline.rsc lab-seed.rsc; do
-	grep -qF "\"path\":\"$f\"" "$tmp/log" || bad "stock: $f was not written"
+grep -q 'guest-file' "$tmp/log" && bad "stock: used guest-file, which hangs through virsh (#130)"
+upload=$(grep '^SCP' "$tmp/log" || true)
+[ "$(wc -l <<<"$upload")" = 1 ] || bad "stock: not exactly one upload: $upload"
+for want in "$tmp/seed/lab.pub" "$tmp/seed/lab-baseline.rsc" "$tmp/seed/lab-seed.rsc" 'admin@10.200.255.141:' "UserKnownHostsFile=$tmp/kh" 'PubkeyAuthentication=no'; do
+	grep -qF -- "$want" <<<"$upload" || bad "stock: the upload lacks $want: $upload"
 done
+[ "$(grep -o '^SCP\|^SSH' "$tmp/log" | tr -d '\n')" = SCPSSH ] || bad "stock: the upload does not come before the import"
 login=$(grep '^SSH' "$tmp/log" || true)
 [ "$(wc -l <<<"$login")" = 1 ] || bad "stock: not exactly one login: $login"
 for want in "UserKnownHostsFile=$tmp/kh" 'PubkeyAuthentication=no' 'admin@10.200.255.141' '/import\ file-name=lab-seed.rsc'; do
@@ -93,7 +104,7 @@ done
 run resume 0 STUB_ADMIN=true,1,1
 [ "$(grep -c '"guest-exec"' "$tmp/log")" = 3 ] || bad "resume: not one identity set after the admin read"
 grep -q "$(printf '%s\n' '/system identity set name=lab-ready' | base64 -w0)" "$tmp/log" || bad "resume: the identity was not set"
-grep -q 'guest-file-open\|^SSH' "$tmp/log" && bad "resume: wrote files or logged in"
+grep -q '^SCP\|^SSH' "$tmp/log" && bad "resume: uploaded or logged in"
 run half-seeded 2 STUB_ADMIN=true,0,0
 grep -q '^SSH' "$tmp/log" && bad "half-seeded: logged in"
 # lab #130: an agent that pings but is slow is a poll again (1), never a
@@ -110,10 +121,15 @@ run exec-timeout-late 1 STUB_EXEC_FAIL=2
 run mgmt-hangs 2 STUB_HANG=3
 grep -q 'TIMEOUT -- lab-mgmt.rsc had not finished' "$tmp/out" || bad "mgmt-hangs: no named timeout: $(cat "$tmp/out")"
 grep -q 'REFUSED' "$tmp/out" && bad "mgmt-hangs: a timeout reported as a refusal"
-grep -q 'guest-file-open\|^SSH' "$tmp/log" && bad "mgmt-hangs: went on after an unfinished mgmt script"
+grep -q 'guest-file\|^SCP\|^SSH' "$tmp/log" && bad "mgmt-hangs: went on after an unfinished mgmt script"
 run no-agent 1 STUB_PING=no
 grep -q 'guest-exec' "$tmp/log" && bad "no-agent: went on past the ping"
 run no-sshd 1 STUB_SSH_RC=255 STUB_IMPORT='Connection refused'
+run no-sshd-upload 1 STUB_SCP_RC=255
+grep -q '^SSH' "$tmp/log" && bad "no-sshd-upload: imported after a failed upload"
+run upload-refused 2 STUB_SCP_RC=1
+grep -q 'REFUSED -- the admin upload' "$tmp/out" || bad "upload-refused: no named refusal: $(cat "$tmp/out")"
+grep -q '^SSH' "$tmp/log" && bad "upload-refused: imported after a refused upload"
 run denied 2 STUB_IMPORT='not enough permissions (9)'
 run parse-error 2 STUB_IMPORT='expected end of command (line 3 column 1)'
 run silent 2 STUB_IMPORT=''

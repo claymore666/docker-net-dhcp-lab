@@ -1,10 +1,10 @@
 #!/bin/bash
 # Seed a MikroTik CHR source VM (lab #9). guest-exec scripts run with a
 # policy that may write config but not users or keys (M3), so the guest
-# agent runs lab-mgmt.rsc (vendor export, mgmt address) and pushes lab.pub,
-# lab-baseline.rsc and lab-seed.rsc with guest-file-write; the stock admin
-# (blank password, once) then imports lab-seed.rsc over the mgmt address,
-# and that script disables admin. up-source.sh's ready_qga calls this until
+# agent runs lab-mgmt.rsc (vendor export, mgmt address); the stock admin
+# (blank password, once) then uploads lab.pub, lab-baseline.rsc and
+# lab-seed.rsc and imports lab-seed.rsc over the mgmt address, and that
+# script disables admin. up-source.sh's ready_qga calls this until
 # the identity reads lab-ready. Exit 0: seeded; exit 1: not there yet,
 # poll again; exit 2: refused, stop.
 set -euo pipefail
@@ -130,26 +130,24 @@ fi
 	exit 2
 }
 
-for f in lab.pub lab-baseline.rsc lab-seed.rsc; do
-	r=$(qga "{\"execute\":\"guest-file-open\",\"arguments\":{\"path\":\"$f\",\"mode\":\"w\"}}")
-	handle=$(field return "$r")
-	case "$handle" in '' | *[!0-9]*)
-		echo "seed-chr: REFUSED -- guest-file-open $f answered: $r" >&2
-		exit 2
-		;;
-	esac
-	r=$(qga "{\"execute\":\"guest-file-write\",\"arguments\":{\"handle\":$handle,\"buf-b64\":\"$(base64 -w0 <"$SEED_DIR/$f")\"}}")
-	qga "{\"execute\":\"guest-file-close\",\"arguments\":{\"handle\":$handle}}" >/dev/null
-	if [ "$(field count "$r")" != "$(stat -c %s "$SEED_DIR/$f")" ]; then
-		echo "seed-chr: REFUSED -- guest-file-write $f answered: $r" >&2
-		exit 2
-	fi
-done
+# Through virsh the agent never answers guest-file-close (measured on the
+# lab host 2026-10-30, lab #130), so the files go over the stock admin
+# login the import uses. SSH_ASKPASS=/bin/true answers the password prompt
+# with the stock blank password. 255 is the login itself: sshd not up yet
+# (admin disabled by an earlier run is ruled out above).
+rc=0
+out=$(SSH_ASKPASS=/bin/true SSH_ASKPASS_REQUIRE=force scp -P "${SEED_SSH_PORT:-22}" -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$SEED_DIR/lab.pub" "$SEED_DIR/lab-baseline.rsc" "$SEED_DIR/lab-seed.rsc" "admin@$MGMT_IP:" </dev/null 2>&1) || rc=$?
+if [ "$rc" = 255 ]; then
+	echo "seed-chr: the admin upload to $DOMAIN failed: $out" >&2
+	exit 1
+fi
+if [ "$rc" != 0 ]; then
+	echo "seed-chr: REFUSED -- the admin upload to $DOMAIN exited $rc: $out" >&2
+	exit 2
+fi
 
-# SSH_ASKPASS=/bin/true answers the password prompt with the stock blank
-# password; a parse error still exits 0 (M3), so the import's own success
-# line is what counts. 255 is the login itself: sshd not up yet (admin
-# disabled by an earlier run is ruled out above).
+# A parse error still exits 0 (M3), so the import's own success line is
+# what counts.
 rc=0
 out=$(SSH_ASKPASS=/bin/true SSH_ASKPASS_REQUIRE=force ssh -p "${SEED_SSH_PORT:-22}" -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "admin@$MGMT_IP" '/import file-name=lab-seed.rsc' </dev/null 2>&1) || rc=$?
 out=$(tr -d '\r' <<<"$out")
