@@ -35,7 +35,7 @@ func (f *ipRunner) Run(_ context.Context, cmd string) (string, error) {
 	// The other-namespace listing (#97): no netns, no container, the
 	// plugin in the host's namespace.
 	switch {
-	case cmd == "ip netns list", cmd == "sudo docker ps -q":
+	case cmd == "ip netns list", cmd == "sudo docker ps -q", strings.HasPrefix(cmd, "sudo docker ps -a --format"):
 		return "", nil
 	case cmd == "sudo pgrep -x net-dhcp":
 		return "42\n", nil
