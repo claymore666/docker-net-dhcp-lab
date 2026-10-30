@@ -62,9 +62,24 @@ udhcpd) server_package=udhcpd ;;
 esac
 
 echo "== bring up cell $CELL =="
-"$REPO_ROOT/scripts/up-cell.sh" "$CELL" "$WORK"
-
 echo "$RESOLVED" >"$EVIDENCE_DIR/${CELL}-resolved-lab.json"
+# A cell that does not come up is a lab error with a name, never an empty
+# result (#130): every shape gets BLOCKED rows that carry the reason, the
+# exit is non-zero, and run-cells.sh then tears the cell down.
+up_err="$WORK/up-cell.err"
+up_rc=0
+{ "$REPO_ROOT/scripts/up-cell.sh" "$CELL" "$WORK" 2>&1 1>&3 | tee "$up_err" >&2; } 3>&1 || up_rc=$?
+if [ "$up_rc" -ne 0 ]; then
+	up_reason=$({ grep -E '^(up-cell|up-source|seed-chr): ' "$up_err" || true; } | tail -n 2 | tr '\n' ' ' | sed 's/ *$//' | cut -c1-400)
+	[ -n "$up_reason" ] || up_reason="up-cell exited with status $up_rc"
+	up_reason="the cell did not come up (lab error, not a plugin finding): $up_reason"
+	for shape in bridge macvlan ipvlan bridge-ipam macvlan-ipam; do
+		go run "$REPO_ROOT/cmd/labctl" abort-blocked "$LAB_YAML" "$REPO_ROOT" "$CELL" "$shape" "$EVIDENCE_DIR" "$up_reason" ||
+			echo "run-cell: could not write the BLOCKED rows for $CELL/$shape" >&2
+	done
+	echo "run-cell: FAIL -- $up_reason" >&2
+	exit 1
+fi
 
 known_hosts="$WORK/known_hosts"
 ssh_run() {

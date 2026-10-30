@@ -44,22 +44,42 @@ qga() {
 field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p" <<<"$2"; }
 
 # ros SCRIPT: run RouterOS script text through guest-exec; sets out and
-# code (-1 on a script error, M3).
+# code (-1 on a script error, M3), and leaves code empty when the script
+# has not exited after 30 s (lab #130). An agent that answers guest-ping
+# but not guest-exec in time is slow, not refusing: exit 1 asks for
+# another poll, and up-source.sh's bound ends the wait with a named
+# error. unfinished_ok=1 lets a caller whose script must not run twice
+# handle the empty code itself.
+unfinished_ok=0
 ros() {
 	local r pid s=''
-	r=$(qga "{\"execute\":\"guest-exec\",\"arguments\":{\"input-data\":\"$(printf '%s\n' "$1" | base64 -w0)\",\"capture-output\":true}}")
+	r=$(qga "{\"execute\":\"guest-exec\",\"arguments\":{\"input-data\":\"$(printf '%s\n' "$1" | base64 -w0)\",\"capture-output\":true}}") || {
+		echo "seed-chr: the guest agent of $DOMAIN did not answer guest-exec within 30 s" >&2
+		exit 1
+	}
 	pid=$(field pid "$r")
+	[ -n "$r" ] || {
+		echo "seed-chr: the guest agent of $DOMAIN sent no answer to guest-exec" >&2
+		exit 1
+	}
 	[ -n "$pid" ] || {
 		echo "seed-chr: REFUSED -- guest-exec answered: $r" >&2
 		exit 2
 	}
 	for _ in $(seq 1 30); do
-		s=$(qga "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}")
+		s=$(qga "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}") || {
+			echo "seed-chr: the guest agent of $DOMAIN did not answer guest-exec-status within 30 s" >&2
+			exit 1
+		}
 		[ "$(field exited "$s")" = true ] && break
 		sleep 1
 	done
 	out=$(field out-data "$s" | base64 -d 2>/dev/null | tr -d '\r' || true)
 	code=$(field exitcode "$s")
+	if [ -z "$code" ] && [ "$unfinished_ok" != 1 ]; then
+		echo "seed-chr: the script has not finished on $DOMAIN after 30 s; last agent reply: $(cut -c1-200 <<<"$s")" >&2
+		exit 1
+	fi
 }
 
 if ! qga '{"execute":"guest-ping"}' 2>/dev/null | grep -q '"return"'; then
@@ -98,7 +118,13 @@ case "$code:$out" in
 	;;
 esac
 
+unfinished_ok=1
 ros "$(cat "$SEED_DIR/lab-mgmt.rsc")"
+unfinished_ok=0
+if [ -z "$code" ]; then
+	echo "seed-chr: TIMEOUT -- lab-mgmt.rsc had not finished on $DOMAIN after 30 s; it is not run again, as its state is unknown" >&2
+	exit 2
+fi
 [ "$code" = 0 ] || {
 	echo "seed-chr: REFUSED -- lab-mgmt.rsc exited ${code:-without an exit code}: $out" >&2
 	exit 2

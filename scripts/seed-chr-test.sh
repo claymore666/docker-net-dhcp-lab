@@ -20,9 +20,23 @@ req=${*: -1}
 printf '%s\n' "$req" >>"$STUB_LOG"
 case "$req" in
 *guest-ping*) [ "${STUB_PING:-yes}" = yes ] && echo '{"return":{}}' ;;
-*'"guest-exec"'*) echo '{"return":{"pid":7}}' ;;
+*'"guest-exec"'*)
+	# STUB_EXEC_FAIL=N: the Nth guest-exec gets no answer (virsh timeout, rc 1);
+	# STUB_EXEC_EMPTY=N: it gets an empty reply (the socat path's timeout).
+	n=$(grep -c '"guest-exec"' "$STUB_LOG")
+	[ "${STUB_EXEC_FAIL:-0}" = "$n" ] && exit 1
+	[ "${STUB_EXEC_EMPTY:-0}" = "$n" ] && exit 0
+	echo '{"return":{"pid":7}}'
+	;;
 *guest-exec-status*)
 	n=$(grep -c '"guest-exec"' "$STUB_LOG")
+	# STUB_STATUS_FAIL=N: the status of the Nth script times out (rc 1);
+	# STUB_HANG=N: it never reports exited (lab #130).
+	[ "${STUB_STATUS_FAIL:-0}" = "$n" ] && exit 1
+	if [ "${STUB_HANG:-0}" = "$n" ]; then
+		echo '{"return":{"exited":false}}'
+		exit 0
+	fi
 	case "$n" in 1) o=$STUB_IDENTITY ;; 2) o=${STUB_ADMIN:-false,0,0} ;; *) o='' ;; esac
 	printf '{"return":{"exitcode":0,"exited":true,"out-data":"%s"}}\n' "$(printf '%s\r\n' "$o" | base64 -w0)"
 	;;
@@ -82,6 +96,21 @@ grep -q "$(printf '%s\n' '/system identity set name=lab-ready' | base64 -w0)" "$
 grep -q 'guest-file-open\|^SSH' "$tmp/log" && bad "resume: wrote files or logged in"
 run half-seeded 2 STUB_ADMIN=true,0,0
 grep -q '^SSH' "$tmp/log" && bad "half-seeded: logged in"
+# lab #130: an agent that pings but is slow is a poll again (1), never a
+# refusal (2); a mgmt script that did not finish must not run twice (2).
+run exec-timeout 1 STUB_EXEC_FAIL=1
+grep -q 'timeout\|did not answer guest-exec' "$tmp/out" || bad "exec-timeout: no named reason: $(cat "$tmp/out")"
+run exec-empty 1 STUB_EXEC_EMPTY=1
+run status-timeout 1 STUB_STATUS_FAIL=1
+grep -q 'did not answer guest-exec-status' "$tmp/out" || bad "status-timeout: no named reason: $(cat "$tmp/out")"
+run identity-hangs 1 STUB_HANG=1
+grep -q 'has not finished' "$tmp/out" || bad "identity-hangs: no named reason: $(cat "$tmp/out")"
+run admin-read-hangs 1 STUB_HANG=2
+run exec-timeout-late 1 STUB_EXEC_FAIL=2
+run mgmt-hangs 2 STUB_HANG=3
+grep -q 'TIMEOUT -- lab-mgmt.rsc had not finished' "$tmp/out" || bad "mgmt-hangs: no named timeout: $(cat "$tmp/out")"
+grep -q 'REFUSED' "$tmp/out" && bad "mgmt-hangs: a timeout reported as a refusal"
+grep -q 'guest-file-open\|^SSH' "$tmp/log" && bad "mgmt-hangs: went on after an unfinished mgmt script"
 run no-agent 1 STUB_PING=no
 grep -q 'guest-exec' "$tmp/log" && bad "no-agent: went on past the ping"
 run no-sshd 1 STUB_SSH_RC=255 STUB_IMPORT='Connection refused'
