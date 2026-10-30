@@ -831,3 +831,87 @@ func TestHostLinkCountRefusesANonNumber(t *testing.T) {
 		t.Fatal("an empty answer counted")
 	}
 }
+
+// ---- C7 on a failover pair (lab #128) ----
+
+// c7PairRig is c7Rig on a pair whose partner answers (10.200.1.3): the
+// first capture read is the deny network c7, the second the allow-list
+// network c7b, and server picks whom each REQUEST names.
+func c7PairRig(t *testing.T, server func(call int) string) (*hRig, *fakePair) {
+	r := c7Rig(t, ShapeBridge)
+	p := newFakePair(r.src)
+	p.ids["primary"] = r.e.SourceAddr
+	r.e.Source = p
+	f := r.cap.fn
+	call := 0
+	r.cap.fn = func(ident string) []DHCPMsg {
+		m := f(ident)
+		m[2].Server = server(call)
+		call++
+		return m
+	}
+	return r, p
+}
+
+// Host run 4: on every isc-failover cell the client REQUESTed the
+// partner 10.200.9.3 and both peers ACKed; the judge wanted the primary.
+func TestRunC7OnAPairAcceptsARequestToThePartnerOnTheDenyNetwork(t *testing.T) {
+	r, _ := c7PairRig(t, func(call int) string {
+		if call == 0 {
+			return "10.200.1.3"
+		}
+		return "10.200.1.1"
+	})
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+}
+
+// The address the lab reaches the source on stays acceptable even when the
+// pair reports other ids for its members (preservation of the pre-pair
+// rule, lab #128).
+func TestRunC7OnAPairStillAcceptsTheSourceAddress(t *testing.T) {
+	r, p := c7PairRig(t, func(int) string { return "10.200.1.1" })
+	p.ids["primary"] = "10.200.1.2"
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+}
+
+// The allow-list names the primary alone, so a partner REQUEST on c7b
+// means the filter failed and stays a FAIL.
+func TestRunC7OnAPairKeepsTheAllowListNetworkStrict(t *testing.T) {
+	r, _ := c7PairRig(t, func(int) string { return "10.200.1.3" })
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "c7b")
+	needReason(t, v, "no REQUEST from")
+}
+
+func TestRunC7OnAPairStillFailsARequestToAStranger(t *testing.T) {
+	r, _ := c7PairRig(t, func(int) string { return "10.200.1.77" })
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "no REQUEST from")
+}
+
+func TestRunC7OnAPairBlocksWhenAPartnerIDIsUnreadable(t *testing.T) {
+	r, p := c7PairRig(t, func(int) string { return "10.200.1.3" })
+	delete(p.ids, "partner")
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "server id of peer partner")
+}
+
+// A cell that is not a pair keeps the single-source rule: a REQUEST to
+// 10.200.1.3 is not credited.
+func TestRunC7OffAPairDoesNotCreditAnotherServer(t *testing.T) {
+	r := c7Rig(t, ShapeBridge)
+	f := r.cap.fn
+	r.cap.fn = func(ident string) []DHCPMsg {
+		m := f(ident)
+		m[2].Server = "10.200.1.3"
+		return m
+	}
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "no REQUEST from")
+}

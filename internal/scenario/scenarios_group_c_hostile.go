@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -213,6 +214,33 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	}
 }
 
+// c7Servers lists the server ids a REQUEST may name for the c7 network.
+// A failover pair answers as either partner, so the deny network accepts
+// both: host run 4's isc-failover cells REQUESTed the partner and both
+// peers ACKed (lab #128). The c7b allow-list names the primary only, so
+// there a partner REQUEST would mean the filter failed.
+func c7Servers(e Env, suffix string) ([]string, error) {
+	pc, ok := e.Source.(sourceadapter.PairControl)
+	if !ok || suffix != "c7" {
+		return []string{e.SourceAddr}, nil
+	}
+	names := pc.PeerNames()
+	if len(names) != 2 {
+		return nil, fmt.Errorf("the source declares a failover pair but names %d peers, not 2", len(names))
+	}
+	accepted := []string{e.SourceAddr}
+	for _, n := range names {
+		id, err := pc.PeerServerID(n)
+		if err != nil {
+			return nil, fmt.Errorf("the server id of peer %s is unreadable: %v", n, err)
+		}
+		if !slices.Contains(accepted, id) {
+			accepted = append(accepted, id)
+		}
+	}
+	return accepted, nil
+}
+
 func runC7(ctx context.Context, e Env) Verdict { return runC7Tuned(ctx, e, cDefault) }
 
 // runC7Tuned -- a rogue server on the segment: a network that denies it
@@ -270,17 +298,21 @@ func runC7Tuned(ctx context.Context, e Env, _ cTiming) Verdict {
 		if rogueOffers == 0 {
 			return blocked(NameC7, e.Cell, e.Shape, fmt.Sprintf("%s: the capture shows no OFFER from the rogue %s to %s: the rogue never competed", r.suffix, rogue, ident), e.GitSHA)
 		}
+		accepted, err := c7Servers(e, r.suffix)
+		if err != nil {
+			return blocked(NameC7, e.Cell, e.Shape, err.Error(), e.GitSHA)
+		}
 		real := 0
 		for _, m := range messagesOfType(msgs, "REQUEST") {
-			switch m.Server {
-			case rogue:
+			switch {
+			case m.Server == rogue:
 				return fail(NameC7, e.Cell, e.Shape, fmt.Sprintf("%s (%s): %s sent a REQUEST naming the rogue %s", r.suffix, r.opt, ident, rogue), ev, e.GitSHA)
-			case e.SourceAddr:
+			case slices.Contains(accepted, m.Server):
 				real++
 			}
 		}
 		if real == 0 {
-			return fail(NameC7, e.Cell, e.Shape, fmt.Sprintf("%s (%s): the capture shows no REQUEST from %s naming the source %s", r.suffix, r.opt, ident, e.SourceAddr), ev, e.GitSHA)
+			return fail(NameC7, e.Cell, e.Shape, fmt.Sprintf("%s (%s): the capture shows no REQUEST from %s naming the source %s", r.suffix, r.opt, ident, strings.Join(accepted, " or ")), ev, e.GitSHA)
 		}
 		if !inMainPool(e, addr) {
 			return fail(NameC7, e.Cell, e.Shape, fmt.Sprintf("%s (%s): the container got %s, outside the source's pool %s-%s", r.suffix, r.opt, addr, e.PoolStart, e.PoolEnd), ev, e.GitSHA)
