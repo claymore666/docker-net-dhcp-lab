@@ -476,3 +476,196 @@ func TestJudgeE2HealthMetricsDisagreeOnV6Fails(t *testing.T) {
 	o.After["leases_obtained_v6"] = 1
 	wantOutcome(t, judgeE2(o), FAIL, "/Plugin.Health says")
 }
+
+// Lab #123: the plugin resumes the address CreateEndpoint obtained with
+// an INIT-REBOOT REQUEST at Join (RFC 2131 section 4.3.2). These
+// fixtures are the files host run 4 captured for the isc-dhcp bridge
+// cell, unedited: the capture text, the audit ledger and the source's
+// own log, which the judges read as they were written.
+
+func readInitRebootFixture(t *testing.T, name string) []string {
+	t.Helper()
+	b, err := os.ReadFile("testdata/init-reboot/" + name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSpace(string(b)), "\n")
+}
+
+func fixtureTime(t *testing.T, layout, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(layout, s)
+	if err != nil {
+		t.Fatalf("fixture time %q: %v", s, err)
+	}
+	return ts
+}
+
+func irWire(t *testing.T, name string) []DHCPMsg {
+	t.Helper()
+	var out []DHCPMsg
+	for _, line := range readInitRebootFixture(t, name) {
+		f := strings.Fields(line)
+		if len(f) != 13 {
+			t.Fatalf("capture line has %d fields: %q", len(f), line)
+		}
+		for i := range f {
+			if f[i] == "-" {
+				f[i] = ""
+			}
+		}
+		out = append(out, DHCPMsg{
+			At:   fixtureTime(t, "2006-01-02 15:04:05.000", "2026-10-29 "+f[0]),
+			Type: f[1], XID: f[2], CHAddr: f[3], ClientID: f[4], Server: f[5],
+			Requested: f[6], CIAddr: f[7], YIAddr: f[8], Src: f[9], Dst: f[10],
+		})
+	}
+	return out
+}
+
+func irServer(t *testing.T, name string) []sourceadapter.ServerEvent {
+	t.Helper()
+	var out []sourceadapter.ServerEvent
+	for _, line := range readInitRebootFixture(t, name) {
+		f := strings.Fields(line)
+		ev := sourceadapter.ServerEvent{At: fixtureTime(t, time.RFC3339, f[0]), Type: f[1], MAC: f[2]}
+		if len(f) > 3 {
+			ev.IP = f[3]
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+func irLedger(t *testing.T, name string) []LedgerEntry {
+	t.Helper()
+	var out []LedgerEntry
+	for _, line := range readInitRebootFixture(t, name) {
+		f := strings.Fields(line)
+		out = append(out, LedgerEntry{TS: fixtureTime(t, time.RFC3339, f[0]), Kind: f[1], IP: f[2], Endpoint: f[3]})
+	}
+	return out
+}
+
+func irE1(t *testing.T) e1Obs {
+	return e1Obs{
+		Server: irServer(t, "e1-server-events.txt"), Ledger: irLedger(t, "e1-ledger.txt"),
+		Wire: irWire(t, "e1-capture.txt"), ReleasesSent: 1,
+	}
+}
+
+func TestJudgeE1AcceptsTheInitRebootResumeAtJoin(t *testing.T) {
+	wantOutcome(t, judgeE1(irE1(t)), PASS, "matches the wire")
+}
+
+func TestJudgeE2AcceptsTheInitRebootResumeAtJoin(t *testing.T) {
+	before := map[string]int64{"leases_obtained": 69, "leases_renewed": 73, "releases_sent": 2}
+	after := map[string]int64{"leases_obtained": 70, "leases_renewed": 76, "releases_sent": 3}
+	o := e2Obs{
+		Server: irServer(t, "e2-server-events.txt"), Wire: irWire(t, "e2-capture.txt"),
+		Before: eCounters(before), After: eCounters(after), Health: eCounters(after),
+		InstanceBefore: "i1", InstanceAfter: "i1",
+		AddrBefore: "10.200.2.124", AddrAfter: "10.200.2.124", Address: "10.200.2.124",
+	}
+	wantOutcome(t, judgeE2(o), PASS, "obtained +1, renewed +3, released +1")
+}
+
+// The resume is in neither count: a ledger that books it as a second
+// bound entry no longer matches the wire's single DISCOVER-started one.
+func TestJudgeE1ResumeIsNotACountedBind(t *testing.T) {
+	o := irE1(t)
+	o.Ledger = append([]LedgerEntry{o.Ledger[0]}, o.Ledger...)
+	wantOutcome(t, judgeE1(o), FAIL, "2 bound and 3 renew")
+}
+
+func irMutate(t *testing.T, o e1Obs, f func(m *DHCPMsg)) e1Obs {
+	t.Helper()
+	w := append([]DHCPMsg(nil), o.Wire...)
+	for i := range w {
+		if w[i].XID == "1935e52c" {
+			f(&w[i])
+		}
+	}
+	o.Wire = w
+	return o
+}
+
+func TestJudgeE1InitRebootWithoutAnEarlierGrantFails(t *testing.T) {
+	o := irE1(t)
+	var w []DHCPMsg
+	for _, m := range o.Wire {
+		if m.XID != "3561f75d" {
+			w = append(w, m)
+		}
+	}
+	o.Wire = w
+	var srv []sourceadapter.ServerEvent
+	for _, e := range o.Server {
+		if e.At.After(fixtureTime(t, time.RFC3339, "2026-10-29T23:49:55Z")) {
+			srv = append(srv, e)
+		}
+	}
+	o.Server = srv
+	wantOutcome(t, judgeE1(o), FAIL, "no earlier exchange granted")
+}
+
+func TestJudgeE1InitRebootAckedForAnotherAddressFails(t *testing.T) {
+	o := irMutate(t, irE1(t), func(m *DHCPMsg) {
+		if m.Type == "ACK" {
+			m.YIAddr = "10.200.2.99"
+		}
+	})
+	for i, e := range o.Server {
+		if e.Type == "ACK" && e.IP == "10.200.2.123" && i > 0 && o.Server[i-1].Type == "REQUEST" && e.At.Second() == 59 {
+			o.Server[i].IP = "10.200.2.99"
+			break
+		}
+	}
+	wantOutcome(t, judgeE1(o), FAIL, "ACKed as 10.200.2.99")
+}
+
+// The resume's ACK names an address an earlier exchange did grant, but not
+// the one the client asked for: still no valid resume (#123).
+func TestJudgeE1InitRebootAckedForAnotherGrantedAddressFails(t *testing.T) {
+	o := irE1(t)
+	w := append([]DHCPMsg(nil), o.Wire...)
+	for i := range w {
+		if w[i].Type == "ACK" && (w[i].XID == "3561f75d" || w[i].XID == "1935e52c") {
+			w[i].YIAddr = "10.200.2.124"
+		}
+	}
+	o.Wire = w
+	srv := append([]sourceadapter.ServerEvent(nil), o.Server...)
+	first := true
+	for i, e := range srv {
+		if e.Type == "ACK" && (e.At.Second() == 53 || first && e.At.Second() == 59) {
+			srv[i].IP = "10.200.2.124"
+			first = e.At.Second() == 53
+		}
+	}
+	o.Server = srv
+	wantOutcome(t, judgeE1(o), FAIL, "not the address it asked for")
+}
+
+func TestJudgeE1RequestNamingAServerIsNotAnInitReboot(t *testing.T) {
+	o := irMutate(t, irE1(t), func(m *DHCPMsg) {
+		if m.Type == "REQUEST" {
+			m.Server = "10.200.2.2"
+		}
+	})
+	wantOutcome(t, judgeE1(o), FAIL, "neither a DISCOVER")
+	for _, x := range wireExchanges(o.Wire) {
+		if x.XID == "1935e52c" && !strings.Contains(x.Start, "names a server") {
+			t.Errorf("a REQUEST naming a server was labelled %q", x.Start)
+		}
+	}
+}
+
+func TestJudgeE1BroadcastRebindStillFails(t *testing.T) {
+	o := irMutate(t, irE1(t), func(m *DHCPMsg) {
+		if m.Type == "REQUEST" {
+			m.CIAddr = "10.200.2.123"
+		}
+	})
+	wantOutcome(t, judgeE1(o), FAIL, "rebind")
+}
