@@ -6,6 +6,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -340,7 +341,9 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
 	}
-	NetworkDown(ctx, r, stack, cell, shape)
+	if err := NetworkDown(ctx, r, stack, cell, shape); err != nil {
+		return "", fmt.Errorf("networkup(%s): lab: the previous teardown did not finish, so the segment NIC may still be held: %w", shape, err)
+	}
 	net := NetworkName(cell, shape)
 	switch shape {
 	case ShapeBridge, ShapeBridgeIPAM:
@@ -402,6 +405,13 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, create, err)
 		}
 	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
+		master, err := linkMaster(ctx, r, SegmentNIC)
+		if err != nil {
+			return "", fmt.Errorf("networkup(%s): lab: could not read whether %s has a master: %w", shape, SegmentNIC, err)
+		}
+		if master != "" {
+			return "", errors.New(parentHeldReason(shape, master))
+		}
 		create, _ := networkCreateCmd(shape, net, "", nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
@@ -496,47 +506,67 @@ func NetworkDownInternal(ctx context.Context, r sourceadapter.Runner, netName st
 }
 
 // NetworkDown removes a shape's network and, for bridge mode, releases
-// the segment NIC. Best-effort and idempotent, matching down-cell.sh's
-// own style: every step tolerates the thing it removes already being
-// gone, since NetworkUp calls this first on every run including the
-// very first one.
-func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) {
+// the segment NIC. Every step is retried while ssh fails and a bridge
+// shape ends by reading that the NIC has no master and the bridge is
+// gone: the state decides, not the exit codes (#137).
+func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) error {
 	net := NetworkName(cell, shape)
-	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", net))
-	if usesHostBridge(shape) {
-		br := hostBridgeName(net)
-		// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
-		// by interface name, not a live link, so this is safe (and still
-		// a no-op if already gone) whatever order the bridge itself gets
-		// torn down in below; without it, every run's ACCEPT rule for
-		// its now-deleted bridge name pile up in FORWARD forever.
-		_, _ = r.Run(ctx, forwardRuleDel(br))
-		_, _ = r.Run(ctx, forwardRule6Del(br))
-		if stack == labyaml.NetStackIfupdown {
-			// While its stanza still exists: releases the bridge's lease
-			// and lets bridge-utils' post-down undo what its pre-up did,
-			// the port's disable_ipv6 among it (lab #70).
-			_, _ = r.Run(ctx, "sudo ifdown "+br)
+	var errs []error
+	// A command may fail because the thing it removes is already gone, so
+	// only an ssh failure that outlasts the retries counts here; the reads
+	// at the end decide whether the host is clean.
+	step := func(cmd string) {
+		if _, err := runRetrying(ctx, r, cmd); isTransport(err) {
+			errs = append(errs, fmt.Errorf("%s: %w", cmd, err))
 		}
-		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
-		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
-		// Symmetric with writeBridgePersistence: without removing the
-		// netplan config too, the bridge would resurrect itself on the
-		// docker host's next real reboot even after this run tore it
-		// down (#3). The reapply after removing it hands
-		// eth1 back to cloud-init's own
-		// dhcp4: false stanza for that interface.
-		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(stack, br), " "))
-		if stack == labyaml.NetStackIfupdown {
-			// bridge-utils' post-down sets the port down; --force reruns
-			// the segment NIC's own stanza, which ifupdown still records
-			// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
-			_, _ = r.Run(ctx, "sudo ifup --force "+SegmentNIC)
-		} else {
-			_, _ = r.Run(ctx, "sudo netplan apply")
-		}
-		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
+	step(fmt.Sprintf("sudo docker network rm %s", net))
+	if !usesHostBridge(shape) {
+		return errors.Join(errs...)
+	}
+	br := hostBridgeName(net)
+	// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
+	// by interface name, not a live link, so this is safe (and still
+	// a no-op if already gone) whatever order the bridge itself gets
+	// torn down in below; without it, every run's ACCEPT rule for
+	// its now-deleted bridge name pile up in FORWARD forever.
+	step(forwardRuleDel(br))
+	step(forwardRule6Del(br))
+	if stack == labyaml.NetStackIfupdown {
+		// While its stanza still exists: releases the bridge's lease
+		// and lets bridge-utils' post-down undo what its pre-up did,
+		// the port's disable_ipv6 among it (lab #70).
+		step("sudo ifdown " + br)
+	}
+	step(fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
+	step(fmt.Sprintf("sudo ip link del %s", br))
+	// Symmetric with writeBridgePersistence: without removing the
+	// netplan config too, the bridge would resurrect itself on the
+	// docker host's next real reboot even after this run tore it
+	// down (#3). The reapply after removing it hands
+	// eth1 back to cloud-init's own
+	// dhcp4: false stanza for that interface.
+	step("sudo rm -f " + strings.Join(bridgeConfigPaths(stack, br), " "))
+	if stack == labyaml.NetStackIfupdown {
+		// bridge-utils' post-down sets the port down; --force reruns
+		// the segment NIC's own stanza, which ifupdown still records
+		// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
+		step("sudo ifup --force " + SegmentNIC)
+	} else {
+		step("sudo netplan apply")
+	}
+	step("sudo netfilter-persistent save")
+	if master, err := linkMaster(ctx, r, SegmentNIC); err != nil {
+		errs = append(errs, err)
+	} else if master != "" {
+		errs = append(errs, fmt.Errorf("%s is still enslaved to %s after the teardown", SegmentNIC, master))
+	}
+	if exists, err := linkExists(ctx, r, br); err != nil {
+		errs = append(errs, err)
+	} else if exists {
+		errs = append(errs, fmt.Errorf("bridge %s still exists after the teardown", br))
+	}
+	return errors.Join(errs...)
 }
 
 // isolationWaitWindow is IsolateIPAMNetwork's fallback when a network

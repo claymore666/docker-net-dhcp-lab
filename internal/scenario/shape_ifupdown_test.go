@@ -239,6 +239,16 @@ func (h *fakeIfupdownHost) Run(_ context.Context, cmd string) (string, error) {
 		return "", h.ifup(f[2], false)
 	case len(f) == 3 && f[1] == "ifdown":
 		return "", h.ifdown(f[2])
+	case strings.HasPrefix(cmd, "ip -o link show "):
+		l := h.links[f[4]]
+		if l == nil {
+			return "", fmt.Errorf("Device %q does not exist", f[4])
+		}
+		line := "2: " + f[4] + ": <BROADCAST,MULTICAST> mtu 1500 qdisc fq_codel"
+		if l.master != "" {
+			line += " master " + l.master
+		}
+		return line + " state UP mode DEFAULT\n", nil
 	case strings.HasPrefix(cmd, "ip link show "):
 		if h.links[f[3]] == nil {
 			return "", fmt.Errorf("Device %q does not exist", f[3])

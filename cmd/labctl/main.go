@@ -690,7 +690,13 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "labctl run: NetworkUp:", err)
 		return 1
 	}
-	defer scenario.NetworkDown(ctx, hostRunner, env.HostNetStack, cellName, shape)
+	defer func() {
+		// NetworkUp tears down only its own shape: a bridge left here keeps later
+		// macvlan/ipvlan shapes BLOCKED until a bridge shape's nomaster frees eth1 (#137).
+		if err := scenario.NetworkDown(ctx, hostRunner, env.HostNetStack, cellName, shape); err != nil {
+			fmt.Fprintln(os.Stderr, "labctl run: NetworkDown:", err)
+		}
+	}()
 
 	env.Host = hostRunner
 	env.Shape = shape
