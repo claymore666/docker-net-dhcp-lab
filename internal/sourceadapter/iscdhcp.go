@@ -149,7 +149,10 @@ var (
 	iscHWRE         = regexp.MustCompile(`hardware ethernet\s+([0-9a-fA-F:]+);`)
 	iscHostRE       = regexp.MustCompile(`client-hostname\s+"([^"]*)";`)
 	iscStateRE      = regexp.MustCompile(`binding state\s+(\w+);`)
-	iscUIDRE        = regexp.MustCompile(`(?s)uid\s+"(.*?)";`)
+	// iscUIDRE reads the quoted uid up to its closing quote, skipping a
+	// backslash pair whole: a client id holding the bytes 0x22 0x3b
+	// prints as \"; and ended the lazy match early (lab #124).
+	iscUIDRE = regexp.MustCompile(`(?s)uid\s+"((?:[^"\\]|\\.)*)";`)
 	// iscEndsRE reads the lease end (dhcpd.leases(5): weekday, then
 	// YYYY/MM/DD HH:MM:SS in UTC); "ends never;" does not match and
 	// leaves Expires zero (B6, #23).

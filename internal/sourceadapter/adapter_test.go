@@ -639,3 +639,53 @@ func TestResetLeasesPropagatesRunnerError(t *testing.T) {
 		}
 	}
 }
+
+// Lab #124: host run 4's C10 on isc-dhcp ipvlan leased 10.200.6.111 to a
+// client whose id is 00:22:3b:d8:de:c7:5e:c5:ed (the capture's option 61).
+// Its bytes 0x22 and 0x3b are a double quote and a semicolon, which
+// dhcpd prints as \" and ;, so the quoted uid itself contains `";`. The
+// lease text is rebuilt from those captured bytes by dhcpd's own
+// convention (printable bytes literal, a quote or backslash escaped,
+// everything else three-digit octal); the dumped lease file was not kept.
+func TestISCParsesAUIDWhoseBytesAreAQuoteAndASemicolon(t *testing.T) {
+	raw := `
+lease 10.200.6.111 {
+  hardware ethernet aa:bb:cc:dd:ee:ff;
+  uid "\000\";\330\336\307^\305\355";
+  binding state active;
+}
+`
+	leases, err := parseISCLeases(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].ClientID != "00:22:3b:d8:de:c7:5e:c5:ed" {
+		t.Fatalf("leases = %+v, want client id 00:22:3b:d8:de:c7:5e:c5:ed", leases)
+	}
+}
+
+// A uid ending in a backslash byte prints as \\ and then the closing
+// quote; the escape-aware match must neither stop before it nor run on.
+func TestISCParsesAUIDEndingInAnEscapedBackslash(t *testing.T) {
+	raw := `
+lease 10.200.6.112 {
+  uid "\000ab\\";
+  binding state active;
+}
+lease 10.200.6.113 {
+  uid "\000cd";
+  binding state active;
+}
+`
+	leases, err := parseISCLeases(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, l := range leases {
+		got[l.Address] = l.ClientID
+	}
+	if got["10.200.6.112"] != "00:61:62:5c" || got["10.200.6.113"] != "00:63:64" {
+		t.Fatalf("client ids = %v", got)
+	}
+}
