@@ -249,19 +249,42 @@ func ensurePackage(ctx context.Context, r sourceadapter.Runner, pkg string) erro
 // uses, never text-parsed stdout (#3): the readiness gate before each
 // scenario also checks that the shape's bridge is present.
 func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
-	if _, err := r.Run(ctx, fmt.Sprintf("ip link show %s", br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, fmt.Sprintf("readlink -f /sys/class/net/%s/master | grep -q '/%s$'", SegmentNIC, br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
-		return false
+	for _, c := range bridgeChecks(br) {
+		if _, err := r.Run(ctx, c.cmd); err != nil {
+			return false
+		}
 	}
 	return true
+}
+
+type bridgeCheck struct{ what, cmd string }
+
+// bridgeChecks are bridgeReady's four reads in order; what names the
+// condition when its read fails (#138).
+func bridgeChecks(br string) []bridgeCheck {
+	return []bridgeCheck{
+		{fmt.Sprintf("bridge link %s is missing", br), fmt.Sprintf("ip link show %s", br)},
+		{fmt.Sprintf("%s is not enslaved to %s", SegmentNIC, br), fmt.Sprintf("readlink -f /sys/class/net/%s/master | grep -q '/%s$'", SegmentNIC, br)},
+		{fmt.Sprintf("the IPv4 FORWARD rule for %s is missing", br), forwardRuleCheck(br)},
+		{fmt.Sprintf("the IPv6 FORWARD rule for %s is missing", br), forwardRule6Check(br)},
+	}
+}
+
+// bridgeFailedConditions runs every readiness read, not only up to the
+// first failure, and names each condition that does not hold; an ssh
+// failure is "could not be read", never a missing bridge (#138).
+func bridgeFailedConditions(ctx context.Context, r sourceadapter.Runner, br string) []string {
+	var failed []string
+	for _, c := range bridgeChecks(br) {
+		if _, err := r.Run(ctx, c.cmd); err != nil {
+			if isTransport(err) {
+				failed = append(failed, c.what+" (could not be read: ssh failed)")
+			} else {
+				failed = append(failed, c.what)
+			}
+		}
+	}
+	return failed
 }
 
 // ensureBridgePresent is the readiness gate that runs before any
@@ -297,17 +320,19 @@ var bridgeReadyRetryWait = 10 * time.Second
 // read, and, only if it fails, one more after bridgeReadyRetryWait. The
 // run-2 dnsmasq bridge-ipam abort (#101) was a single read straight after
 // netplan apply; a second read is the whole retry, never a loop, so a
-// bridge that never comes up still fails. A cancelled ctx skips the wait.
-func bridgeReadyAfterWait(ctx context.Context, r sourceadapter.Runner, br string) bool {
+// bridge that never comes up still fails. It returns the conditions that
+// still fail after the second read, none when the bridge is ready (#138).
+// A cancelled ctx skips the wait.
+func bridgeReadyAfterWait(ctx context.Context, r sourceadapter.Runner, br string) []string {
 	if bridgeReady(ctx, r, br) {
-		return true
+		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return false
+		return []string{"the readiness wait was cancelled"}
 	case <-time.After(bridgeReadyRetryWait):
 	}
-	return bridgeReady(ctx, r, br)
+	return bridgeFailedConditions(ctx, r, br)
 }
 
 // sshTransportRE matches ssh's own exit status 255, the code it returns
@@ -397,8 +422,12 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
 			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
 		}
-		if !bridgeReadyAfterWait(ctx, r, br) {
-			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "))
+		if failed := bridgeReadyAfterWait(ctx, r, br); len(failed) > 0 {
+			reason := fmt.Sprintf("networkup(%s): bridge %s or its %s port did not come up after %s: %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "), strings.Join(failed, "; "))
+			if file := captureBridgeState(ctx, r, evidenceDirFrom(ctx), cell, shape, br, failed); file != "" {
+				reason += " (host state: " + file + ")"
+			}
+			return "", errors.New(reason)
 		}
 		create, _ := networkCreateCmd(shape, net, br, nil)
 		if _, err := r.Run(ctx, create); err != nil {

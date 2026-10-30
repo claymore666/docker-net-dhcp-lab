@@ -664,6 +664,7 @@ func cmdRun(args []string) int {
 	// that never clears is plugin evidence, so the shape is BLOCKED and
 	// names the leftover link. No scenario is ever retried. A bridge shape
 	// cannot take a NIC with a child as its port, so this runs before every shape.
+	ctx = scenario.WithEvidenceDir(ctx, evidenceDir)
 	blockedReason, perr := scenario.ParentReady(ctx, hostRunner, cellName, shape, evidenceDir, scenario.ParentCleanWindow, scenario.ParentCleanPoll)
 	if perr != nil {
 		fmt.Fprintln(os.Stderr, "labctl run:", perr)
