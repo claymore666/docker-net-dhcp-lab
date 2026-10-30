@@ -8,14 +8,22 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
-**[1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md)**
-in the newest host run: plugin v2.6.0-rc2 on the lab as it stood before the
-v0.3.0 fixes (lab 98899a0), fourteen cells, thirteen of them with verdicts.
-It is not a run of this release: the v0.3.0 changes have no host run yet,
-and the first is planned for v0.4.0 (#104). Many FAIL and BLOCKED rows are
-lab defects, listed on the page, several of them fixed since. The plugin
-findings are on the page too.
+**[1272 PASS, 890 N/A, 160 FAIL, 358 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc2.md)**
+in the newest host run: plugin v2.7.0-rc2 on lab dev 67c28eb (v0.3.0 plus
+the #122 fix), eight cells, 2026-10-30. Most FAIL and BLOCKED rows are three
+lab teardown defects (#137, #138, #139, fixed in #140) and host load; the
+plugin finding is the relay cell: no renewal at T1 behind a relay (plugin
+#1419). The page lists the issue behind every non-PASS group.
 
+The run before it: [967 PASS, 931 N/A, 79 FAIL, 2110 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc1.md),
+plugin v2.7.0-rc1 on lab v0.3.0, fifteen cells, 2026-10-29. Six cells ran
+their scenarios; six were stopped on every row by one lab defect (#121,
+fixed in #122) and re-run in the newest run. Its plugin finding, D4b
+(prefix withdrawn, plugin #1412), is fixed in v2.7.0-rc2.
+
+Earlier runs: [1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md),
+plugin v2.6.0-rc2 on the lab as it stood before the v0.3.0 fixes (lab
+98899a0), fourteen cells, thirteen of them with verdicts.
 Earlier run: [1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)
 in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
 
@@ -291,19 +299,19 @@ scripts/down-cell.sh kea <work-dir>
 
 | Source | Cell | Host run |
 |---|---|---|
-| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
-| udhcpd | `udhcpd` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
-| Pi-hole | `pihole` | v0.2.0 results page; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes (macvlan shape only: 29 FAIL, no PASS; the other shapes stopped on lab-side faults, a firewall-rule check, an image pull and the FTL restart limit, fixed in v0.3.0 (#93) and not re-run) |
-| MikroTik CHR | `chr` | no verdicts in the v0.3.0 page's run (2026-10-13): the base image could not be built, a lab defect (#92) fixed in v0.3.0 and not re-run; see the [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
-| OpenWrt 25.12 | `openwrt` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: 117 FAIL, 37 PASS, mostly the lab's own source probe ("ping: permission denied"); the probe was fixed in v0.3.0 (#98) and not re-run |
-| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
-| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
-| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 and v0.2.0 results pages; newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
-| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 results page (macvlan shape only); newest: [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md) |
-| Kea behind a relay | `kea-relay` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes: no PASS. The relay VM had no `sysctl`, so its rows read BLOCKED (#91, fixed in v0.3.0, not re-run); the relay probe itself passed. The 2026-10-11 run stopped at the probe, see the v0.2.0 results page |
-| Kea failover pair (hot standby) | `kea-ha` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes |
-| ISC dhcpd failover pair | `isc-failover` | [v0.3.0 page](results/v0.3.0-plugin-v2.6.0-rc2.md), run before the v0.3.0 fixes; C5 FAIL on all five shapes was the judge, fixed in v0.3.0 (#100) and not re-run |
-| Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built; its adapter does not exist yet |
+| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) for kea and dnsmasq, [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) for isc-dhcp |
+| udhcpd | `udhcpd` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
+| Pi-hole | `pihole` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) (all five shapes ran; the v0.3.0 page had the macvlan shape only) |
+| MikroTik CHR | `chr` | no verdicts yet: the base image could not be built in the v0.3.0 page's run (#92, fixed), and in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run the guest never answered the lab (#130, open) |
+| OpenWrt 25.12 | `openwrt` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 145 PASS, 11 FAIL (the v0.3.0 page's 117 FAIL were the lab's own source probe, fixed in #98) |
+| Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
+| ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
+| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
+| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
+| Kea behind a relay | `kea-relay` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 144 PASS, 16 FAIL, 11 BLOCKED, the first run past the relay probe (#91 fixed the probe); the FAIL rows are the plugin's missing T1 renewal behind a relay (plugin #1419). No verdicts in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run: the probe failed on #121 |
+| Kea failover pair (hot standby) | `kea-ha` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 110 PASS, 102 FAIL, 19 BLOCKED, most of the FAIL rows the lab's teardown defect #137 (fixed in #140). Every row BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run (#121) |
+| ISC dhcpd failover pair | `isc-failover` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 204 PASS, 14 FAIL, 8 BLOCKED; C7, C5b and C5c were the judge and a precondition (#128, #129), fixed since |
+| Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
 | A physical Fritz.Box (v0.4.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
 
 Work for v0.3.0 and v0.4.0 is on `dev` and has no host run yet, so none of
