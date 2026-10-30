@@ -56,7 +56,43 @@ func c6IpvlanNA(e Env) (Verdict, bool) {
 	if e.Shape != ShapeIpvlan {
 		return Verdict{}, false
 	}
-	return na(NameC6, e.Cell, e.Shape, "plugin docs/reference.md (conflict_check): conflict_check=wait is refused on ipvlan at docker network create, because an ipvlan child does not receive the ARP replies to its own probes (RFC 5227 section 2.1.1); the lab cannot create the wait network in this shape, and C6b covers async", e.GitSHA), true
+	return na(NameC6, e.Cell, e.Shape, "plugin docs/reference.md (conflict_check): conflict_check=wait is refused on ipvlan at docker network create, because an ipvlan child does not receive the ARP replies to its own probes (RFC 5227 section 2.1.1); the lab cannot create the wait network in this shape; C6b covers async and judges the first DECLINE there (it is N/A only if the server re-offers the declined address)", e.GitSHA), true
+}
+
+// reofferedAfterDecline reports whether the server OFFERed or ACKed addr
+// again after the client DECLINEd it.
+func reofferedAfterDecline(msgs []DHCPMsg, addr string) bool {
+	var at time.Time
+	for _, m := range messagesOfType(msgs, "DECLINE") {
+		if (m.Requested == addr || m.CIAddr == addr) && (at.IsZero() || m.At.Before(at)) {
+			at = m.At
+		}
+	}
+	if at.IsZero() {
+		return false
+	}
+	for _, m := range msgs {
+		if (m.Type == "OFFER" || m.Type == "ACK") && m.YIAddr == addr && m.At.After(at) {
+			return true
+		}
+	}
+	return false
+}
+
+// c6bIpvlanReoffer is C6b's N/A on ipvlan (lab #132), reached only after
+// the window ran out. The first DECLINE is judged as on every shape (host
+// run 4: isc-dhcp, host-ubuntu2404-isc-dhcp and isc-failover passed it). When
+// the server re-offers the address just declined and the client keeps it,
+// the plugin's probe after that ACK hears nothing: an ipvlan child never
+// receives the replies to its own ARP probes (docs/reference.md,
+// conflict_check; RFC 5227 section 2.1.1, plugin #1347). That is the
+// documented limit, not a verdict on the plugin; a run with no DECLINE
+// at all stays a FAIL.
+func c6bIpvlanReoffer(e Env, msgs []DHCPMsg, x string, own []string) (string, bool) {
+	if e.Shape != ShapeIpvlan || !containsAddr(own, x) || !reofferedAfterDecline(msgs, x) {
+		return "", false
+	}
+	return fmt.Sprintf("plugin docs/reference.md (conflict_check): the client DECLINEd %s, the server re-offered it and the container keeps it; on ipvlan \"a squatter that already holds the address goes unheard\" for the probe after that ACK, because an ipvlan child does not receive the replies to its own ARP probes (RFC 5227 section 2.1.1, plugin #1347); the documented limit, not judged as a plugin result; use macvlan or bridge", x), true
 }
 
 // runC6Tuned -- conflict_check=wait: the source offers X, reserved for
@@ -195,7 +231,8 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		}
 		ev["leases-after"] = snap
 		mine := active(leasesForIdent(leases, ident), time.Now())
-		declined := declinedFor(messagesAfter(msgs, startedAt), x)
+		after := messagesAfter(msgs, startedAt)
+		declined := declinedFor(after, x)
 		if declined && !containsAddr(own, x) && !leasedOn(mine, x) {
 			for _, l := range mine {
 				if containsAddr(own, l.Address) {
@@ -206,6 +243,9 @@ func runC6bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		}
 		last = fmt.Sprintf("DECLINE of %s seen: %t; the container carries %v; the table's active leases for %s are %v", x, declined, own, ident, addrsOf(mine))
 		if time.Since(squatAt) > t.c6bWindow {
+			if why, ok := c6bIpvlanReoffer(e, after, x, own); ok {
+				return na(NameC6b, e.Cell, e.Shape, why, e.GitSHA)
+			}
 			return fail(NameC6b, e.Cell, e.Shape, fmt.Sprintf("%s after a squatter took %s: %s", t.c6bWindow, x, last), ev, e.GitSHA)
 		}
 		if err := sleepCtx(ctx, t.poll); err != nil {
