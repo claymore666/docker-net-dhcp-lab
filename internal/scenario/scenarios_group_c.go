@@ -653,8 +653,8 @@ func c10UnderDelay(ctx context.Context, e Env, ev map[string]string) *Verdict {
 	if res.Wall < c10MinWall {
 		return verdict(blocked(NameC10, e.Cell, e.Shape, fmt.Sprintf("(a) leased after %s, under the %s two delayed replies take: the delay did not act", res.Wall.Round(100*time.Millisecond), c10MinWall), e.GitSHA))
 	}
-	if gap, ok := offerDelay(msgs); !ok || gap < c10Delay {
-		return verdict(blocked(NameC10, e.Cell, e.Shape, fmt.Sprintf("(a) the capture shows no OFFER %s or more after its DISCOVER (found %v): the delay did not act", c10Delay, gap), e.GitSHA))
+	if gap, ok := ackDelay(msgs); !ok || gap < c10Delay {
+		return verdict(blocked(NameC10, e.Cell, e.Shape, fmt.Sprintf("(a) the capture shows no ACK %s or more after its REQUEST (found %v, seen=%v): the delay did not act", c10Delay, gap.Round(10*time.Millisecond), ok), e.GitSHA))
 	}
 	if err := restore(ctx); err != nil {
 		return verdict(blocked(NameC10, e.Cell, e.Shape, fmt.Sprintf("could not lift the delay: %v", err), e.GitSHA))
@@ -667,21 +667,31 @@ func c10UnderDelay(ctx context.Context, e Env, ev map[string]string) *Verdict {
 	return nil
 }
 
-// offerDelay is the time from the last DISCOVER before the first OFFER
-// to that OFFER, matched by xid.
-func offerDelay(msgs []DHCPMsg) (time.Duration, bool) {
-	sent := map[string]time.Time{}
+// ackDelay is the longest time from the first REQUEST of an exchange to
+// its ACK, matched by xid (lab #125). The OFFER is no proof of the delay:
+// the client retransmits its DISCOVER while the first reply is still in
+// flight, so the OFFER pairs with the retransmit and reads as prompt, and
+// dnsmasq and udhcpd add their own 2-3 s ping or ARP check before an
+// OFFER. Nothing precedes an ACK, so its gap is the netem delay.
+func ackDelay(msgs []DHCPMsg) (time.Duration, bool) {
+	first := map[string]time.Time{}
+	var longest time.Duration
+	found := false
 	for _, m := range msgs {
 		switch m.Type {
-		case "DISCOVER":
-			sent[m.XID] = m.At
-		case "OFFER":
-			if at, ok := sent[m.XID]; ok {
-				return m.At.Sub(at), true
+		case "REQUEST":
+			if _, ok := first[m.XID]; !ok {
+				first[m.XID] = m.At
+			}
+		case "ACK":
+			if at, ok := first[m.XID]; ok {
+				if d := m.At.Sub(at); !found || d > longest {
+					longest, found = d, true
+				}
 			}
 		}
 	}
-	return 0, false
+	return longest, found
 }
 
 func writeNote(e Env, scenario, label, body string) string {

@@ -23,7 +23,9 @@ stub() {
 	chmod +x "$1"
 }
 stub "$fake/scripts/capture-check-regenerate.sh" 'echo "regen|${3:-none}" >>"$CALLS"'
-for s in up-cell.sh capture-source-config-diff.sh down-cell.sh; do
+# UP_RC makes the bring-up fail, with UP_MSG on stderr (#130).
+stub "$fake/scripts/up-cell.sh" '[ -z "${UP_RC:-}" ] || { printf "%s\n" "${UP_MSG:-}" >&2; exit "$UP_RC"; }'
+for s in capture-source-config-diff.sh down-cell.sh; do
 	stub "$fake/scripts/$s" 'exit 0'
 done
 stub "$fake/scripts/capture-start.sh" ': >"$3/observer.ready"'
@@ -133,6 +135,22 @@ expect "a labctl that said nothing gets no generic reason: $(grep '^abort|' "$tm
 expect "shapes that finished asked for BLOCKED rows" '[ "$(grep -c '\''^abort|'\'' "$tmp/main/calls")" -eq 0 ]'
 run die3 pair DIE_SHAPE=bridge DIE_RC=3 'DIE_MSG=pool too small' || true
 expect "exit 3 (its own BLOCKED rows, cell aborted) asked for abort rows or kept running shapes" '[ "$(grep -c '\''^abort|'\'' "$tmp/die3/calls")" -eq 0 ] && [ "$(grep -c '\''^run '\'' "$tmp/die3/calls")" -eq 1 ]'
+
+# #130: a cell that does not come up ends with BLOCKED rows that name the
+# reason in every shape, a non-zero exit, and no scenario run.
+if run up-fails pair UP_RC=1 'UP_MSG=noise line
+up-source: REFUSED -- seed-chr exited 2' ; then
+	echo "$t: FAIL -- run-cell exited 0 after a failed bring-up" >&2
+	fail=1
+fi
+expect "a failed bring-up still ran scenarios" '[ "$(grep -c '\''^run '\'' "$tmp/up-fails/calls")" -eq 0 ]'
+expect "a failed bring-up did not write BLOCKED rows for the five shapes: $(grep '^abort|' "$tmp/up-fails/calls")" '[ "$(grep -c '\''^abort|'\'' "$tmp/up-fails/calls")" -eq 5 ]'
+expect "the BLOCKED rows lack the lab-error reason" '[ "$(grep -c '\''^abort|.*|the cell did not come up (lab error, not a plugin finding): up-source: REFUSED -- seed-chr exited 2$'\'' "$tmp/up-fails/calls")" -eq 5 ]'
+expect "the shapes are not the five of a cell" '[ "$(grep "^abort|" "$tmp/up-fails/calls" | cut -d"|" -f2 | tr "\n" " ")" = "bridge macvlan ipvlan bridge-ipam macvlan-ipam " ]'
+expect "run-cell printed no FAIL line for a failed bring-up" 'grep -q "^run-cell: FAIL -- the cell did not come up" "$tmp/up-fails/out"'
+expect "a failed bring-up left no resolved lab.json for the matrix" '[ -s "$(ev up-fails)/t-pair-resolved-lab.json" ]'
+run up-silent pair UP_RC=7 || true
+expect "a silent bring-up failure has no named reason: $(grep '^abort|' "$tmp/up-silent/calls" | head -1)" 'grep -q "^abort|bridge|.*|the cell did not come up (lab error, not a plugin finding): up-cell exited with status 7$" "$tmp/up-silent/calls"'
 
 [ "$fail" -eq 0 ] && echo "$t: PASS"
 exit "$fail"

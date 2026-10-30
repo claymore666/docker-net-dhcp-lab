@@ -36,6 +36,9 @@ func (g *goldenRunner) Run(ctx context.Context, cmd string) (string, error) {
 			return g.leaseOut, nil
 		}
 		return "", nil
+	case strings.Contains(cmd, "qdisc replace dev eth1 root netem"):
+		g.calls = append(g.calls, cmd)
+		return fakeNetemShow(cmd), nil
 	case strings.HasPrefix(cmd, "printf 'netns:'"):
 		g.calls = append(g.calls, cmd)
 		v6 := ""
