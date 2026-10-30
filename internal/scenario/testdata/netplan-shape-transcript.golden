@@ -2,10 +2,10 @@
 sudo docker network rm labrun-kea-bridge
 sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl15481a73
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl15481a73
@@ -42,10 +42,10 @@ sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o b
 sudo docker network rm labrun-kea-bridge
 sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl15481a73
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl15481a73
@@ -53,10 +53,10 @@ ip -o link show brl15481a73
 sudo docker network rm labrun-kea-bridge
 sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl15481a73
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl15481a73
@@ -94,10 +94,10 @@ sudo docker network create -d net-dhcp-under-test:latest --ipam-driver null -o b
 sudo docker network rm labrun-kea-bridge
 sudo iptables -D FORWARD -i brl15481a73 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl15481a73 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl15481a73
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl15481a73
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl15481a73
@@ -125,10 +125,10 @@ sudo docker network rm labrun-kea-ipvlan
 sudo docker network rm labrun-kea-bridge-ipam
 sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl2156b519
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl2156b519
@@ -165,10 +165,10 @@ sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-
 sudo docker network rm labrun-kea-bridge-ipam
 sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl2156b519
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl2156b519
@@ -176,10 +176,10 @@ ip -o link show brl2156b519
 sudo docker network rm labrun-kea-bridge-ipam
 sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl2156b519
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl2156b519
@@ -217,10 +217,10 @@ sudo docker network create -d net-dhcp-under-test:latest --ipam-driver net-dhcp-
 sudo docker network rm labrun-kea-bridge-ipam
 sudo iptables -D FORWARD -i brl2156b519 -j ACCEPT
 sudo ip6tables -D FORWARD -i brl2156b519 -j ACCEPT
-sudo ip link set eth1 nomaster
-sudo ip link del brl2156b519
 sudo rm -f /etc/netplan/60-dhcp-bridge.yaml
 sudo netplan apply
+sudo ip link set eth1 nomaster
+sudo ip link del brl2156b519
 sudo netfilter-persistent save
 ip -o link show eth1
 ip -o link show brl2156b519
