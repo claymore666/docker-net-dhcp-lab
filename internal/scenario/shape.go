@@ -6,6 +6,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -248,19 +249,42 @@ func ensurePackage(ctx context.Context, r sourceadapter.Runner, pkg string) erro
 // uses, never text-parsed stdout (#3): the readiness gate before each
 // scenario also checks that the shape's bridge is present.
 func bridgeReady(ctx context.Context, r sourceadapter.Runner, br string) bool {
-	if _, err := r.Run(ctx, fmt.Sprintf("ip link show %s", br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, fmt.Sprintf("readlink -f /sys/class/net/%s/master | grep -q '/%s$'", SegmentNIC, br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, forwardRuleCheck(br)); err != nil {
-		return false
-	}
-	if _, err := r.Run(ctx, forwardRule6Check(br)); err != nil {
-		return false
+	for _, c := range bridgeChecks(br) {
+		if _, err := r.Run(ctx, c.cmd); err != nil {
+			return false
+		}
 	}
 	return true
+}
+
+type bridgeCheck struct{ what, cmd string }
+
+// bridgeChecks are bridgeReady's four reads in order; what names the
+// condition when its read fails (#138).
+func bridgeChecks(br string) []bridgeCheck {
+	return []bridgeCheck{
+		{fmt.Sprintf("bridge link %s is missing", br), fmt.Sprintf("ip link show %s", br)},
+		{fmt.Sprintf("%s is not enslaved to %s", SegmentNIC, br), fmt.Sprintf("readlink -f /sys/class/net/%s/master | grep -q '/%s$'", SegmentNIC, br)},
+		{fmt.Sprintf("the IPv4 FORWARD rule for %s is missing", br), forwardRuleCheck(br)},
+		{fmt.Sprintf("the IPv6 FORWARD rule for %s is missing", br), forwardRule6Check(br)},
+	}
+}
+
+// bridgeFailedConditions runs every readiness read, not only up to the
+// first failure, and names each condition that does not hold; an ssh
+// failure is "could not be read", never a missing bridge (#138).
+func bridgeFailedConditions(ctx context.Context, r sourceadapter.Runner, br string) []string {
+	var failed []string
+	for _, c := range bridgeChecks(br) {
+		if _, err := r.Run(ctx, c.cmd); err != nil {
+			if isTransport(err) {
+				failed = append(failed, c.what+" (could not be read: ssh failed)")
+			} else {
+				failed = append(failed, c.what)
+			}
+		}
+	}
+	return failed
 }
 
 // ensureBridgePresent is the readiness gate that runs before any
@@ -296,17 +320,19 @@ var bridgeReadyRetryWait = 10 * time.Second
 // read, and, only if it fails, one more after bridgeReadyRetryWait. The
 // run-2 dnsmasq bridge-ipam abort (#101) was a single read straight after
 // netplan apply; a second read is the whole retry, never a loop, so a
-// bridge that never comes up still fails. A cancelled ctx skips the wait.
-func bridgeReadyAfterWait(ctx context.Context, r sourceadapter.Runner, br string) bool {
+// bridge that never comes up still fails. It returns the conditions that
+// still fail after the second read, none when the bridge is ready (#138).
+// A cancelled ctx skips the wait.
+func bridgeReadyAfterWait(ctx context.Context, r sourceadapter.Runner, br string) []string {
 	if bridgeReady(ctx, r, br) {
-		return true
+		return nil
 	}
 	select {
 	case <-ctx.Done():
-		return false
+		return []string{"the readiness wait was cancelled"}
 	case <-time.After(bridgeReadyRetryWait):
 	}
-	return bridgeReady(ctx, r, br)
+	return bridgeFailedConditions(ctx, r, br)
 }
 
 // sshTransportRE matches ssh's own exit status 255, the code it returns
@@ -340,7 +366,9 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
 		}
 	}
-	NetworkDown(ctx, r, stack, cell, shape)
+	if err := NetworkDown(ctx, r, stack, cell, shape); err != nil {
+		return "", fmt.Errorf("networkup(%s): lab: the previous teardown did not finish, so the segment NIC may still be held: %w", shape, err)
+	}
 	net := NetworkName(cell, shape)
 	switch shape {
 	case ShapeBridge, ShapeBridgeIPAM:
@@ -394,14 +422,25 @@ func NetworkUp(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetSta
 		if _, err := r.Run(ctx, "sudo netfilter-persistent save"); err != nil {
 			return "", fmt.Errorf("networkup(%s): sudo netfilter-persistent save: %w", shape, err)
 		}
-		if !bridgeReadyAfterWait(ctx, r, br) {
-			return "", fmt.Errorf("networkup(%s): bridge %s or its %s port did not come up after %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "))
+		if failed := bridgeReadyAfterWait(ctx, r, br); len(failed) > 0 {
+			reason := fmt.Sprintf("networkup(%s): bridge %s or its %s port did not come up after %s: %s", shape, br, SegmentNIC, strings.TrimPrefix(apply, "sudo "), strings.Join(failed, "; "))
+			if file := captureBridgeState(ctx, r, evidenceDirFrom(ctx), cell, shape, br, failed); file != "" {
+				reason += " (host state: " + file + ")"
+			}
+			return "", errors.New(reason)
 		}
 		create, _ := networkCreateCmd(shape, net, br, nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %s: %w", shape, create, err)
 		}
 	case ShapeMacvlan, ShapeIpvlan, ShapeMacvlanIPAM:
+		master, err := linkMaster(ctx, r, SegmentNIC)
+		if err != nil {
+			return "", fmt.Errorf("networkup(%s): lab: could not read whether %s has a master: %w", shape, SegmentNIC, err)
+		}
+		if master != "" {
+			return "", errors.New(parentHeldReason(shape, master))
+		}
 		create, _ := networkCreateCmd(shape, net, "", nil)
 		if _, err := r.Run(ctx, create); err != nil {
 			return "", fmt.Errorf("networkup(%s): %w", shape, err)
@@ -496,47 +535,67 @@ func NetworkDownInternal(ctx context.Context, r sourceadapter.Runner, netName st
 }
 
 // NetworkDown removes a shape's network and, for bridge mode, releases
-// the segment NIC. Best-effort and idempotent, matching down-cell.sh's
-// own style: every step tolerates the thing it removes already being
-// gone, since NetworkUp calls this first on every run including the
-// very first one.
-func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) {
+// the segment NIC. Every step is retried while ssh fails and a bridge
+// shape ends by reading that the NIC has no master and the bridge is
+// gone: the state decides, not the exit codes (#137).
+func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetStack, cell string, shape Shape) error {
 	net := NetworkName(cell, shape)
-	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker network rm %s", net))
-	if usesHostBridge(shape) {
-		br := hostBridgeName(net)
-		// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
-		// by interface name, not a live link, so this is safe (and still
-		// a no-op if already gone) whatever order the bridge itself gets
-		// torn down in below; without it, every run's ACCEPT rule for
-		// its now-deleted bridge name pile up in FORWARD forever.
-		_, _ = r.Run(ctx, forwardRuleDel(br))
-		_, _ = r.Run(ctx, forwardRule6Del(br))
-		if stack == labyaml.NetStackIfupdown {
-			// While its stanza still exists: releases the bridge's lease
-			// and lets bridge-utils' post-down undo what its pre-up did,
-			// the port's disable_ipv6 among it (lab #70).
-			_, _ = r.Run(ctx, "sudo ifdown "+br)
+	var errs []error
+	// A command may fail because the thing it removes is already gone, so
+	// only an ssh failure that outlasts the retries counts here; the reads
+	// at the end decide whether the host is clean.
+	step := func(cmd string) {
+		if _, err := runRetrying(ctx, r, cmd); isTransport(err) {
+			errs = append(errs, fmt.Errorf("%s: %w", cmd, err))
 		}
-		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
-		_, _ = r.Run(ctx, fmt.Sprintf("sudo ip link del %s", br))
-		// Symmetric with writeBridgePersistence: without removing the
-		// netplan config too, the bridge would resurrect itself on the
-		// docker host's next real reboot even after this run tore it
-		// down (#3). The reapply after removing it hands
-		// eth1 back to cloud-init's own
-		// dhcp4: false stanza for that interface.
-		_, _ = r.Run(ctx, "sudo rm -f "+strings.Join(bridgeConfigPaths(stack, br), " "))
-		if stack == labyaml.NetStackIfupdown {
-			// bridge-utils' post-down sets the port down; --force reruns
-			// the segment NIC's own stanza, which ifupdown still records
-			// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
-			_, _ = r.Run(ctx, "sudo ifup --force "+SegmentNIC)
-		} else {
-			_, _ = r.Run(ctx, "sudo netplan apply")
-		}
-		_, _ = r.Run(ctx, "sudo netfilter-persistent save")
 	}
+	step(fmt.Sprintf("sudo docker network rm %s", net))
+	if !usesHostBridge(shape) {
+		return errors.Join(errs...)
+	}
+	br := hostBridgeName(net)
+	// Undoes forwardRuleAdd in NetworkUp. iptables rules are matched
+	// by interface name, not a live link, so this is safe (and still
+	// a no-op if already gone) whatever order the bridge itself gets
+	// torn down in below; without it, every run's ACCEPT rule for
+	// its now-deleted bridge name pile up in FORWARD forever.
+	step(forwardRuleDel(br))
+	step(forwardRule6Del(br))
+	if stack == labyaml.NetStackIfupdown {
+		// While its stanza still exists: releases the bridge's lease
+		// and lets bridge-utils' post-down undo what its pre-up did,
+		// the port's disable_ipv6 among it (lab #70).
+		step("sudo ifdown " + br)
+	}
+	step(fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
+	step(fmt.Sprintf("sudo ip link del %s", br))
+	// Symmetric with writeBridgePersistence: without removing the
+	// netplan config too, the bridge would resurrect itself on the
+	// docker host's next real reboot even after this run tore it
+	// down (#3). The reapply after removing it hands
+	// eth1 back to cloud-init's own
+	// dhcp4: false stanza for that interface.
+	step("sudo rm -f " + strings.Join(bridgeConfigPaths(stack, br), " "))
+	if stack == labyaml.NetStackIfupdown {
+		// bridge-utils' post-down sets the port down; --force reruns
+		// the segment NIC's own stanza, which ifupdown still records
+		// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
+		step("sudo ifup --force " + SegmentNIC)
+	} else {
+		step("sudo netplan apply")
+	}
+	step("sudo netfilter-persistent save")
+	if master, err := linkMaster(ctx, r, SegmentNIC); err != nil {
+		errs = append(errs, err)
+	} else if master != "" {
+		errs = append(errs, fmt.Errorf("%s is still enslaved to %s after the teardown", SegmentNIC, master))
+	}
+	if exists, err := linkExists(ctx, r, br); err != nil {
+		errs = append(errs, err)
+	} else if exists {
+		errs = append(errs, fmt.Errorf("bridge %s still exists after the teardown", br))
+	}
+	return errors.Join(errs...)
 }
 
 // isolationWaitWindow is IsolateIPAMNetwork's fallback when a network
