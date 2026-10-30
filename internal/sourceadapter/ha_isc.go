@@ -116,8 +116,8 @@ func parseISCOmshell(raw string) (HAState, error) {
 }
 
 // parseISCBackupAddrs lists the addresses whose latest block is
-// "backup": on the primary these are the partner's half of the pool
-// (split 128), the only ones the survivor may hand out first.
+// "backup": the secondary's half of the pool (dhcpd.conf(5), split 128)
+// in either peer's file, the only ones the survivor may hand out first.
 func parseISCBackupAddrs(raw string) ([]string, error) {
 	starts := iscLeaseStartRE.FindAllStringIndex(raw, -1)
 	blocks := iscLeaseBlockRE.FindAllStringSubmatch(raw, -1)
@@ -140,9 +140,9 @@ func parseISCBackupAddrs(raw string) ([]string, error) {
 	return out, nil
 }
 
-// BackupAddrs reads this peer's lease file for its backup addresses: on
-// the primary, the partner's half of the pool under split 128, which
-// C5b checks the outage address against (RFC 3074 load balancing, lab #12).
+// BackupAddrs reads this peer's lease file for its backup addresses, the
+// secondary's half under split 128. C5b reads the partner's own file after
+// the takeover and checks the outage address against it (lab #12, #129).
 func (a *ISCDHCPAdapter) BackupAddrs(ctx context.Context) ([]string, error) {
 	out, err := a.Runner.Run(ctx, "sudo cat "+iscLeaseFile)
 	if err != nil {

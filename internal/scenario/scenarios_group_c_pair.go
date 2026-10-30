@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -258,6 +259,23 @@ type c5Outage struct {
 	ev                                     map[string]string
 }
 
+// c5FreshMAC is a MAC no earlier container of the run used. For 60 s
+// after DeleteEndpoint the plugin hands a new endpoint on the network the
+// removed one's MAC and address when exactly one tombstone matches and
+// the hostnames do not differ (an empty one on either side matches:
+// pkg/plugin/tombstone_store.go consume; docs/reference.md, "Restart
+// stability (MAC and IP)"). C5b began 2m22s after C5 under C5's MAC,
+// asking for its .142 (run 4, #129; MEASURED in the bridge capture, the
+// tombstone INFERRED, plugin log not read). C5b and C5c test failover,
+// not restart identity, so they step outside that inheritance. ipvlan
+// has no per-container MAC (--mac-address is invalid): its id is per endpoint.
+func c5FreshMAC(e Env, scenario string) string {
+	if e.Shape == ShapeIpvlan {
+		return ""
+	}
+	return fixedMACForScenario(e.Cell, e.Shape, scenario+"-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+}
+
 // c5StartOutage stops the primary, waits for the partner's survivor
 // state and leases one new container. shorten sets C2's short lease
 // first, on both peers. The cleanup removes the container, starts the
@@ -281,19 +299,6 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		c5Back(bCleanupCtx(ctx), pc, o.primary, t)
 		_ = restore(bCleanupCtx(ctx))
 	}
-	var half []string
-	if pc.Profile().SplitPool {
-		r, ok := pc.(sourceadapter.PoolSplitReader)
-		if !ok {
-			v := blocked(scenario, e.Cell, e.Shape, "the pair splits its pool but offers no read of the primary's backup half", e.GitSHA)
-			return o, cleanup, &v
-		}
-		var err error
-		if half, err = r.PeerBackupAddrs(ctx, o.primary); err != nil || len(half) == 0 {
-			v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the primary's table names no backup (partner half) address before the stop: %v", err), e.GitSHA)
-			return o, cleanup, &v
-		}
-	}
 	if err := pc.StopPeer(ctx, o.primary); err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("could not stop the primary %s: %v", o.primary, err), e.GitSHA)
 		return o, cleanup, &v
@@ -303,7 +308,20 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the partner did not take over: %v", err), e.GitSHA)
 		return o, cleanup, &v
 	}
-	res, err := timedDockerRun(ctx, e.Host, e.Network, o.name)
+	var half []string
+	if pc.Profile().SplitPool {
+		r, ok := pc.(sourceadapter.PoolSplitReader)
+		if !ok {
+			v := blocked(scenario, e.Cell, e.Shape, "the pair splits its pool but offers no read of the partner's own backup half", e.GitSHA)
+			return o, cleanup, &v
+		}
+		var err error
+		if half, err = r.PeerBackupAddrs(ctx, o.partner); err != nil || len(half) == 0 {
+			v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the partner's own table names no backup (its half) address after the takeover: %v", err), e.GitSHA)
+			return o, cleanup, &v
+		}
+	}
+	res, err := timedDockerRunMAC(ctx, e.Host, e.Network, o.name, c5FreshMAC(e, scenario))
 	if err != nil {
 		v := blocked(scenario, e.Cell, e.Shape, err.Error(), e.GitSHA)
 		return o, cleanup, &v
@@ -339,7 +357,7 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		return o, cleanup, &v
 	}
 	if half != nil && !slices.Contains(half, o.addr) {
-		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the partner leased %s, which the primary did not list as the partner's half (%d backup addresses) before the stop: the survivor did not serve its own half, so what it proved is not the half-pool takeover", o.addr, len(half)), e.GitSHA)
+		v := blocked(scenario, e.Cell, e.Shape, fmt.Sprintf("the partner leased %s, which its own table did not list as its half (%d backup addresses) after the takeover: the survivor did not serve its own half, so what it proved is not the half-pool takeover", o.addr, len(half)), e.GitSHA)
 		return o, cleanup, &v
 	}
 	snap := evidencePath(e, scenario, "partner-leases")

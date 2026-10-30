@@ -3,6 +3,7 @@ package scenario
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,14 +89,21 @@ func TestC5WindowsFollowOption51(t *testing.T) {
 	}
 }
 
-// splitPair adds the primary's backup-half read to a fake pair.
+// splitPair adds the partner's own backup-half read to a fake pair and
+// records which peer was asked and whether the primary was stopped then.
 type splitPair struct {
 	*fakePair
-	half []string
-	err  error
+	half        []string
+	err         error
+	asked       []string
+	primaryDown []bool
 }
 
-func (s splitPair) PeerBackupAddrs(context.Context, string) ([]string, error) { return s.half, s.err }
+func (s *splitPair) PeerBackupAddrs(_ context.Context, name string) ([]string, error) {
+	s.asked = append(s.asked, name)
+	s.primaryDown = append(s.primaryDown, s.fakePair.down["primary"])
+	return s.half, s.err
+}
 
 func TestRunC5bHalfPoolRule(t *testing.T) {
 	const outage = "10.200.1.121"
@@ -109,18 +117,19 @@ func TestRunC5bHalfPoolRule(t *testing.T) {
 	}{
 		{"the outage address was the partner's half", []string{"10.200.1.120", outage}, nil, false, PASS, "by 10.200.1.3"},
 		{"the outage address was the primary's own", []string{"10.200.1.120"}, nil, false, BLOCKED, "did not serve its own half"},
-		{"the primary lists no backup address", nil, nil, false, BLOCKED, "names no backup"},
-		{"the primary's table cannot be read", nil, errors.New("ssh down"), false, BLOCKED, "ssh down"},
+		{"the partner lists no backup address", nil, nil, false, BLOCKED, "names no backup"},
+		{"the partner's table cannot be read", nil, errors.New("ssh down"), false, BLOCKED, "ssh down"},
 		{"the pair offers no read of the half", nil, nil, true, BLOCKED, "offers no read"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newC5bRig(t, NameC5b)
 			r.p.prof = iscProfile()
 			r.h.addrFn = func(string, string) string { return outage }
+			sp := &splitPair{fakePair: r.p, half: tc.half, err: tc.err}
 			if tc.plain {
 				r.e.Source = r.p
 			} else {
-				r.e.Source = splitPair{fakePair: r.p, half: tc.half, err: tc.err}
+				r.e.Source = sp
 			}
 			v := runC5bTuned(context.Background(), r.e, cFast)
 			needResult(t, v, tc.result)
@@ -128,22 +137,82 @@ func TestRunC5bHalfPoolRule(t *testing.T) {
 			if r.p.down["primary"] {
 				t.Error("the primary was left stopped")
 			}
-			// the half is read before the stop, so a BLOCKED read stops nothing
-			if tc.result == BLOCKED && strings.Contains(tc.reason, "names no backup") {
-				for _, op := range r.p.ops {
-					if op == "stop primary" {
-						t.Error("the primary was stopped before the half was read")
-					}
+		})
+	}
+}
+
+// Lab #129: the half is the partner's own table, read after the takeover
+// (the primary stopped), not the primary's list from before the stop.
+func TestRunC5bReadsTheHalfFromThePartnerAfterTheStop(t *testing.T) {
+	r := newC5bRig(t, NameC5b)
+	r.p.prof = iscProfile()
+	r.h.addrFn = func(string, string) string { return "10.200.1.121" }
+	sp := &splitPair{fakePair: r.p, half: []string{"10.200.1.121"}}
+	r.e.Source = sp
+	needResult(t, runC5bTuned(context.Background(), r.e, cFast), PASS)
+	if len(sp.asked) != 1 || sp.asked[0] != "partner" {
+		t.Errorf("the half was read from %v, want the partner only", sp.asked)
+	}
+	if len(sp.primaryDown) != 1 || !sp.primaryDown[0] {
+		t.Error("the half was read before the primary was stopped")
+	}
+}
+
+// Lab #129, run 4 (bridge and macvlan): the plugin's tombstone gave C5b
+// C5's MAC and address, so ISC re-offered the first container's lease
+// (.142, the primary's half) instead of leasing from the partner's half.
+// The fake server does the same for any container started without a MAC
+// of its own.
+func TestRunC5bAndC5cLeaseUnderAFreshMAC(t *testing.T) {
+	const reoffered, fresh = "10.200.1.142", "10.200.1.121"
+	for _, name := range []string{NameC5b, NameC5c} {
+		t.Run(name, func(t *testing.T) {
+			r := newC5bRig(t, name)
+			r.p.prof = iscProfile()
+			r.h.addrFn = func(_, mac string) string {
+				if strings.HasPrefix(mac, "aa:bb:cc:") {
+					return reoffered
 				}
+				return fresh
+			}
+			r.e.Source = &splitPair{fakePair: r.p, half: []string{fresh}}
+			var v Verdict
+			if name == NameC5b {
+				v = runC5bTuned(context.Background(), r.e, cFast)
+			} else {
+				v = runC5cTuned(context.Background(), r.e, cFast)
+			}
+			if v.Result == BLOCKED && strings.Contains(v.Reason, reoffered) {
+				t.Fatalf("the container reused an earlier identity: %s", v.Reason)
+			}
+			if !r.h.has("--mac-address 02:42:") {
+				t.Error("the outage container was started without a MAC of its own")
 			}
 		})
+	}
+}
+
+func TestC5FreshMAC(t *testing.T) {
+	e := Env{Cell: "isc-failover", Shape: ShapeBridge}
+	a, b := c5FreshMAC(e, NameC5b), c5FreshMAC(e, NameC5c)
+	time.Sleep(time.Millisecond)
+	a2 := c5FreshMAC(e, NameC5b)
+	if _, err := net.ParseMAC(a); err != nil || !strings.HasPrefix(a, "02:42:") {
+		t.Errorf("%q is not a locally administered unicast MAC: %v", a, err)
+	}
+	if a == b || a == a2 {
+		t.Errorf("MACs repeat: %s %s %s", a, b, a2)
+	}
+	e.Shape = ShapeIpvlan
+	if m := c5FreshMAC(e, NameC5b); m != "" {
+		t.Errorf("ipvlan got %q, but --mac-address is invalid there", m)
 	}
 }
 
 // A Kea pair has no split pool: C5b reads no half and judges as before.
 func TestRunC5bWithoutSplitPoolReadsNoHalf(t *testing.T) {
 	r := newC5bRig(t, NameC5b)
-	r.e.Source = splitPair{fakePair: r.p, err: errors.New("must not be read")}
+	r.e.Source = &splitPair{fakePair: r.p, err: errors.New("must not be read")}
 	needResult(t, runC5bTuned(context.Background(), r.e, cFast), PASS)
 }
 

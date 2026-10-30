@@ -266,6 +266,18 @@ func TestISCPairPeerBackupAddrs(t *testing.T) {
 	}
 }
 
+// Lab #129: the partner's half is read from the partner's own file, which
+// after the takeover also holds the leases it served: an active lease and
+// an expired one are not backup, and the 3 backup addresses stay listed.
+func TestISCPairPeerBackupAddrsFromThePartnersOwnFile(t *testing.T) {
+	p := NewISCPair(&fakeRunner{reply: isc(t, "primary-normal.leases")}, &fakeRunner{reply: isc(t, "partner-comm-interrupted.leases")}, "a", "b")
+	got, err := p.PeerBackupAddrs(context.Background(), "partner")
+	want := []string{"10.200.9.100", "10.200.9.101", "10.200.9.102"}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("partner half %v %v, want %v", got, err, want)
+	}
+}
+
 // A restarted peer's lease file still ends in its pre-stop normal block
 // (lab #12): Restart must not pass on the file alone, only on
 // the daemon's own answer.
