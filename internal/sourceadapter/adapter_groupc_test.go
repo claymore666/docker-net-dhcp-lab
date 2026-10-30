@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,8 @@ func (h *hostRunner) Run(_ context.Context, cmd string) (string, error) {
 		return out + "cfg:\n" + h.cfg, nil
 	case cmd == debianHost("").segAddrCmd():
 		return strings.ReplaceAll(strings.TrimSpace(h.addrs), " ", "\n") + "\n", nil
+	case strings.Contains(cmd, "qdisc replace dev eth1 root netem"):
+		return fakeNetemShow(cmd), nil
 	case strings.HasPrefix(cmd, "sudo ip -4 addr flush dev eth1"):
 		var a []string
 		for _, m := range regexp.MustCompile(`ip addr add (\S+) brd \+ dev eth1`).FindAllStringSubmatch(cmd, -1) {
@@ -303,11 +306,12 @@ func TestImpairAppliesReadsBackAndRestores(t *testing.T) {
 		case *DnsmasqAdapter:
 			v.Runner = r
 		}
+		r.reply = "qdisc netem 8001: root refcnt 2 limit 1000 delay 2s\n"
 		restore, err := a.Impair(context.Background(), 2*time.Second, 0)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		want := "sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 2000ms loss 0% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+		want := "sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 2000ms loss 0% && /usr/sbin/tc qdisc show dev eth1 root"
 		if len(r.calls) != 1 || !strings.Contains(r.calls[0], want) {
 			t.Fatalf("%s: calls = %v, want one containing %q", name, r.calls, want)
 		}
@@ -445,5 +449,78 @@ func TestASkippedRARestoreFailsTheNextReady(t *testing.T) {
 		if err := a.Ready(ctx); err != nil {
 			t.Fatalf("%s: Ready after Recover: %v", name, err)
 		}
+	}
+}
+
+var netemAskRE = regexp.MustCompile(`netem delay (\d+)ms loss (\d+)%`)
+
+// fakeNetemShow is what iproute2 prints for the qdisc a replace command
+// made: 2000ms as "2s", 1500ms as "1.5s", and no loss field for 0%.
+func fakeNetemShow(cmd string) string {
+	m := netemAskRE.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	ms, _ := strconv.Atoi(m[1])
+	d := fmt.Sprintf("%dms", ms)
+	if ms >= 1000 {
+		d = strconv.FormatFloat(float64(ms)/1000, 'f', -1, 64) + "s"
+	}
+	out := "qdisc netem 8001: root refcnt 2 limit 1000 delay " + d
+	if m[2] != "0" {
+		out += " loss " + m[2] + "%"
+	}
+	return out + "\n"
+}
+
+// The read-back compares the delay and loss, not just the word netem
+// (lab #125, defeats 5 and 6): iproute2 prints in s, ms or us.
+func TestNetemInPlaceComparesDelayAndLoss(t *testing.T) {
+	ms := time.Millisecond
+	cases := []struct {
+		name  string
+		out   string
+		delay time.Duration
+		loss  int
+		ok    bool
+	}{
+		{"seconds", "qdisc netem 8001: root refcnt 2 limit 1000 delay 2s\n", 2000 * ms, 0, true},
+		{"fraction of a second", "qdisc netem 8001: root refcnt 2 limit 1000 delay 1.5s\n", 1500 * ms, 0, true},
+		{"milliseconds", "qdisc netem 8001: root refcnt 2 limit 1000 delay 150ms loss 5%\n", 150 * ms, 5, true},
+		{"rounded print", "qdisc netem 8001: root refcnt 2 limit 1000 delay 149.9ms\n", 150 * ms, 0, true},
+		{"microseconds", "qdisc netem 8001: root refcnt 2 limit 1000 delay 500us\n", 500 * time.Microsecond, 0, true},
+		{"loss only", "qdisc netem 8001: root refcnt 2 limit 1000 loss 100%\n", 0, 100, true},
+		{"another qdisc", "qdisc noqueue 0: root refcnt 2\n", 2000 * ms, 0, false},
+		{"no output", "", 2000 * ms, 0, false},
+		{"netem without a delay", "qdisc netem 8001: root refcnt 2 limit 1000\n", 2000 * ms, 0, false},
+		{"within the 1 % tolerance", "qdisc netem 8001: root refcnt 2 limit 1000 delay 2015ms\n", 2000 * ms, 0, true},
+		{"just outside the 1 % tolerance", "qdisc netem 8001: root refcnt 2 limit 1000 delay 2030ms\n", 2000 * ms, 0, false},
+		{"just outside, below", "qdisc netem 8001: root refcnt 2 limit 1000 delay 1970ms\n", 2000 * ms, 0, false},
+		{"a shorter delay", "qdisc netem 8001: root refcnt 2 limit 1000 delay 200ms\n", 2000 * ms, 0, false},
+		{"a ten-times delay", "qdisc netem 8001: root refcnt 2 limit 1000 delay 20s\n", 2000 * ms, 0, false},
+		{"unit mistaken", "qdisc netem 8001: root refcnt 2 limit 1000 delay 2us\n", 2000 * ms, 0, false},
+		{"loss missing", "qdisc netem 8001: root refcnt 2 limit 1000 delay 2s\n", 2000 * ms, 5, false},
+		{"another loss", "qdisc netem 8001: root refcnt 2 limit 1000 loss 50%\n", 0, 100, false},
+		{"a higher loss", "qdisc netem 8001: root refcnt 2 limit 1000 loss 100%\n", 0, 50, false},
+		{"no impairment asked, another qdisc found", "qdisc noqueue 0: root refcnt 2\n", 0, 0, false},
+	}
+	for _, c := range cases {
+		err := netemInPlace(c.out, c.delay, c.loss)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: netemInPlace(%q, %s, %d) = %v, want ok=%v", c.name, c.out, c.delay, c.loss, err, c.ok)
+		}
+	}
+}
+
+// A source whose qdisc comes back with another delay than the one asked
+// for is an Impair error and the qdisc is removed again.
+func TestImpairReadBackOfAnotherDelayIsAnErrorAndCleansUp(t *testing.T) {
+	r := &fakeRunner{reply: "qdisc netem 8001: root refcnt 2 limit 1000 delay 200ms\n"}
+	restore, err := (&DnsmasqAdapter{Runner: r}).Impair(context.Background(), 2*time.Second, 0)
+	if err == nil || restore != nil {
+		t.Fatalf("Impair = (%v, %v), want an error and no restore", restore != nil, err)
+	}
+	if len(r.calls) != 2 || r.calls[1] != "sudo /usr/sbin/tc qdisc del dev eth1 root" {
+		t.Fatalf("calls = %v, want the replace then a cleanup delete", r.calls)
 	}
 }

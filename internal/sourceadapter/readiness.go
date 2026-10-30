@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -369,11 +370,60 @@ func (h host) impair(ctx context.Context, r Runner, delay time.Duration, lossPct
 		}
 		return nil
 	}
-	cmd := fmt.Sprintf("sudo modprobe sch_netem 2>/dev/null; sudo %[4]s qdisc replace dev %[1]s root netem delay %[2]dms loss %[3]d%% && %[4]s qdisc show dev %[1]s root | grep -q netem",
+	cmd := fmt.Sprintf("sudo modprobe sch_netem 2>/dev/null; sudo %[4]s qdisc replace dev %[1]s root netem delay %[2]dms loss %[3]d%% && %[4]s qdisc show dev %[1]s root",
 		h.nic, delay.Milliseconds(), lossPct, h.tc)
-	if _, err := r.Run(ctx, cmd); err != nil {
+	out, err := r.Run(ctx, cmd)
+	if err == nil {
+		err = netemInPlace(out, delay, lossPct)
+	}
+	if err != nil {
 		_ = del(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("impair: netem on %s not in place: %w", h.nic, err)
 	}
 	return del, nil
+}
+
+var (
+	netemDelayRE = regexp.MustCompile(`\bdelay ([0-9.]+)(us|ms|s)\b`)
+	netemLossRE  = regexp.MustCompile(`\bloss ([0-9.]+)%`)
+)
+
+// netemInPlace reads the qdisc back and compares the delay and loss it
+// carries with the ones asked for (lab #125): a qdisc that says "netem"
+// with another delay, or none, would let C10 judge a delay that never
+// acted. iproute2 prints 2000ms as "2s", 1500ms as "1.5s" and 500us as
+// "500us"; it omits a zero loss.
+func netemInPlace(out string, delay time.Duration, lossPct int) error {
+	if !strings.Contains(out, "netem") {
+		return fmt.Errorf("the qdisc is not netem: %q", strings.TrimSpace(out))
+	}
+	if delay > 0 {
+		m := netemDelayRE.FindStringSubmatch(out)
+		if m == nil {
+			return fmt.Errorf("netem carries no delay, want %s: %q", delay, strings.TrimSpace(out))
+		}
+		v, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			return fmt.Errorf("netem delay %q: %w", m[0], err)
+		}
+		unit := map[string]time.Duration{"us": time.Microsecond, "ms": time.Millisecond, "s": time.Second}[m[2]]
+		got := time.Duration(v * float64(unit))
+		tol := delay / 100
+		if tol < time.Millisecond {
+			tol = time.Millisecond
+		}
+		if diff := got - delay; diff > tol || diff < -tol {
+			return fmt.Errorf("netem carries a %s delay, want %s", got, delay)
+		}
+	}
+	if lossPct > 0 {
+		m := netemLossRE.FindStringSubmatch(out)
+		if m == nil {
+			return fmt.Errorf("netem carries no loss, want %d%%: %q", lossPct, strings.TrimSpace(out))
+		}
+		if v, err := strconv.ParseFloat(m[1], 64); err != nil || v < float64(lossPct)-0.5 || v > float64(lossPct)+0.5 {
+			return fmt.Errorf("netem carries %s%% loss, want %d%%", m[1], lossPct)
+		}
+	}
+	return nil
 }

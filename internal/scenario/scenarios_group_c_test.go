@@ -381,6 +381,25 @@ func TestParseMessageLogReadsThirteenFieldsAndDashes(t *testing.T) {
 	}
 }
 
+func TestAckDelay(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	m := []DHCPMsg{
+		dmsg(t0, "REQUEST", "x", "a", "", ""),
+		dmsg(t0.Add(time.Second), "REQUEST", "x", "a", "", ""), // retransmit: the first one counts
+		dmsg(t0.Add(2100*ms), "ACK", "x", "a", "y", ""),
+		dmsg(t0.Add(500*ms), "ACK", "other", "a", "y", ""),   // no REQUEST of that xid
+		dmsg(t0.Add(3*time.Second), "NAK", "x", "a", "", ""), // a NAK is no ACK
+		dmsg(t0.Add(10*time.Second), "REQUEST", "z", "a", "", ""),
+		dmsg(t0.Add(10300*ms), "ACK", "z", "a", "y", ""), // a quicker exchange later: the longest counts
+	}
+	if d, ok := ackDelay(m); !ok || d != 2100*ms {
+		t.Errorf("ack delay %v %v, want 2.1s from the first REQUEST", d, ok)
+	}
+	if _, ok := ackDelay([]DHCPMsg{dmsg(t0, "OFFER", "x", "a", "y", "")}); ok {
+		t.Error("an OFFER alone gave an ACK delay")
+	}
+}
+
 func TestMessageFiltersAndGaps(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	m := []DHCPMsg{
@@ -397,9 +416,6 @@ func TestMessageFiltersAndGaps(t *testing.T) {
 	}
 	if n := len(messagesAfter(m, t0.Add(5*time.Second))); n != 2 {
 		t.Errorf("after kept %d", n)
-	}
-	if d, ok := offerDelay(m); !ok || d != 2*time.Second {
-		t.Errorf("offer delay %v %v, want 2s matched by xid", d, ok)
 	}
 	if sawClientUnicast(m) {
 		t.Error("broadcast only, yet unicast seen")
@@ -1055,14 +1071,15 @@ func finalAfter(b *cBoundRig, f []sourceadapter.Lease) func(int) []sourceadapter
 
 // ---- C10 --------------------------------------------------------------
 
-// c10Rig: (a) is offered 2.5 s after its DISCOVER and starts in 5 s;
+// c10Rig: (a) is offered 2.5 s after its DISCOVER, requests at once and is
+// acknowledged offs["a-ack"] later (2.1 s), and starts in 5 s;
 // (b) sends DISCOVERs at the offsets in offs["b"] and is offered at
 // offs["b-offer"]. The table leases every container docker started.
 func c10Rig(t *testing.T) (*cRig, map[string][]time.Duration, string) {
 	r := cSetup(t, ShapeMacvlan)
 	base := containerName(r.e, NameC10)
 	r.h.wall[base+"-a"], r.h.wall[base+"-b"] = 5*time.Second, 13*time.Second
-	offs := map[string][]time.Duration{"a-offer": {2500 * ms}, "b": {0, 4 * time.Second, 12 * time.Second}, "b-offer": {12200 * ms}}
+	offs := map[string][]time.Duration{"a-offer": {2500 * ms}, "a-ack": {2100 * ms}, "a-disc": {0}, "b": {0, 4 * time.Second, 12 * time.Second}, "b-offer": {12200 * ms}}
 	r.src.fn = func(int) []sourceadapter.Lease {
 		var ls []sourceadapter.Lease
 		for _, s := range []string{"-a", "-b"} {
@@ -1075,8 +1092,13 @@ func c10Rig(t *testing.T) (*cRig, map[string][]time.Duration, string) {
 	r.cap.fn = func(ident string) []DHCPMsg {
 		var out []DHCPMsg
 		if c, at, ok := r.h.container(base + "-a"); ok && (ident == "*" || ident == c.mac) {
-			out = append(out, dmsg(at, "DISCOVER", "a", c.mac, "", "255.255.255.255"),
-				dmsg(at.Add(offs["a-offer"][0]), "OFFER", "a", c.mac, c.addr, "255.255.255.255"))
+			for _, d := range offs["a-disc"] {
+				out = append(out, dmsg(at.Add(d), "DISCOVER", "a", c.mac, "", "255.255.255.255"))
+			}
+			reqAt := at.Add(offs["a-offer"][0] + 10*ms)
+			out = append(out, dmsg(at.Add(offs["a-offer"][0]), "OFFER", "a", c.mac, c.addr, "255.255.255.255"),
+				dmsg(reqAt, "REQUEST", "a", c.mac, "", "255.255.255.255"),
+				dmsg(reqAt.Add(offs["a-ack"][0]), "ACK", "a", c.mac, c.addr, "255.255.255.255"))
 		}
 		if c, at, ok := r.h.container(base + "-b"); ok && (ident == "*" || ident == c.mac) {
 			xid := ""
@@ -1117,7 +1139,18 @@ func TestRunC10Judges(t *testing.T) {
 		restored int
 		edit     func(r *cRig, offs map[string][]time.Duration, base string)
 	}{
-		{"the offer was not late", BLOCKED, "the delay did not act", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["a-offer"][0] = 500 * ms }},
+		{"the ACK was not late", BLOCKED, "no ACK 2s or more after its REQUEST", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["a-ack"][0] = 50 * ms }},
+		// Run 4 (lab #125): the client retransmits its DISCOVER, the
+		// first OFFER lands right after the retransmit, and the delayed
+		// ACK is the only honest measure. Must PASS.
+		{"the DISCOVER was retransmitted (run 4)", PASS, "", 2, func(_ *cRig, offs map[string][]time.Duration, _ string) {
+			offs["a-disc"], offs["a-offer"][0] = []time.Duration{0, 4800 * ms}, 4850*ms
+		}},
+		// A server that pings before it offers is 3 s late with no netem
+		// at all; its instant ACK must still BLOCK.
+		{"a slow OFFER but an instant ACK", BLOCKED, "no ACK 2s or more after its REQUEST", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) {
+			offs["a-offer"][0], offs["a-ack"][0] = 3*time.Second, 20*ms
+		}},
 		{"the run was too fast for the delay", BLOCKED, "the delay did not act", 1, func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-a"] = 3 * time.Second }},
 		{"(a) did not start", FAIL, "(a) with a 2s reply delay the container did not start", 1, func(r *cRig, _ map[string][]time.Duration, base string) { r.h.rc[base+"-a"] = 125 }},
 		{"(b) retransmitted too little", FAIL, "2 DISCOVER(s)", 2, func(_ *cRig, offs map[string][]time.Duration, _ string) {
