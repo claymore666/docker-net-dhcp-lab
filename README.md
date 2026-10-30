@@ -141,7 +141,7 @@ Group A runs today:
 | A7 | plugin killed | kill the plugin process; it comes back, the lease holds |
 | A8 | fleet burst | start many containers at once |
 | A9 | stop, wait, start | stop, wait, start again |
-| A10 | kill under a restart policy | the container crashes, Docker restarts it |
+| A10 | kill under a restart policy | the container crashes, Docker restarts it (N/A on udhcpd's `bridge-ipam` and `macvlan-ipam`: Docker picks a new MAC there, the plugin carries the address over in option 61, and udhcpd keys leases on the MAC alone) |
 | A11 | pause/unpause | pause and unpause the container |
 | A12 | network disconnect/reconnect | detach from the network and attach again |
 | A13 | two networks, one container | a second, ordinary network beside the plugin one |

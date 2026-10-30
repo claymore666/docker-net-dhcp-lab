@@ -50,13 +50,17 @@ func (a *UdhcpdAdapter) NAReason(c Capability) (string, bool) {
 // client identifier. The ipvlan shape shares one parent MAC and is judged by
 // client-id, and A2 on the IPAM shapes looks the restarted container up by
 // the client identifier its lease carried, so those runs cannot be judged on
-// this source (D1, lab #10).
+// this source (D1, lab #10). A10 on the IPAM shapes is the same limit seen
+// from the other side (lab #131): Docker picks the new MAC after a restart,
+// the plugin carries the address over in option 61, and udhcpd never reads it.
 func (a *UdhcpdAdapter) NAShapeReason(shape, scenario string) string {
 	switch {
 	case shape == "ipvlan":
 		return "udhcpd keys leases by MAC only and its table has no client identifiers, which the ipvlan shape needs because its containers share one parent MAC; this is the server's behaviour, not a plugin fault"
 	case strings.HasPrefix(scenario, "A2-") && (shape == "bridge-ipam" || shape == "macvlan-ipam"):
 		return "udhcpd's table has no client identifiers, so a restarted container cannot be looked up by the identifier the plugin re-sends; this is the server's behaviour, not a plugin fault"
+	case strings.HasPrefix(scenario, "A10-") && (shape == "bridge-ipam" || shape == "macvlan-ipam"):
+		return "server ignores client id: in this shape Docker picks a new MAC when the container restarts and the plugin carries the address over in option 61, but udhcpd keys leases on the MAC alone, so the old MAC keeps the address and the restarted container is offered another; this is the server's behaviour, not a plugin fault"
 	}
 	return ""
 }
