@@ -1252,11 +1252,14 @@ func readmeGroupMatchesCatalog(t *testing.T, group string) {
 // ---- IPAM shapes ----
 
 // The lab cannot create the second, option-carrying network in the two
-// IPAM shapes (plugin docs/reference.md refuses it), so B2, B5, B6 and B7
-// are N/A there, before anything touches the host. B8 still runs.
+// IPAM shapes (plugin docs/reference.md refuses it), so B2, B3, B5, B6 and
+// B7 are N/A there, before anything touches the host. B8 still runs.
+// B3 joined in lab #126: host run 4 failed it on the pihole and openwrt
+// ipam cells with "network ... already holds pool 0.0.0.0/0", the same
+// refusal the other four turn into N/A.
 func TestGroupBSecondNetworkScenariosAreNotApplicableOnIPAMShapes(t *testing.T) {
 	runs := map[string]func(context.Context, Env) Verdict{
-		NameB2: runB2, NameB5: runB5, NameB6: runB6, NameB7: runB7,
+		NameB2: runB2, NameB3: runB3, NameB5: runB5, NameB6: runB6, NameB7: runB7,
 	}
 	for _, shape := range []Shape{ShapeBridgeIPAM, ShapeMacvlanIPAM} {
 		for name, run := range runs {
@@ -1279,8 +1282,10 @@ func TestGroupBSecondNetworkScenariosAreNotApplicableOnIPAMShapes(t *testing.T) 
 
 func TestGroupBSecondNetworkScenariosStillRunOnTheOtherShapes(t *testing.T) {
 	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan, ShapeIpvlan} {
-		if _, ok := bIPAMNA(NameB2, Env{Shape: shape}); ok {
-			t.Errorf("%s must not be N/A by the IPAM rule", shape)
+		for _, name := range []string{NameB2, NameB3} {
+			if _, ok := bIPAMNA(name, Env{Shape: shape}); ok {
+				t.Errorf("%s %s must not be N/A by the IPAM rule", name, shape)
+			}
 		}
 	}
 }

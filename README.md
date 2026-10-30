@@ -141,7 +141,7 @@ Group A runs today:
 | A7 | plugin killed | kill the plugin process; it comes back, the lease holds |
 | A8 | fleet burst | start many containers at once |
 | A9 | stop, wait, start | stop, wait, start again |
-| A10 | kill under a restart policy | the container crashes, Docker restarts it |
+| A10 | kill under a restart policy | the container crashes, Docker restarts it (N/A on udhcpd's `bridge-ipam` and `macvlan-ipam`: Docker picks a new MAC there, the plugin carries the address over in option 61, and udhcpd keys leases on the MAC alone) |
 | A11 | pause/unpause | pause and unpause the container |
 | A12 | network disconnect/reconnect | detach from the network and attach again |
 | A13 | two networks, one container | a second, ordinary network beside the plugin one |
@@ -164,7 +164,7 @@ Group B runs today (IPv4; a scenario whose source lacks the feature reports N/A,
 
 B2, B3, B5, B6 and B7 run on their own network next to the cell's, removed afterwards. A source VM built before B5 needs a rebuild to get the class pool.
 
-On `bridge-ipam` and `macvlan-ipam` B2, B5, B6 and B7 report N/A: the plugin's reference docs refuse a second network in that shape unless it names a different parent or its own subnet, so the lab cannot create the option-carrying network there. B8 runs on every shape.
+On `bridge-ipam` and `macvlan-ipam` B2, B3, B5, B6 and B7 report N/A: the plugin's reference docs refuse a second network in that shape unless it names a different parent or its own subnet, so the lab cannot create the option-carrying network there. B8 runs on every shape.
 
 Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renumbered, or a squatter or a second server joins the segment, and everything is put back afterwards):
 
@@ -178,9 +178,9 @@ Group C runs today (IPv4; the source is stopped, slowed, reset, narrowed or renu
 | C5b | failover, primary down at create | with the primary stopped and the partner taken over, a new container is leased by the partner within C1's bound, and the partner's table holds it |
 | C5c | failover, primary returns | C5b's container is kept while the primary returns; the primary's table holds the outage lease, the container keeps its address through its next renewal, and a new container is leased |
 | C5d | failover, no address given twice | 18 containers (10 with both peers up, 4 with the primary down, 4 after its return) carry 18 distinct addresses; no peer's table and no pair of ACKs gives one address to two clients at once |
-| C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it (N/A on ipvlan: the plugin refuses `conflict_check=wait` there, because an ipvlan child does not receive the ARP replies to its own probes, RFC 5227 section 2.1.1) |
-| C6b | late squatter | with `conflict_check=async`, a host takes the container's address and announces it; within 30 s the client declines it and moves to an address the source leases to it |
-| C7 | rogue server | a second DHCP server answers on the segment; a network with `dhcp_deny_servers` and one with `dhcp_servers` both lease from the real source, and the second server's lease file stays empty for them |
+| C6 | early squatter | with `conflict_check=wait`, a host that ignores ping already holds the address the source offers; the client declines it and the container never carries it (N/A on ipvlan: the plugin refuses `conflict_check=wait` there, because an ipvlan child does not receive the ARP replies to its own probes, RFC 5227 section 2.1.1; C6b covers async there) |
+| C6b | late squatter | with `conflict_check=async`, a host takes the container's address and announces it; within 30 s the client declines it and moves to an address the source leases to it (on ipvlan the first DECLINE is judged as elsewhere; N/A only when the server then re-offers the address just declined and the client keeps it, because an ipvlan child never hears the replies to the plugin's probe after that ACK: documented limit, RFC 5227 section 2.1.1, plugin #1347) |
+| C7 | rogue server | a second DHCP server answers on the segment; a network with `dhcp_deny_servers` and one with `dhcp_servers` both lease from the real source, and the second server's lease file stays empty for them (on a failover pair the `dhcp_deny_servers` network may REQUEST either partner) |
 | C8 | pool exhausted | the pool is cut to two addresses, both held; a third container fails with no endpoint or link left, gets no lease once the pool is back, and a fourth container is leased |
 | C9 | subnet renumbered | the source moves to a new subnet under a short lease; by 200 s after the bind the container carries the new lease, routes via the new source address and answers ping |
 | C10 | reply delay and loss | a 2 s reply delay, then total loss until the client has sent two DISCOVERs; the container is leased both times |
@@ -231,7 +231,7 @@ Group E runs today (the plugin's own records, checked against what the source lo
 
 | ID | Scenario | What it does |
 |---|---|---|
-| E1 | audit ledger | with `audit_log` on, one container gets a lease on a shortened lease time, outlives its renewal time and is stopped. The plugin's ledger must hold exactly one bound entry and the renewals, in the order the source logged its own acknowledgements, matched by MAC address and IP and never by clock; no release-like entry may appear and no decline may reach the source |
+| E1 | audit ledger | with `audit_log` on, one container gets a lease on a shortened lease time, outlives its renewal time and is stopped. The plugin's ledger must hold exactly one bound entry and the renewals (the plugin's INIT-REBOOT REQUEST at Join for an address an earlier exchange granted is a resume, counted as neither), in the order the source logged its own acknowledgements, matched by MAC address and IP and never by clock; no release-like entry may appear and no decline may reach the source |
 | E2 | metrics against the source | the same run, reading the plugin's counters before and after. Leases obtained, renewed and released must move by exactly the number of acknowledgements and releases the source logged, no timeout, unanswered request, refusal or lease change may count, and the health view and the metrics view must agree |
 | E3a | host link names | bridge: the host-side link of a container is `dh-` plus the first 12 characters of its endpoint ID, on the network's bridge, and nothing is left after it stops. A second network with `host_ifname=container_name` renames it on a kernel from 6.2 (the old name stays as an altname, `host_ifnames_applied` moves by one); on an older kernel the rename fails, the `dh-` name stays and `host_ifname_failures` moves by one, which passes. The kernel is read on the docker host. macvlan and ipvlan: no host-side link is named, and `host_ifname` is refused with `host_ifname cannot be set in mode=<mode>` |
 | E3b | VLAN parent | macvlan and ipvlan with `-o vlan=100`: the plugin makes `eth1.100`, an 802.1Q VLAN 100 link on `eth1` with its own alias, the container leases from the VLAN pool the source serves on its own `eth1.100` (an address from the untagged pool fails), the observer's tagged capture shows the reply, and the link is gone when the network is. Two precondition links, `vlan100` and a dummy `eth1.100`, each make the create fail with the documented text, and the dummy must still exist afterwards. A segment bridge with `vlan_filtering` on makes the row BLOCKED. Bridge shapes are N/A |

@@ -12,7 +12,7 @@ import (
 // TestStaticNATableMatchesTheScenarios, which fails when a scenario is
 // added to or dropped from the ipam check without a row here.
 var ipamStaticNA = map[string]string{
-	NameB2: optionNetworkWhat, NameB5: optionNetworkWhat, NameB6: optionNetworkWhat,
+	NameB2: optionNetworkWhat, NameB3: optionNetworkWhat, NameB5: optionNetworkWhat, NameB6: optionNetworkWhat,
 	NameB7: optionNetworkWhat,
 	NameC1: optionNetworkWhat, NameC6: optionNetworkWhat, NameC6b: optionNetworkWhat,
 	NameC7: optionNetworkWhat, NameC8: optionNetworkWhat, NameC9: c9NetworkWhat,

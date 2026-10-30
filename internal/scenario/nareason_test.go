@@ -126,6 +126,43 @@ func TestUdhcpdIpvlanAndIPAMA2AreNANotFail(t *testing.T) {
 	}
 }
 
+// Lab #131: host run 4 failed A10 on udhcpd's bridge-ipam and macvlan-ipam
+// cells with "address changed across a crash+restart-policy recovery:
+// 10.200.12.111 -> 10.200.12.126". Docker gives the restarted endpoint a
+// new MAC and udhcpd files leases by MAC alone, so option 61 cannot carry
+// the address over. Through RunOne it is N/A, never that FAIL. RunOne's
+// bridge precondition needs a host this test does not have, so the
+// bridge-ipam shape is asserted on the source's own answer.
+func TestUdhcpdA10OnTheIPAMShapesIsNAWithTheClientIDReason(t *testing.T) {
+	v := RunOne(context.Background(), scenarioNamed(t, NameA10), udhcpdEnv(ShapeMacvlanIPAM))
+	if v.Result != NA || !strings.Contains(v.Reason, "server ignores client id") {
+		t.Errorf("A10 on macvlan-ipam: want N/A saying the server ignores the client id, got %s (%s)", v.Result, v.Reason)
+	}
+	why := (&sourceadapter.UdhcpdAdapter{}).NAShapeReason(string(ShapeBridgeIPAM), NameA10)
+	if !strings.Contains(why, "server ignores client id") {
+		t.Errorf("A10 on bridge-ipam: reason %q does not say the server ignores the client id", why)
+	}
+}
+
+// The A10 refusal is only for the IPAM shapes on udhcpd: the shapes where
+// the MAC is the key keep running it, and the other scenarios on the IPAM
+// shapes keep their own rule.
+func TestUdhcpdA10RefusalStaysOnTheIPAMShapes(t *testing.T) {
+	a := &sourceadapter.UdhcpdAdapter{}
+	for _, shape := range []string{"bridge", "macvlan"} {
+		if why := a.NAShapeReason(shape, NameA10); why != "" {
+			t.Errorf("A10 on %s refused: %s", shape, why)
+		}
+	}
+	for _, shape := range []string{"bridge-ipam", "macvlan-ipam"} {
+		for _, name := range []string{NameA1, NameA3, NameA4} {
+			if why := a.NAShapeReason(shape, name); strings.Contains(why, "server ignores client id") {
+				t.Errorf("%s on %s carries the A10 reason: %s", name, shape, why)
+			}
+		}
+	}
+}
+
 // The gate is narrow: udhcpd still runs A1 and A2 where the MAC is the key.
 func TestUdhcpdShapeGateLeavesTheMACKeyedRunsAlone(t *testing.T) {
 	a := &sourceadapter.UdhcpdAdapter{}
