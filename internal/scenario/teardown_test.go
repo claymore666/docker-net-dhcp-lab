@@ -254,3 +254,69 @@ func TestRunRetryingStopsAtACancelledContext(t *testing.T) {
 		t.Errorf("tried %d times under a cancelled context", h.tried["x"])
 	}
 }
+
+// netplanHost is a Debian 13 docker host whose networkd rebuilds the
+// bridge from its config whenever the bridge is deleted while the config
+// exists: networkd aborts on the deletion and its restart reads the
+// netdev netplan left in /run (measured on the dnsmasq cell).
+type netplanHost struct {
+	br             string
+	config, bridge bool
+	master         string
+	calls          []string
+}
+
+func (h *netplanHost) Run(_ context.Context, cmd string) (string, error) {
+	h.calls = append(h.calls, cmd)
+	switch cmd {
+	case "sudo rm -f " + bridgeNetplanPath:
+		h.config = false
+	case "sudo ip link del " + h.br:
+		h.bridge, h.master = h.config, ""
+	case nomasterCmd:
+		h.master = ""
+	case "ip -o link show eth1":
+		if h.master != "" {
+			return "3: eth1: <UP> mtu 1500 master " + h.master + " state UP", nil
+		}
+		return "3: eth1: <UP> mtu 1500 state UP", nil
+	case "ip -o link show " + h.br:
+		if !h.bridge {
+			return "", errors.New("exit status 1")
+		}
+		return "6: " + h.br + ": <UP> mtu 1500 state UP", nil
+	}
+	return "", nil
+}
+
+func TestNetplanNetworkDownRemovesTheConfigBeforeTheBridge(t *testing.T) {
+	fastTeardown(t)
+	br := hostBridgeName(NetworkName("dnsmasq", ShapeBridge))
+	h := &netplanHost{br: br, config: true, bridge: true, master: br}
+	if err := NetworkDown(context.Background(), h, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge); err != nil {
+		t.Fatalf("NetworkDown left the bridge: %v\n%s", err, strings.Join(h.calls, "\n"))
+	}
+	// the check still reads a real leftover
+	h = &netplanHost{br: br, config: true, bridge: true, master: br}
+	h.calls = nil
+	r := &swallowRunner{Runner: h, cmd: "sudo rm -f " + bridgeNetplanPath}
+	err := NetworkDown(context.Background(), r, labyaml.NetStackNetplan, "dnsmasq", ShapeBridge)
+	if err == nil || !strings.Contains(err.Error(), "bridge "+br+" still exists") {
+		t.Fatalf("a bridge networkd rebuilt passed the check: %v", err)
+	}
+}
+
+// swallowRunner answers cmd with exit 0 without running it.
+type swallowRunner struct {
+	Runner interface {
+		Run(context.Context, string) (string, error)
+	}
+	cmd string
+}
+
+func (s *swallowRunner) Run(ctx context.Context, cmd string) (string, error) {
+	if cmd == s.cmd {
+		return "", nil
+	}
+	return s.Runner.Run(ctx, cmd)
+}

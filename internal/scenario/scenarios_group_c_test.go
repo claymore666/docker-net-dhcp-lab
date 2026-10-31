@@ -506,6 +506,8 @@ func TestRunC1WallBoundsAreInclusiveAndHoldTheMeasuredWalls(t *testing.T) {
 		wantInReason string
 	}{
 		{"the measured walls", 15460 * time.Millisecond, 31290 * time.Millisecond, true, ""},
+		{"the plugin's own 34 s timer ends c1 (#141 repro)", 16018 * time.Millisecond, 38359 * time.Millisecond, true, ""},
+		{"the hung walls of host run 5 stay failures", 15356 * time.Millisecond, 60040 * time.Millisecond, false, "c1 failed after"},
 		{"both at the lower bound", c1bWallMin, c1WallMin, true, ""},
 		{"both at the upper bound", c1bWallMax, c1WallMax, true, ""},
 		{"c1b just under its lower bound", c1bWallMin - time.Millisecond, 31 * time.Second, false, "c1b failed after"},
@@ -535,7 +537,7 @@ func TestRunC1Fails(t *testing.T) {
 	}{
 		{"a container started with the source down", "c1 started with the source down", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.rc[base+"-c1"] = 0 }},
 		{"the short timeout failed late", "c1b failed after 20s, outside 12s-18.5s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1b"] = 20 * time.Second }},
-		{"the default timeout failed early", "c1 failed after 20s, outside 28s-37s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
+		{"the default timeout failed early", "c1 failed after 20s, outside 28s-40.5s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
 		{"the second gap is off schedule", "c1: DISCOVER gap 2 was 10.2s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1"][2] = 14 * time.Second }},
 		{"the first gap is off schedule", "c1b: DISCOVER gap 1 was 5.5s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"][1] = 5500 * ms }},
 		{"too few DISCOVERs", "c1b: the capture shows 1 DISCOVER(s)", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"] = offs["c1b"][:1] }},

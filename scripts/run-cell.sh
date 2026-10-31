@@ -23,6 +23,9 @@ LAB_YAML="${LAB_YAML:-$REPO_ROOT/lab.yaml}"
 mkdir -p "$WORK" "$EVIDENCE_DIR"
 GIT_SHA=$(cd "$REPO_ROOT" && git rev-parse HEAD)
 TS=$(date -u +%Y%m%dT%H%M%SZ)
+# The plugin journal is read from here, less 5 min for the guests' clock
+# skew: a fixed "2 hours ago" dropped the first hours of a long cell (#141).
+JOURNAL_SINCE=$(date -u -d "@$(($(date +%s) - 300))" '+%Y-%m-%d %H:%M:%S')
 echo "run-cell: repo at $GIT_SHA, started $TS"
 
 RESOLVED=$(go run "$REPO_ROOT/cmd/labctl" resolve "$LAB_YAML" "$CELL")
@@ -263,7 +266,7 @@ while [ -e "$plugin_log" ]; do
 	pass=$((pass + 1))
 	plugin_log="$EVIDENCE_DIR/${CELL}-plugin-log.retry$([ "$pass" -eq 2 ] || echo "$pass").txt"
 done
-ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '2 hours ago'" \
+ssh_run "$mgmt_ip" "sudo journalctl -u docker --since '$JOURNAL_SINCE UTC'" \
 	| grep -E 'net-dhcp|plugin=[0-9a-f]+' >"$plugin_log" || true
 
 relay_journal

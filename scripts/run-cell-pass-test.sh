@@ -33,7 +33,7 @@ stub "$fake/scripts/capture-stop.sh" 'echo "$1" >"$2/observer.pcap"'
 stub "$tmp/bin/git" 'echo 0000000'
 # every peer answers its own address; the docker host's journal is $JOURNAL
 stub "$tmp/bin/ssh" 'case "$*" in
-*"journalctl -u docker"*) echo "plugin=1234 $JOURNAL" ;;
+*"journalctl -u docker"*) echo "journal|$*" >>"$CALLS"; echo "plugin=1234 $JOURNAL" ;;
 *dpkg-query*) echo "ver-$(echo "$*" | grep -oE "lab@[0-9.]+" | cut -d@ -f2)" ;;
 *) echo stub ;;
 esac'
@@ -84,7 +84,17 @@ expect() {
 ev() { echo "$tmp/$1/evidence"; }
 
 # #95: a main pass, a retry pass and a third pass each keep the one before.
+start=$(date -u +%s)
 run main pair || { cat "$tmp/main/out" >&2; fail=1; }
+end=$(date -u +%s)
+
+# #141: the journal is read from the cell's own start, not a fixed window
+# a long cell outruns.
+since=$(grep '^journal|' "$tmp/main/calls" | grep -oE "since '[^']*'" | head -1)
+expect "the journal was not read from an absolute UTC time: $since" 'grep -qxE "since .[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC." <<<"$since"'
+# shellcheck disable=SC2034 # read inside the expect strings below
+since_s=$(date -u -d "$(echo "$since" | cut -d"'" -f2)" +%s 2>/dev/null || echo 0)
+expect "the journal since $since is not the cell's start less 5 min (start $start, end $end)" '[ "$since_s" -ge $((start - 300)) ] && [ "$since_s" -le $((end - 300)) ]'
 expect "the main pass's journal is not in t-pair-plugin-log.txt" 'grep -q '\''J-main'\'' "$(ev main)/t-pair-plugin-log.txt"'
 expect "a main pass wrote a .retry journal" '[ ! -e "$(ev main)/t-pair-plugin-log.retry.txt" ]'
 

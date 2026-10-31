@@ -340,7 +340,7 @@ PREF64), because the cell is DHCPv4 only; the dnsmasq cell covers the first
 group.
 
 The `chr` cell runs MikroTik's Cloud Hosted Router 7.24.5 (RouterOS, free
-licence, issue #9), seeded through its QEMU guest agent and driven with the
+licence, issue #9), seeded over its admin login with scp (the QEMU guest agent only sets the management address) and driven with the
 RouterOS command line over ssh; it has no Linux shell. The rows that need a
 helper program on the source VM report N/A there: C6 and C6b (squatter), C7
 (rogue server), C10 (loss and latency) and F8-forcerenew. B3 is N/A because

@@ -92,15 +92,27 @@ func c5Back(ctx context.Context, pc sourceadapter.PairControl, name string, t cT
 	}
 }
 
+// c5Answers: a answers r, same xid and client hardware address, not
+// before it (#142).
+func c5Answers(r, a DHCPMsg) bool {
+	return a.XID == r.XID && (r.CHAddr == "" || a.CHAddr == "" || a.CHAddr == r.CHAddr) && !a.At.Before(r.At)
+}
+
+// c5IsRebind: a broadcast REQUEST for addr with no server id, a rebind
+// and not a SELECTING request (RFC 2131 4.3.2).
+func c5IsRebind(r DHCPMsg, addr string) bool {
+	return r.Type == "REQUEST" && r.Dst == "255.255.255.255" && r.Server == "" && (r.CIAddr == addr || r.Requested == addr)
+}
+
 // c5Rebind finds a broadcast REQUEST for addr in [from, until) and the
 // ACK of it from serverID before until.
 func c5Rebind(msgs []DHCPMsg, addr, serverID string, from, until time.Time) (DHCPMsg, DHCPMsg, bool) {
 	for _, r := range messagesOfType(msgs, "REQUEST") {
-		if r.Dst != "255.255.255.255" || r.At.Before(from) || !r.At.Before(until) || (r.CIAddr != addr && r.Requested != addr) {
+		if !c5IsRebind(r, addr) || r.At.Before(from) || !r.At.Before(until) {
 			continue
 		}
 		for _, a := range messagesOfType(msgs, "ACK") {
-			if a.XID == r.XID && a.Server == serverID && a.YIAddr == addr && !a.At.Before(r.At) && a.At.Before(until) {
+			if c5Answers(r, a) && a.Server == serverID && a.YIAddr == addr && a.At.Before(until) {
 				return r, a, true
 			}
 		}
@@ -113,7 +125,7 @@ func c5Rebind(msgs []DHCPMsg, addr, serverID string, from, until time.Time) (DHC
 func c5SurvivorAnswer(msgs, reqs []DHCPMsg, addr, survivorID string, until time.Time) (DHCPMsg, DHCPMsg, bool) {
 	for _, r := range reqs {
 		for _, a := range messagesOfType(msgs, "ACK") {
-			if a.XID == r.XID && a.Server == survivorID && a.YIAddr == addr && !a.At.Before(r.At) && a.At.Before(until) {
+			if c5Answers(r, a) && a.Server == survivorID && a.YIAddr == addr && a.At.Before(until) {
 				return r, a, true
 			}
 		}
@@ -390,6 +402,85 @@ func runC5bTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		pc.Profile().Survivor, o.ident, o.addr, o.partnerID, o.wall.Round(10*time.Millisecond), o.ack.Secs), o.ev, e.GitSHA)
 }
 
+// c5cIn is what C5c's renew judgement reads besides the capture.
+type c5cIn struct {
+	addr, ident, primaryID, partnerID string
+	standbySilent                     bool
+	normalAt, deadline                time.Time
+}
+
+func (in c5cIn) noACK() string {
+	from := "the returned primary " + in.primaryID
+	if !in.standbySilent {
+		from = "either peer (" + in.primaryID + ", " + in.partnerID + ")"
+	}
+	return fmt.Sprintf("no ACK of %s from %s by the lease's expiry (%s)", in.addr, from, in.deadline.UTC().Format("15:04:05.000"))
+}
+
+// c5cJudgement is the renew judgement of one capture read; Result is
+// empty while no ACK of the address is in it. NoRenewal marks the FAIL
+// a blind observer turns into BLOCKED.
+type c5cJudgement struct {
+	Result    Result
+	Reason    string
+	Renewed   DHCPMsg
+	Renewals  int
+	NoRenewal bool
+}
+
+// c5cJudge judges the earliest ACK of the address after the pair's
+// return by capture time, paired with its own REQUEST by xid and chaddr:
+// a later ACK in the same read, or the controller's clock, does not
+// decide it (#142).
+func c5cJudge(msgs []DHCPMsg, in c5cIn) c5cJudgement {
+	var renewed DHCPMsg
+	for _, m := range messagesOfType(messagesAfter(msgs, in.normalAt), "ACK") {
+		switch {
+		case m.YIAddr != in.addr:
+		case m.Server == in.partnerID && in.standbySilent:
+			return c5cJudgement{Result: BLOCKED, Reason: fmt.Sprintf("the standby %s ACKed at %s while the primary runs: the source broke the premise, the rebind path was not exercised", in.partnerID, m.At.UTC().Format("15:04:05.000"))}
+		case m.Server != in.primaryID && m.Server != in.partnerID:
+		case renewed.At.IsZero() || m.At.Before(renewed.At):
+			// Load-balanced pair: the RENEW goes to the granting peer and that
+			// peer answers (RFC 2131 4.4.5; DESIGN-12 C5c ISC row, #12).
+			renewed = m
+		}
+	}
+	if renewed.At.IsZero() {
+		return c5cJudgement{}
+	}
+	if !renewed.At.Before(in.deadline) {
+		return c5cJudgement{Result: FAIL, Reason: fmt.Sprintf("%s: the first came from %s at %s (xid %s)", in.noACK(), renewed.Server, renewed.At.UTC().Format("15:04:05.000"), renewed.XID)}
+	}
+	for _, m := range messagesOfType(messagesBetween(msgs, in.normalAt, renewed.At), "REQUEST") {
+		if m.Dst == in.primaryID {
+			return c5cJudgement{Result: FAIL, Reason: fmt.Sprintf("%s renewed with a REQUEST unicast to the returned primary %s at %s, not to %s, the server that granted the lease", in.ident, in.primaryID, m.At.UTC().Format("15:04:05.000"), in.partnerID)}
+		}
+	}
+	if !in.standbySilent {
+		return c5cJudgement{Result: PASS, Renewed: renewed}
+	}
+	var rebind DHCPMsg
+	for _, r := range messagesOfType(messagesBetween(msgs, in.normalAt, renewed.At), "REQUEST") {
+		if c5IsRebind(r, in.addr) && c5Answers(r, renewed) {
+			rebind = r
+		}
+	}
+	if rebind.At.IsZero() {
+		return c5cJudgement{Result: FAIL, Reason: fmt.Sprintf("the returned primary's ACK of %s at %s (xid %s) answers no broadcast REQUEST of that xid: the rebind after the standby's silence was not seen", in.addr, renewed.At.UTC().Format("15:04:05.000"), renewed.XID)}
+	}
+	renewals := 0
+	for _, m := range messagesOfType(messagesBetween(msgs, in.normalAt, rebind.At), "REQUEST") {
+		if m.Dst == in.partnerID {
+			renewals++
+		}
+	}
+	if renewals == 0 {
+		return c5cJudgement{Result: FAIL, NoRenewal: true, Reason: fmt.Sprintf("no REQUEST from %s unicast to the granting standby %s between the pair's return and the rebind at %s", in.ident, in.partnerID, rebind.At.UTC().Format("15:04:05.000"))}
+	}
+	return c5cJudgement{Result: PASS, Renewed: renewed, Renewals: renewals}
+}
+
 // runC5cTuned -- C5b's container is kept, the primary returns: its own
 // table holds the outage lease, the container keeps its address through
 // its next renew cycle, and a new container is leased.
@@ -428,9 +519,9 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 	if !ok || last.LeaseTime <= 0 {
 		return blocked(NameC5c, e.Cell, e.Shape, "no ACK with option 51 before the pair returned: the renew cycle cannot be timed", e.GitSHA)
 	}
-	deadline := last.At.Add(last.LeaseTime)
-	var renewed DHCPMsg
-	for renewed.At.IsZero() {
+	in := c5cIn{addr: o.addr, ident: o.ident, primaryID: o.primaryID, partnerID: o.partnerID, standbySilent: prof.StandbySilent, normalAt: normalAt, deadline: last.At.Add(last.LeaseTime)}
+	var j c5cJudgement
+	for {
 		own, err := containerAddrs(ctx, e.Host, o.name)
 		if err != nil {
 			return fail(NameC5c, e.Cell, e.Shape, err.Error(), o.ev, e.GitSHA)
@@ -442,61 +533,32 @@ func runC5cTuned(ctx context.Context, e Env, t cTiming) Verdict {
 		if err != nil {
 			return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("could not read the capture: %v", err), e.GitSHA)
 		}
-		for _, m := range messagesOfType(messagesAfter(msgs, normalAt), "ACK") {
-			switch {
-			case m.YIAddr != o.addr:
-			case m.Server == o.primaryID:
-				renewed = m
-			case m.Server == o.partnerID && !prof.StandbySilent:
-				// Load-balanced pair: the RENEW goes to the granting peer and that
-				// peer answers (RFC 2131 4.4.5; DESIGN-12 C5c ISC row, #12).
-				renewed = m
-			case m.Server == o.partnerID && prof.StandbySilent:
-				return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the standby %s ACKed at %s while the primary runs: the source broke the premise, the rebind path was not exercised", o.partnerID, m.At.UTC().Format("15:04:05.000")), e.GitSHA)
-			}
-		}
-		if !renewed.At.IsZero() {
+		if j = c5cJudge(msgs, in); j.Result != "" {
 			break
 		}
-		if time.Now().After(deadline) {
-			from := "the returned primary " + o.primaryID
-			if !prof.StandbySilent {
-				from = "either peer (" + o.primaryID + ", " + o.partnerID + ")"
-			}
-			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("no ACK of %s from %s by the lease's expiry (%s)", o.addr, from, deadline.UTC().Format("15:04:05")), o.ev, e.GitSHA)
+		if time.Now().After(in.deadline) {
+			return fail(NameC5c, e.Cell, e.Shape, in.noACK(), o.ev, e.GitSHA)
 		}
 		if err := sleepCtx(ctx, t.poll); err != nil {
 			return blocked(NameC5c, e.Cell, e.Shape, err.Error(), e.GitSHA)
 		}
 	}
-	for _, m := range messagesOfType(messagesBetween(msgs, normalAt, renewed.At), "REQUEST") {
-		if m.Dst == o.primaryID {
-			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("%s renewed with a REQUEST unicast to the returned primary %s at %s, not to %s, the server that granted the lease", o.ident, o.primaryID, m.At.UTC().Format("15:04:05.000"), o.partnerID), o.ev, e.GitSHA)
+	switch {
+	case j.Result == BLOCKED:
+		return blocked(NameC5c, e.Cell, e.Shape, j.Reason, e.GitSHA)
+	case j.Result == FAIL && j.NoRenewal:
+		all, err := readCapture(ctx, e, NameC5c, "capture-all", "*", o.ev)
+		if err != nil {
+			return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("could not read the whole capture: %v", err), e.GitSHA)
 		}
+		if !sawClientUnicast(all) {
+			return blocked(NameC5c, e.Cell, e.Shape, "the capture holds no REQUEST to the standby "+o.partnerID+" before the rebind and no client-sent unicast frame from any client: the observer cannot see a unicast renewal, so its absence is not judged", e.GitSHA)
+		}
+		return fail(NameC5c, e.Cell, e.Shape, j.Reason, o.ev, e.GitSHA)
+	case j.Result == FAIL:
+		return fail(NameC5c, e.Cell, e.Shape, j.Reason, o.ev, e.GitSHA)
 	}
-	renewals := 0
-	if prof.StandbySilent {
-		req, ack, ok := c5Rebind(msgs, o.addr, o.primaryID, normalAt, deadline)
-		if !ok {
-			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("the returned primary's ACK of %s at %s answers no broadcast REQUEST: the rebind after the standby's silence was not seen", o.addr, renewed.At.UTC().Format("15:04:05.000")), o.ev, e.GitSHA)
-		}
-		for _, m := range messagesOfType(messagesBetween(msgs, normalAt, req.At), "REQUEST") {
-			if m.Dst == o.partnerID {
-				renewals++
-			}
-		}
-		if renewals == 0 {
-			all, err := readCapture(ctx, e, NameC5c, "capture-all", "*", o.ev)
-			if err != nil {
-				return blocked(NameC5c, e.Cell, e.Shape, fmt.Sprintf("could not read the whole capture: %v", err), e.GitSHA)
-			}
-			if !sawClientUnicast(all) {
-				return blocked(NameC5c, e.Cell, e.Shape, "the capture holds no REQUEST to the standby "+o.partnerID+" before the rebind and no client-sent unicast frame from any client: the observer cannot see a unicast renewal, so its absence is not judged", e.GitSHA)
-			}
-			return fail(NameC5c, e.Cell, e.Shape, fmt.Sprintf("no REQUEST from %s unicast to the granting standby %s between the pair's return and the rebind at %s", o.ident, o.partnerID, req.At.UTC().Format("15:04:05.000")), o.ev, e.GitSHA)
-		}
-		renewed = ack
-	}
+	renewed, renewals := j.Renewed, j.Renewals
 	second := o.name + "-new"
 	defer removeContainer(bCleanupCtx(ctx), e.Host, second)
 	mac, addr, endpointID, err := runContainer(ctx, e.Host, e.Shape, e.Network, second)

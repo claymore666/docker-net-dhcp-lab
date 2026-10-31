@@ -561,28 +561,33 @@ func NetworkDown(ctx context.Context, r sourceadapter.Runner, stack labyaml.NetS
 	// its now-deleted bridge name pile up in FORWARD forever.
 	step(forwardRuleDel(br))
 	step(forwardRule6Del(br))
+	release := func() {
+		step(fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
+		step(fmt.Sprintf("sudo ip link del %s", br))
+	}
+	// Symmetric with writeBridgePersistence: without removing the config
+	// too, the bridge would resurrect itself on the docker host's next
+	// real reboot even after this run tore it down (#3).
+	rmConfig := "sudo rm -f " + strings.Join(bridgeConfigPaths(stack, br), " ")
 	if stack == labyaml.NetStackIfupdown {
 		// While its stanza still exists: releases the bridge's lease
 		// and lets bridge-utils' post-down undo what its pre-up did,
 		// the port's disable_ipv6 among it (lab #70).
 		step("sudo ifdown " + br)
-	}
-	step(fmt.Sprintf("sudo ip link set %s nomaster", SegmentNIC))
-	step(fmt.Sprintf("sudo ip link del %s", br))
-	// Symmetric with writeBridgePersistence: without removing the
-	// netplan config too, the bridge would resurrect itself on the
-	// docker host's next real reboot even after this run tore it
-	// down (#3). The reapply after removing it hands
-	// eth1 back to cloud-init's own
-	// dhcp4: false stanza for that interface.
-	step("sudo rm -f " + strings.Join(bridgeConfigPaths(stack, br), " "))
-	if stack == labyaml.NetStackIfupdown {
+		release()
+		step(rmConfig)
 		// bridge-utils' post-down sets the port down; --force reruns
 		// the segment NIC's own stanza, which ifupdown still records
 		// as up (ifup(8)), so eth1 is up as NetworkUp found it (lab #70).
 		step("sudo ifup --force " + SegmentNIC)
 	} else {
+		// The config goes first: Debian 13's networkd aborts on the
+		// bridge's deletion and its restart rebuilt the bridge from the
+		// netdev still in /run (measured; #137's check caught it). The reapply hands
+		// eth1 back to cloud-init's dhcp4: false stanza.
+		step(rmConfig)
 		step("sudo netplan apply")
+		release()
 	}
 	step("sudo netfilter-persistent save")
 	if master, err := linkMaster(ctx, r, SegmentNIC); err != nil {
