@@ -24,7 +24,7 @@ func TestCellEnvKeepsTheUdhcpdNAReasoning(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): {}}
-	env, err := cellEnv(context.Background(), cell, "udhcpd", "/repo", t.TempDir(), dialFakes(hosts))
+	env, err := cellEnv(context.Background(), cell, "udhcpd", "/repo", t.TempDir(), scenario.SoakParams{}, dialFakes(hosts))
 	if err != nil {
 		t.Fatal(err)
 	}

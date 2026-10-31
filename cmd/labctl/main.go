@@ -59,6 +59,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
+	fmt.Fprintln(os.Stderr, "           (LAB_SOAK_DURATION, a Go duration, and LAB_SOAK_LEASE, seconds, set E5-soak's window and lease)")
 	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
 	fmt.Fprintln(os.Stderr, "       labctl abort-blocked <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir> <reason>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
@@ -204,9 +205,10 @@ func hostPart(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
 
 // cellEnv builds the cell half of a run's Env: the source adapter, wrapped
 // with the relay's Ready checks and Recover in a relay cell, and the router,
-// source, relay and second-capture fields (#11). dial opens a runner on a
-// management address; cmdRun fills the shape half.
-func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
+// source, relay and second-capture fields (#11), and E5's soak parameters
+// (#15). dial opens a runner on a management address; cmdRun fills the
+// shape half.
+func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, soak scenario.SoakParams, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
 	// One runner per host, so the adapter and the relay's source probes
 	// share the primary's retry state.
 	sourceHost := hostPart(cell.Source.MgmtAddress)
@@ -230,6 +232,7 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
 		VLAN:      scenario.ObserverVLAN{Cell: cellName, Bridge: cell.Segment.Bridge},
+		Soak:      soak,
 	}
 	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
 	if err != nil {
@@ -521,6 +524,11 @@ func cmdRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "labctl run: unknown shape %q, want one of bridge, macvlan, ipvlan, bridge-ipam, macvlan-ipam\n", shapeArg)
 		return 2
 	}
+	soak, err := scenario.SoakFromEnv(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run:", err)
+		return 2
+	}
 
 	cfg, err := labyaml.Load(labYAML)
 	if err != nil {
@@ -554,7 +562,7 @@ func cmdRun(args []string) int {
 	hostRunner := &scenario.BusyCapture{Cell: cellName, EvidenceDir: evidenceDir, Log: os.Stderr,
 		Inner: &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}}
-	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
+	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, soak, func(host string) sourceadapter.Runner {
 		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
 	})

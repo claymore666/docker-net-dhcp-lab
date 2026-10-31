@@ -73,6 +73,10 @@ type Env struct {
 	// HostNetStack is the docker host base image's network stack from
 	// the catalogue, never probed on the host (lab #70).
 	HostNetStack labyaml.NetStack
+
+	// Soak is E5's window and short lease; the zero value is the
+	// fixture default (lab #15).
+	Soak SoakParams
 }
 
 // Scenario is one entry in the catalog. Run returns the finished
@@ -206,6 +210,7 @@ const (
 	NameE2  = "E2-metrics-vs-server"
 	NameE3a = "E3a-host-link-names"
 	NameE3b = "E3b-vlan-parent"
+	NameE5  = "E5-soak"
 )
 
 // MinPoolAddresses is the most pool addresses one full pass under one
@@ -239,15 +244,15 @@ const (
 // the temporary address and prefix delegation, two each for 108 forced and
 // FORCERENEW (their control clients, #21) and for PREF64, whose second
 // container binds after the RA (#23),
-// plus group E's 4: one each for E1 and E2, each on its own network, and two
-// for E3a, whose two legs start one container each; E3b leases from the VLAN
-// pool, not this one (#15).
+// plus group E's 6: one each for E1 and E2, each on its own network, two
+// for E3a, whose two legs start one container each, and two for E5's soak
+// fleet; E3b leases from the VLAN pool, not this one (#15).
 // The pre-shape check in cmd/labctl compares a pool's free addresses
 // against PoolDemand, this sum less what the cell's source cannot run
 // (the C5 family's 22 count only on a failover pair, lab #12), and
 // aborts the cell as a lab error, never as a scenario FAIL.
 // TestPoolDemandSumsToMinPoolAddresses pins the sum (#23).
-const MinPoolAddresses = 121
+const MinPoolAddresses = 123
 
 // poolDemand is the per-scenario worst case MinPoolAddresses is the sum
 // of; a scenario added to Catalog without a row here fails the test.
@@ -266,7 +271,7 @@ var poolDemand = map[string]int{
 	NameD4b: 1,
 	NameF1:  1, NameF2a: 1, NameF2b: 2, NameF3: 1,
 	NameF4: 1, NameF5: 1, NameF6: 1, NameF7: 2, NameF8: 2,
-	NameE1: 1, NameE2: 1, NameE3a: 2, NameE3b: 0,
+	NameE1: 1, NameE2: 1, NameE3a: 2, NameE3b: 0, NameE5: e5Fleet,
 }
 
 // RunOne checks Applicable itself, so a caller (labctl's run subcommand)
@@ -430,6 +435,7 @@ var Catalog = []Scenario{
 	{Name: NameE2, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE2},
 	{Name: NameE3a, Needs: []sourceadapter.Capability{sourceadapter.CapV4}, Run: runE3a},
 	{Name: NameE3b, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapVLANPool}, Run: runE3b},
+	{Name: NameE5, Needs: []sourceadapter.Capability{sourceadapter.CapV4, sourceadapter.CapShortLease, sourceadapter.CapServerEvents}, Run: runE5},
 }
 
 // PoolDemand is the worst-case pool need of the scenarios in ss that source can run (lab #12).
