@@ -162,5 +162,14 @@ expect "a failed bring-up left no resolved lab.json for the matrix" '[ -s "$(ev 
 run up-silent pair UP_RC=7 || true
 expect "a silent bring-up failure has no named reason: $(grep '^abort|' "$tmp/up-silent/calls" | head -1)" 'grep -q "^abort|bridge|.*|the cell did not come up (lab error, not a plugin finding): up-cell exited with status 7$" "$tmp/up-silent/calls"'
 
+# #130: of several bring-up lines only the last two name the reason, joined by
+# a space; earlier ones (the first cause of a cascade) are not in the row.
+run up-many pair UP_RC=1 'UP_MSG=up-cell: first cause
+up-source: middle
+seed-chr: last but one
+up-cell: the end' || true
+expect "a bring-up with four named lines did not keep exactly the last two: $(grep '^abort|bridge|' "$tmp/up-many/calls")" '[ "$(grep "^abort|bridge|" "$tmp/up-many/calls")" = "abort|bridge|$(ev up-many)|the cell did not come up (lab error, not a plugin finding): seed-chr: last but one up-cell: the end" ]'
+expect "an earlier bring-up line leaked into the reason" '! grep -qE "first cause|middle" "$tmp/up-many/calls"'
+
 [ "$fail" -eq 0 ] && echo "$t: PASS"
 exit "$fail"

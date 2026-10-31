@@ -69,7 +69,7 @@ var cDefault = cTiming{
 // (docker run to the plugin's first DISCOVER), because the plugin's own
 // timer ends c1 when the engine does not cancel first (#141: Ubuntu 24.04
 // ipvlan, plugin error 34.0 s after its first DISCOVER, 38.4 s wall). That
-// overhead is 3.3-3.6 s in the c1b runs of host run 5 and 4.0 s in the #141
+// overhead is 3.3-3.6 s in the c1b runs of host run 5 and 4.4 s in the #141
 // repro, so c1 gets c1b's own allowance (c1bWallMax less 12 s = 6.5 s).
 // cGapSlack adds timer and capture latency to the jitter.
 const (

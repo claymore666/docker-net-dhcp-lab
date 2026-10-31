@@ -66,11 +66,12 @@ rc=0
 trap 'echo term >"$LAB_TEST_DIR/term.$cell"; exit 143' TERM
 sleep "$secs" &
 wait $!
-# emit.<cell>.<run>: "file|reason" lines, written as verdicts into the evidence dir
+# emit.<cell>.<run>: "file|reason[|result[|scenario]]" lines, written as
+# verdicts into the evidence dir (result defaults to FAIL, scenario to x)
 if [ -f "$LAB_TEST_DIR/emit.$cell.$k" ]; then
 	mkdir -p "$3"
-	while IFS='|' read -r f reason; do
-		printf 'scenario: x\ncell: %s\nresult: FAIL\nreason: %b\n' "$cell" "$reason" >"$3/$f"
+	while IFS='|' read -r f reason res scen; do
+		printf 'scenario: %s\ncell: %s\nresult: %s\nreason: %b\n' "${scen:-x}" "$cell" "${res:-FAIL}" "$reason" >"$3/$f"
 	done <"$LAB_TEST_DIR/emit.$cell.$k"
 fi
 echo "end $cell $(date +%s%N)" >>"$LAB_TEST_DIR/calls.log"
@@ -777,7 +778,7 @@ d="$e/root/durations.tsv"
 awk -F'\t' '$1=="b"{f=1} END{exit !f}' "$d" || bad "case 20h: the cell that passed has no row"
 
 # Case 21: one retry pass.
-SIG='CreateEndpoint: Post http://x: Client.Timeout exceeded while awaiting headers'
+SIG='failed to create endpoint c on network n: Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded (Client.Timeout exceeded while awaiting headers)'
 e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|%s\nA2.verdict|ordinary failure\n' "$SIG" >"$e/state/emit.a.1"
@@ -789,7 +790,7 @@ ev="$e/root/evidence/a"
 grep -q "^reason: $SIG" "$ev/retried/A1.verdict" 2>/dev/null || bad "case 21: the first verdict is not kept under retried/"
 grep -q '^reason: second look passed' "$ev/A1.verdict" || bad "case 21: the rerun's verdict is not in place"
 grep -q 'ordinary failure' "$ev/A2.verdict" || bad "case 21: a verdict without the signature was moved"
-has "case 21 log" "$e" 'retry pass: a has 1 verdict\(s\) whose reason carries CreateEndpoint and Client.Timeout .*A1.verdict'
+has "case 21 log" "$e" 'retry pass: a has 1 verdict\(s\) that are FAILs with an engine-to-plugin call timeout .*A1.verdict'
 has "case 21 log" "$e" 'retry pass: rerunning a once, -j 1'
 [ "$(tr -d ' ' <"$e/state/verdicts-at-start.a.2")" = 1 ] || bad "case 21: the rerun started with $(cat "$e/state/verdicts-at-start.a.2") verdicts in place, wanted only the one without the signature (a copy leaves the old one for labctl remaining to skip)"
 if [ ! -f "$e/root/logs/a.first.log" ] || [ ! -f "$e/root/logs/a.log" ]; then bad "case 21: the first attempt's log is gone"; fi
@@ -816,21 +817,104 @@ cells "$e" -j 1 a
 [ "$(cat "$e/root/evidence/a/retried/A1.verdict")" = older ] || bad "case 21c: an earlier retried/ file was overwritten"
 [ "$(grep -l "^reason: $SIG" "$e"/root/evidence/a/retried/* | wc -l)" -eq 1 ] || bad "case 21c: the moved verdict is not kept beside the older one"
 
-# only the cell with the signature is rerun; CreateEndpoint alone, a
-# signature split over two lines and another file's word do not match
+# What the selector matches, spelling by spelling. Strings are the engine's
+# and the plugin's, copied from host runs rc1 and rc2 (#79); a is one cell
+# per spelling so a rerun of the cell is the verdict that it matched.
+PRE='docker: Error response from daemon: failed to set up container networking: failed to create endpoint c on network n:'
+sel() { # name, reason, [result], [scenario] -> number of starts of cell a
+	local n=$1
+	e=$(new_env)
+	meminfo "$e" 60
+	printf 'A1.verdict|%s|%s|%s\n' "$2" "${3:-FAIL}" "${4:-x}" >"$e/state/emit.a.1"
+	cells "$e" -j 1 a
+	expect "case 21d ($n)" 0 "$e"
+	starts_of "$e" a
+}
+for spell in \
+	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' \
+	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' \
+	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded Run docker run --help' \
+	"$PRE"' Post "http://plugin.moby.localhost/IpamDriver.RequestAddress": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' \
+	"$PRE"' Post "http://plugin.moby.localhost/IpamDriver.RequestAddress": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' \
+	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.ProgramExternalConnectivity": net/http: request canceled (Client.Timeout exceeded while awaiting headers)' \
+	"$PRE"' Post "http://%2Frun%2Fdocker%2Fplugins%2F18485%2Fnet-dhcp.sock/NetworkDriver.CreateEndpoint": net/http: request canceled (Client.Timeout exceeded while awaiting headers)'; do
+	[ "$(sel "matched spelling" "$spell")" -eq 2 ] || bad "case 21d: not retried: $spell"
+done
+# not matched: the words alone, the words in the old order, a split line, a
+# PASS quoting the timeout (D3c), a BLOCKED, the plugin's own DHCP timeout,
+# a refused call, a containerd deadline and a non-plugin Post
+for spell in \
+	'CreateEndpoint failed' \
+	'Client.Timeout alone' \
+	'Client.Timeout exceeded in CreateEndpoint' \
+	'CreateEndpoint: Post http://x: Client.Timeout exceeded while awaiting headers' \
+	"$PRE"' NetworkDriver.CreateEndpoint: failed to get initial IP address via DHCP: context deadline exceeded' \
+	"$PRE"' NetworkDriver.CreateEndpoint: failed to get initial IPv6 address via DHCPv6: context deadline exceeded' \
+	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": connection refused' \
+	"$PRE"' Get "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded' \
+	'failed to create task for container: DeadlineExceeded: failed to create shim task: context deadline exceeded' \
+	'Post "http://registry.example/v2/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' \
+	'CreateEndpoint failed\nPost "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded'; do
+	[ "$(sel "unmatched spelling" "$spell")" -eq 1 ] || bad "case 21d: retried: $spell"
+done
+D3C="$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded (Client.Timeout exceeded while awaiting headers)'
+[ "$(sel "PASS quoting the timeout" "auto: 3 Solicits unanswered; the endpoint failed ($D3C)" PASS D3c-auto-silent-dhcpv6-server)" -eq 1 ] || bad "case 21d: a PASS that quotes the timeout was moved and rerun"
+for res in BLOCKED N/A; do
+	[ "$(sel "$res with the timeout" "$D3C" "$res")" -eq 1 ] || bad "case 21d: a $res verdict was rerun"
+done
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s|PASS|D3c-auto-silent-dhcpv6-server\n' "$D3C" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+if ! { [ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ]; }; then bad "case 21d: a PASS was moved under retried/"; fi
+
+# one cell per spelling in one run: only the cells with a match are rerun
 e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|CreateEndpoint failed\nA2.verdict|Client.Timeout alone\n' >"$e/state/emit.a.1"
-printf 'B1.verdict|Client.Timeout exceeded in CreateEndpoint\n' >"$e/state/emit.b.1"
+printf 'B1.verdict|%s\n' "$SIG" >"$e/state/emit.b.1"
 cells "$e" -j 2 a b
 expect "case 21d (only the signature cell)" 0 "$e"
 [ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21d: a (no signature) was rerun"
-[ "$(starts_of "$e" b)" -eq 2 ] || bad "case 21d: b (Client.Timeout before CreateEndpoint) was not rerun"
+[ "$(starts_of "$e" b)" -eq 2 ] || bad "case 21d: b (signature) was not rerun"
+# the mixed cell: the FAIL with the signature moves, the PASS and the plugin's
+# own DHCP timeout stay in place
 e=$(new_env)
 meminfo "$e" 60
-printf 'A1.verdict|CreateEndpoint failed\\nsecond line Client.Timeout\n' >"$e/state/emit.a.1"
+printf 'A1.verdict|%s\nA2.verdict|%s|PASS|D2b\nA3.verdict|%s NetworkDriver.CreateEndpoint: failed to get initial IP address via DHCP: context deadline exceeded\n' "$SIG" "$D3C" "$PRE" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+if ! { [ -f "$e/root/evidence/a/retried/A1.verdict" ] && [ -f "$e/root/evidence/a/A2.verdict" ] && [ -f "$e/root/evidence/a/A3.verdict" ]; }; then bad "case 21d: the mixed cell moved the wrong files: $(find "$e/root/evidence/a" -name '*.verdict' | sort | tr '\n' ' ')"; fi
+if ! { [ ! -e "$e/root/evidence/a/retried/A2.verdict" ] && [ ! -e "$e/root/evidence/a/retried/A3.verdict" ]; }; then bad "case 21d: a PASS or a DHCP timeout was moved"; fi
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|CreateEndpoint failed\\nPost "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded\n' >"$e/state/emit.a.1"
 cells "$e" -j 1 a
 [ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21d: a signature split over two lines matched"
+
+# case 21g: the skip list. E3b is not rerun; --retry-skip replaces the list.
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+expect "case 21g (E3b skipped)" 0 "$e"
+[ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21g: E3b-vlan-parent was rerun"
+if ! { [ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ]; }; then bad "case 21g: E3b-vlan-parent was moved"; fi
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 --retry-skip '' a
+[ "$(starts_of "$e" a)" -eq 2 ] || bad "case 21g: --retry-skip '' still skipped E3b-vlan-parent"
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s|FAIL|A8-fleet-burst\nA2.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 --retry-skip 'A8-fleet-burst|B1' a
+if ! { [ -e "$e/root/evidence/a/A1.verdict" ] && [ -e "$e/root/evidence/a/retried/A2.verdict" ]; }; then bad "case 21g: --retry-skip did not replace the default list"; fi
+# a scenario name that only contains a skipped name is not skipped
+e=$(new_env)
+meminfo "$e" 60
+printf 'A1.verdict|%s|FAIL|E3b-vlan-parent-2\n' "$SIG" >"$e/state/emit.a.1"
+cells "$e" -j 1 a
+[ "$(starts_of "$e" a)" -eq 2 ] || bad "case 21g: the skip matched a longer scenario name"
 
 # --no-retry never reruns and never moves
 e=$(new_env)
@@ -842,17 +926,41 @@ expect "case 21e (--no-retry)" 0 "$e"
 if [ ! -f "$e/root/evidence/a/A1.verdict" ] || [ -d "$e/root/evidence/a/retried" ]; then bad "case 21e: --no-retry moved a verdict"; fi
 has "case 21e" "$e" 'retry pass disabled'
 
-# the pass runs at most two at once
+# the pass runs one cell at a time unless --retry-jobs says more (#79: the
+# rc2 pass at two met the same stall)
+for rjopt in "" "--retry-jobs 2" "--retry-jobs 3"; do
+	e=$(new_env)
+	meminfo "$e" 60
+	for c in a b c d; do
+		echo "1 0" >"$e/state/spec.$c"
+		printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.$c.1"
+	done
+	# shellcheck disable=SC2086
+	cells "$e" -j 4 $rjopt a b c d
+	expect "case 21f (retry pool, '$rjopt')" 0 "$e"
+	max=$(awk '$1=="start"{n[$2]++; if (n[$2]==2) print $3, 1} $1=="end"{m[$2]++; if (m[$2]==2) print $3, -1}' "$e/state/calls.log" | sort -k1,1n -k2,2n | awk '{n+=$2; if (n>m) m=n} END{print m+0}')
+	want=${rjopt##* }
+	[ -n "$want" ] || want=1
+	[ "$max" -eq "$want" ] || bad "case 21f: the retry pass with '$rjopt' peaked at $max running, wanted exactly $want"
+	has "case 21f log" "$e" "retry pass: rerunning a b c d once, -j $want"
+done
+for bad_rj in 0 x -1 1.5 ""; do
+	e=$(new_env)
+	meminfo "$e" 60
+	cells "$e" --retry-jobs "$bad_rj" a
+	expect "case 21f (--retry-jobs '$bad_rj')" 2 "$e"
+	has "case 21f" "$e" "REFUSED -- --retry-jobs wants a positive integer"
+	[ "$(started "$e")" -eq 0 ] || bad "case 21f: a cell started on a refused --retry-jobs"
+done
+
+# the pass still goes through the load gate: busy when the first pass ends
 e=$(new_env)
 meminfo "$e" 60
-for c in a b c d; do
-	echo "1 0" >"$e/state/spec.$c"
-	printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.$c.1"
-done
-cells "$e" -j 4 a b c d
-expect "case 21f (retry pool cap)" 0 "$e"
-max=$(awk '$1=="start"{n[$2]++; if (n[$2]==2) print $3, 1} $1=="end"{m[$2]++; if (m[$2]==2) print $3, -1}' "$e/state/calls.log" | sort -k1,1n -k2,2n | awk '{n+=$2; if (n>m) m=n} END{print m+0}')
-[ "$max" -eq 2 ] || bad "case 21f: the retry pass peaked at $max running, wanted exactly 2"
+printf 'A1.verdict|%s\n' "$SIG" >"$e/state/emit.a.1"
+busy "$e" 9.00
+cells "$e" -j 1 --load-wait 1 a
+expect "case 21h (retry through the gate)" 0 "$e"
+[ "$(nlines "$e" 'run-cells: a: load gate: load1 9.00 still at or above 8.0')" -eq 2 ] || bad "case 21h: wanted the load gate to speak before the first start and before the retry start"
 
 # the exit code is the second rc
 e=$(new_env)

@@ -25,7 +25,7 @@ LOAD_POLL=${LAB_LOAD_POLL:-30}
 . "$REPO_ROOT/scripts/image-path.sh"
 
 usage() {
-	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
+	echo "usage: run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--retry-jobs N] [--retry-skip REGEX] [--root DIR] [--check] <cell-name> [<cell-name> ...]" >&2
 }
 
 JOBS=""
@@ -34,6 +34,11 @@ STAGGER=60
 LOAD_WAIT=${LAB_LOAD_WAIT:-900}
 DURATIONS=""
 RETRY=1
+RETRY_JOBS=1
+# Scenarios whose engine-to-plugin timeout is a lab reason, not host load,
+# so a rerun cannot help: E3b ran against a source that did not serve the
+# VLAN (#121). Matched against the verdict's scenario: line (#79).
+RETRY_SKIP='E3b-vlan-parent'
 CHECK_ONLY=0
 CELLS=()
 while [ $# -gt 0 ]; do
@@ -66,6 +71,14 @@ while [ $# -gt 0 ]; do
 		RETRY=0
 		shift
 		;;
+	--retry-jobs | --retry-skip)
+		if [ $# -lt 2 ]; then
+			usage
+			exit 2
+		fi
+		if [ "$1" = "--retry-jobs" ]; then RETRY_JOBS=$2; else RETRY_SKIP=$2; fi
+		shift 2
+		;;
 	--check)
 		CHECK_ONLY=1
 		shift
@@ -90,6 +103,10 @@ if ! [[ "$STAGGER" =~ ^[0-9]+$ ]]; then
 fi
 if ! [[ "$LOAD_WAIT" =~ ^[0-9]+$ ]]; then
 	echo "run-cells: REFUSED -- --load-wait wants a non-negative integer, got '$LOAD_WAIT'" >&2
+	exit 2
+fi
+if ! [[ "$RETRY_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+	echo "run-cells: REFUSED -- --retry-jobs wants a positive integer, got '$RETRY_JOBS'" >&2
 	exit 2
 fi
 if [ -n "$JOBS" ] && ! [[ "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
@@ -500,10 +517,16 @@ write_durations() {
 	mv -f -- "$tmp" "$out"
 }
 
-# A verdict is a load casualty when one reason line carries both words,
-# in either order (run 1: 38 of them, #79).
+# A load casualty is a FAIL whose reason is the engine's call to the plugin
+# (NetworkDriver or IpamDriver) running past its timeout, with or without the
+# Client.Timeout suffix: 38 such FAILs on rc1 (#79). Not matched: a PASS that
+# quotes the timeout (D3c, D2b expect it), the plugin's own "failed to get
+# initial IP address via DHCP: context deadline exceeded" (the server did not
+# answer; a rerun meets the same silence), and the RETRY_SKIP scenarios.
 load_signature() {
-	grep -qE -e '^reason: .*CreateEndpoint.*Client\.Timeout' -e '^reason: .*Client\.Timeout.*CreateEndpoint' -- "$1"
+	grep -qx -e 'result: FAIL' -- "$1" || return 1
+	grep -qE -e "^scenario: ($RETRY_SKIP)\$" -- "$1" && return 1
+	grep -qE -e '^reason: .*Post "[^"]*/(NetworkDriver|IpamDriver)\.[A-Za-z]+": (context deadline exceeded|net/http: request canceled)' -- "$1"
 }
 
 # Moves, never overwrites: a name already in the target dir gets a number.
@@ -518,9 +541,11 @@ move_aside() {
 
 # One pass, never two (#79): the rerun's verdicts are final even if they
 # carry the signature. run-cell.sh resumes, so only the moved verdicts'
-# scenarios run again. The pool is capped at 2 for the pass.
+# scenarios run again. The pass runs --retry-jobs cells at a time (default 1):
+# rc2 reran at -j 2 and met the same stall (#79); each start still passes the
+# load gate.
 retry_pass() {
-	local cell ev f n names queue=() rj=$JOBS
+	local cell ev f n names queue=() rj=$RETRY_JOBS
 	for cell in "${CELLS[@]}"; do
 		[[ "${RC[$cell]:-}" =~ ^[0-9]+$ ]] || continue
 		ev=$ROOT/evidence/$cell
@@ -535,7 +560,7 @@ retry_pass() {
 			n=$((n + 1))
 		done
 		[ "$n" -gt 0 ] || continue
-		echo "run-cells: retry pass: $cell has $n verdict(s) whose reason carries CreateEndpoint and Client.Timeout (load signature); moved to $ev/retried/:$names"
+		echo "run-cells: retry pass: $cell has $n verdict(s) that are FAILs with an engine-to-plugin call timeout (load signature); moved to $ev/retried/:$names"
 		mv -f -- "$ROOT/logs/$cell.log" "$ROOT/logs/$cell.first.log"
 		RETRIED[$cell]=1
 		queue+=("$cell")
@@ -544,7 +569,6 @@ retry_pass() {
 		echo "run-cells: retry pass: no verdict carries the load signature"
 		return 0
 	fi
-	[ "$rj" -le 2 ] || rj=2
 	echo "run-cells: retry pass: rerunning ${queue[*]} once, -j $rj"
 	run_pool "$rj" "${queue[@]}"
 }
