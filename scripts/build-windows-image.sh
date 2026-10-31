@@ -332,9 +332,12 @@ sudo -n virt-install \
 	--graphics none --noautoconsole --import
 
 # "Press any key to boot from CD" times out on a blank disk unless
-# answered; a few keys in the first half minute carry it past.
-for _ in $(seq 1 15); do
-	sudo -n virsh send-key "$build_dom" KEY_SPACE >/dev/null 2>&1 || true
+# answered. The key is Enter: a key that reaches the Windows Boot Manager
+# stops its countdown, and only Enter then starts Setup (measured: Space
+# left the menu waiting for three hours, lab #14). Keys for 90 s, since
+# OVMF took over a minute to draw its first screen on the lab host.
+for _ in $(seq 1 45); do
+	sudo -n virsh send-key "$build_dom" KEY_ENTER >/dev/null 2>&1 || true
 	sleep "$KEY_SLEEP"
 done
 

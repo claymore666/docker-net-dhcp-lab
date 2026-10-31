@@ -262,7 +262,8 @@ done
 [ "$(grep -o 'device=cdrom' <<<"$vi" | wc -l)" -eq 3 ] || bad "the build VM does not carry three CD-ROMs"
 grep -qF "path=$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso,device=cdrom,boot.order=1" <<<"$vi" || bad "the Windows ISO is not first in the boot order"
 grep -q '^volid LABSEED$' "$STUB_LOG" || bad "the seed CD has no LABSEED label"
-[ "$(grep -c '^virsh send-key' "$STUB_LOG")" -ge 1 ] || bad "no key was sent past the boot prompt"
+[ "$(grep -c '^virsh send-key .* KEY_ENTER$' "$STUB_LOG")" -ge 45 ] || bad "fewer than 45 Enter keys were sent past the boot prompt"
+grep '^virsh send-key' "$STUB_LOG" | grep -qv 'KEY_ENTER$' && bad "a key other than Enter was sent: it stops the boot manager's countdown"
 grep -q '^virsh undefine lab-build-windows-2025-eval --nvram' "$STUB_LOG" || bad "the build domain was not removed"
 # Order: install, off, fresh NVRAM, second boot, proof, power off.
 order=$(grep -E '^virt-install|^sudo cp -f .*OVMF_VARS|^virsh start|^ssh-call .*Stop-Computer' "$STUB_LOG" |
