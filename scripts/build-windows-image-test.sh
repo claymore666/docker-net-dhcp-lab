@@ -244,14 +244,14 @@ dest=$LAB_IMAGE_CACHE/windows-2025-eval
 [ -f "$dest.qcow2" ] || bad "no golden image"
 [ "$(cat "$dest.build-id" 2>/dev/null)" = "$id" ] || bad "the build-id sidecar is not the cell's id"
 [ ! -e "$dest.qcow2.part" ] || bad "a .part file is left"
-keep=$dest-$(date -u +%Y%m%d)
+dated=$dest-$(date -u +%Y%m%d)
 for x in qcow2 build-id sources; do
-	[ -f "$keep.$x" ] || bad "no dated copy $keep.$x"
-	[ "$(stat -c %a "$keep.$x" 2>/dev/null)" = 444 ] || bad "the dated copy $keep.$x is not read-only"
+	[ -f "$dated.$x" ] || bad "no dated copy $dated.$x"
+	[ "$(stat -c %a "$dated.$x" 2>/dev/null)" = 444 ] || bad "the dated copy $dated.$x is not read-only"
 done
-cmp -s "$dest.qcow2" "$keep.qcow2" || bad "the dated copy differs from the image"
-[ "$(stat -c %i "$dest.qcow2")" != "$(stat -c %i "$keep.qcow2" 2>/dev/null)" ] || bad "the dated copy is a hard link"
-cmp -s "$dest.build-id" "$keep.build-id" || bad "the dated build-id differs"
+cmp -s "$dest.qcow2" "$dated.qcow2" || bad "the dated copy differs from the image"
+[ "$(stat -c %i "$dest.qcow2")" != "$(stat -c %i "$dated.qcow2" 2>/dev/null)" ] || bad "the dated copy is a hard link"
+cmp -s "$dest.build-id" "$dated.build-id" || bad "the dated build-id differs"
 grep -qE '^[0-9a-f]{64}  virtio-win-0\.1\.302\.iso$' "$dest.sources" || bad "the sources sidecar does not name the pinned virtio ISO"
 [ -z "$(ls -A "$WINDOWS_BUILD_DIR")" ] || bad "the work directory is left: $(ls "$WINDOWS_BUILD_DIR")"
 vi=$(grep '^virt-install' "$STUB_LOG")
