@@ -65,8 +65,13 @@ var cDefault = cTiming{
 // plugin v2.5.0 (#23): c1b 15.26-15.46 s, c1 31.13-31.29 s on all three
 // shapes. c1b ends on the plugin's own 12 s timeout. c1 ends on the
 // engine's ~30 s plugin-request timeout, before the documented 34 s, so
-// its min is measured less 3 s and its max is 34 s plus 3 s. cGapSlack
-// adds timer and capture latency to the jitter.
+// its min is measured less 3 s. Its max is 34 s plus the start overhead
+// (docker run to the plugin's first DISCOVER), because the plugin's own
+// timer ends c1 when the engine does not cancel first (#141: Ubuntu 24.04
+// ipvlan, plugin error 34.0 s after its first DISCOVER, 38.4 s wall). That
+// overhead is 3.3-3.6 s in the c1b runs of host run 5 and 4.0 s in the #141
+// repro, so c1 gets c1b's own allowance (c1bWallMax less 12 s = 6.5 s).
+// cGapSlack adds timer and capture latency to the jitter.
 const (
 	cJitter      = time.Second
 	cGapSlack    = 250 * time.Millisecond
@@ -75,7 +80,7 @@ const (
 	c1bWallMin   = 12 * time.Second
 	c1bWallMax   = 18500 * time.Millisecond
 	c1WallMin    = 28 * time.Second
-	c1WallMax    = 37 * time.Second
+	c1WallMax    = 34*time.Second + (c1bWallMax - 12*time.Second)
 	c10Delay     = 2 * time.Second
 	c10MinWall   = 4 * time.Second
 	c11RefuseMax = 12 * time.Second
