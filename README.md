@@ -407,7 +407,7 @@ plugin/engine/kernel versions, a config diff from the source's stock
 install, one packet capture for the whole run, lease-table snapshots,
 the plugin's own log, and one verdict file per scenario and shape.
 
-`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--root DIR] [--check] <cell-name>...` runs
+`scripts/run-cells.sh [-j N] [--stagger SECONDS] [--load-wait SECONDS] [--durations FILE] [--no-retry] [--retry-jobs N] [--retry-skip REGEX] [--root DIR] [--check] <cell-name>...` runs
 several cells at once on one host and leaves one evidence bundle per cell
 under `<root>/evidence/<cell>`, with its output in `<root>/logs/<cell>.log`
 and its exit code in `<root>/logs/<cell>.rc` (`--root` is the base directory, any directory with room for the
@@ -447,11 +447,19 @@ seconds (default 900, `0` disables; a cell that waited the bound out still start
 start longest first, by the seconds in `--durations FILE` (default
 `<root>/durations.tsv` if it exists; every run updates that file with the
 cells that finished 0, and cells it does not know start last, `--check`
-prints the order). After all cells finish, a cell with a verdict whose
-reason carries `CreateEndpoint` and `Client.Timeout` (the load signature)
-gets one more run, two cells at a time: those verdicts are moved to
-`<evidence>/retried/`, the log lists them, and the second result is final
-(`--no-retry` skips the pass). The retry pass keeps the first pass's plugin
+prints the order). After all cells finish, a cell with a FAIL verdict whose
+reason is a timeout of a call from the engine to the plugin (a `Post` to a
+`NetworkDriver.*` or `IpamDriver.*` endpoint that ends in `context deadline
+exceeded` or `net/http: request canceled`; the load signature) gets one more
+run: those verdicts are moved to `<evidence>/retried/`, the log lists them,
+and the second result is final. PASS verdicts that quote the same timeout
+(scenarios that expect it) and the plugin's own DHCP timeouts (the server
+did not answer) do not match. The pass runs `--retry-jobs N` cells at a time
+(default 1); each start still passes the load gate. `--retry-skip REGEX`
+names scenarios the pass leaves alone, matched whole against the verdict's
+`scenario:` line (default `E3b-vlan-parent`, which fails for a lab reason
+that a rerun does not change; the list is explicit because a guessed class
+of lab-reason scenarios could hide a real product finding). `--no-retry` skips the pass. The retry pass keeps the first pass's plugin
 journal and packet capture beside its own (#95). When a shape aborts before
 its scenarios ran, the script has `labctl` write a BLOCKED row, with the abort
 reason, for every scenario the shape never reached (#101). At the first

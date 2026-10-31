@@ -851,6 +851,7 @@ for spell in \
 	"$PRE"' NetworkDriver.CreateEndpoint: failed to get initial IP address via DHCP: context deadline exceeded' \
 	"$PRE"' NetworkDriver.CreateEndpoint: failed to get initial IPv6 address via DHCPv6: context deadline exceeded' \
 	"$PRE"' Post "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": connection refused' \
+	"$PRE"' Get "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded' \
 	'failed to create task for container: DeadlineExceeded: failed to create shim task: context deadline exceeded' \
 	'Post "http://registry.example/v2/": context deadline exceeded (Client.Timeout exceeded while awaiting headers)' \
 	'CreateEndpoint failed\nPost "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded'; do
