@@ -134,14 +134,16 @@ subst() {
 	printf '%s\n' "$text"
 }
 
+# One driver tree only: Setup loads every listed path and fails the whole
+# install with 0x80070103 on a second copy of a driver it already loaded
+# (measured: viostor 2k25 loaded, the 2k22 copy then stopped Setup, lab #14).
+# A path that does not exist is skipped (same run: the D: paths came first).
 driver_paths() {
-	local n=0 letter drv tree
+	local n=0 letter drv
 	for letter in D E F G; do
 		for drv in viostor NetKVM; do
-			for tree in 2k25 2k22; do
-				n=$((n + 1))
-				printf '        <PathAndCredentials wcm:action="add" wcm:keyValue="%d"><Path>%s:\\%s\\%s\\amd64</Path></PathAndCredentials>\n' "$n" "$letter" "$drv" "$tree"
-			done
+			n=$((n + 1))
+			printf '        <PathAndCredentials wcm:action="add" wcm:keyValue="%d"><Path>%s:\\%s\\2k25\\amd64</Path></PathAndCredentials>\n' "$n" "$letter" "$drv"
 		done
 	done
 }

@@ -109,7 +109,9 @@ wellformed "$ua" || bad "autounattend.xml is not well-formed"
 grep -qF "<Value>Windows Server 2025 SERVERSTANDARDCORE</Value>" "$ua" || bad "the image is not selected by name"
 grep -qE '^WIN_IMAGE_NAME=.Windows Server 2025 SERVERSTANDARDCORE.$' scripts/build-windows-image.sh || bad "the image name constant moved from the answer file's"
 grep -qF "$(grep -F 'Windows Server 2025 SERVERSTANDARDCORE' images/windows-2025-eval.sha256)" images/windows-2025-eval.sha256 || bad "the pin header does not name the image"
-[ "$(grep -c '<Path>' "$ua")" -eq 16 ] || bad "driver paths: $(grep -c '<Path>' "$ua"), want 16"
+[ "$(grep -c '<Path>' "$ua")" -eq 8 ] || bad "driver paths: $(grep -c '<Path>' "$ua"), want 8"
+# A second tree of the same driver stops Setup with 0x80070103 (lab #14).
+grep -q '<Path>[^<]*\\2k2[^5]' "$ua" && bad "a driver path outside the 2k25 tree"
 for l in D E F G; do
 	for d in viostor NetKVM; do
 		grep -qF "<Path>$l:\\$d\\2k25\\amd64</Path>" "$ua" || bad "no driver path $l:\\$d\\2k25"
