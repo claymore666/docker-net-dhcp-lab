@@ -64,6 +64,9 @@ echo "== build-openwrt-image.sh: the overlay has no br-lan, odhcpd off, an id th
 echo "== build-windows-image.sh: the answer file and first logon render, every refusal comes before a VM, the second boot is the proof (lab #14) =="
 ./scripts/build-windows-image-test.sh
 
+echo "== fritzbox-home: wire reader and judges on synthetic captures, refusals before any docker call, bundle labctl reads (lab #13) =="
+./scripts/fritzbox-home-test.sh
+
 # unreachable_reason and its evasion detectors live in wiring-check.sh,
 # shared with wiring-check-test.sh's mutation cases below
 # so the same code path that gates up-cell.sh is what gets mutated.
@@ -247,7 +250,14 @@ echo "== no host-side script calls bare docker =="
 # after a command substitution's "$(" -- the in-VM "sudo docker ..."
 # strings passed to ssh_run start with ssh_run, not docker, so they never
 # match this and are correctly left alone.
-offenders=$(grep -nE '(^[[:space:]]*docker[[:space:]]|\$\(docker[[:space:]])' scripts/*.sh \
+
+# Excluded by name: fritzbox-home-run.sh never runs on the lab host. It runs on a Docker host on a home LAN, as an
+# operator in that host's docker group, and does its privileged work inside its own helper container (lab #13).
+docker_targets=()
+for f in scripts/*.sh; do
+	[ "$f" = scripts/fritzbox-home-run.sh ] || docker_targets+=("$f")
+done
+offenders=$(grep -nE '(^[[:space:]]*docker[[:space:]]|\$\(docker[[:space:]])' "${docker_targets[@]}" \
 	| grep -vE '^[^:]*:[0-9]+:[[:space:]]*#' || true)
 if [ -n "$offenders" ]; then
 	echo "verify.sh: host-side docker call(s) without sudo -n:" >&2
@@ -268,6 +278,8 @@ priv_targets=()
 for f in scripts/*.sh; do
 	case "$f" in
 	*-test.sh | scripts/build-bridge.sh | scripts/lab-seg-firewall.sh | scripts/containment-preflight.sh | scripts/bootstrap-host.sh) ;;
+	# lab #13: runs on a home Docker host, not the lab host; its bare ip calls are reads (addr, route, neigh, link).
+	scripts/fritzbox-home-run.sh) ;;
 	*) priv_targets+=("$f") ;;
 	esac
 done
