@@ -109,6 +109,7 @@ func TestParseWindowsLeasesZeroOneAndBroken(t *testing.T) {
 	for name, out := range map[string]string{
 		"nothing":     "",
 		"clock only":  "1761870000",
+		"null":        "1761870000\nnull",
 		"object":      "1761870000\n" + `{"IPAddress":"10.200.16.150","AddressState":"Active"}`,
 		"error text":  "1761870000\nGet-DhcpServerv4Lease : Failed to get leases",
 		"bad clock":   "noon\n[]",
