@@ -30,7 +30,7 @@ MACS=(02:fd:4b:00:13:01 02:fd:4b:00:13:02 02:fd:4b:00:13:03 02:fd:4b:00:13:04 02
 MACLIST=$(IFS=,; echo "${MACS[*]}")
 CELL=fritzbox-home
 ROUTER="" PREFIX="" ROUTER_MAC="" HOST_MAC="" BASE_ADDR="" BASE_ROUTE="" T0=0
-SCENARIOS=(A1 A2 A3 A6 A8 A9 A10 A11 A12 A13 A16 B3 B4 B7 B8 F3 E1 E2)
+SCENARIOS=(A1 A2 A3 A6 A8 A9 A10 A11 A12 A13 A16 B3 B4 B7 B8 F3-rapid-commit-v4 E1 E2)
 
 die() { echo "fritzbox-home-run.sh: $*" >&2; exit 2; }
 
@@ -576,7 +576,7 @@ s_E2() {
 }
 
 run_scenario() {
-	local id=$1
+	local id=${1%%-*}
 	EVD=$OUT/ev/$SHAPE/$id
 	mkdir -p "$EVD"
 	between
@@ -713,7 +713,7 @@ render() {
 			f=$b/$CELL-$shape-$full.verdict
 			[ -e "$f" ] && continue
 			printf 'scenario: %s\ncell: %s\nshape: %s\nresult: N/A\nreason: %s\ngit_sha: %s\n' \
-				"$full" "$CELL" "$shape" "$(na_reason "${full%%-*}")" "$sha" >"$f"
+				"$full" "$CELL" "$shape" "$(na_reason "$full")" "$sha" >"$f"
 		done
 	done
 	echo "$b"
@@ -721,13 +721,19 @@ render() {
 
 # na_reason is the approved plan's reason for every row this cell does not run (lab #13 phase 2 plan).
 na_reason() {
+	# Group F rows are named in full: the publication hygiene gate reads a bare F<n> as a review citation (lab #20).
 	case "$1" in
-	B1 | B2 | B5 | B6 | C1 | C2 | C3 | C4 | C5 | C5b | C5c | C5d | C6 | C6b | C7 | C8 | C9 | C10 | C11 | C12 | C12b | F1 | F2a | F2b | F8 | E5)
+	F1-user-class-pool | F2a-option-108-not-asked | F2b-option-108-forced | F8-forcerenew) set -- B1 ;;
+	F4-rapid-commit-v6 | F5-temporary-address | F6-prefix-delegation | F7-pref64) set -- D ;;
+	*) set -- "${1%%-*}" ;;
+	esac
+	case "$1" in
+	B1 | B2 | B5 | B6 | C1 | C2 | C3 | C4 | C5 | C5b | C5c | C5d | C6 | C6b | C7 | C8 | C9 | C10 | C11 | C12 | C12b | E5)
 		echo "home router, non-disruptive cell: needs a router config change, stopping or disturbing the router, a rogue or squatting host, or weeks of run time" ;;
 	A4 | A5 | A5b | A7) echo "restarts the Docker host's shared daemon, reboots it or kills a root process; the Docker host is shared and is not restarted" ;;
 	A15) echo "compose scale gives replicas Docker-generated MACs, outside this run's six" ;;
 	A14) echo "the home router's lease is 24 h, so T1 is 12 h; one run is bounded to 2 h" ;;
-	D* | F4 | F5 | F6 | F7) echo "the home LAN has no IPv6" ;;
+	D*) echo "the home LAN has no IPv6" ;;
 	E3a | E3b) echo "the home LAN has no VLAN and the host's link names are not changed" ;;
 	*) echo "not in this cell's approved scenario list" ;;
 	esac

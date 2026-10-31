@@ -110,9 +110,9 @@ check "e1: a renewal missing from the ledger fails" "$(e1 "$T/l2" "$T/m3")" FAIL
 check "e1: an unknown ledger kind is BLOCKED" "$(e1 "$T/l3" "$T/m3")" BLOCKED
 
 check "redact: live prefix and MACs, not a longer number" \
-	"$(echo 'got 10.1.7.5 via 00:11:22:33:44:55 host AA:BB:CC:DD:EE:FF not 110.1.7.5' |
-		FB_PREFIX=10.1.7. FB_ROUTER_MAC=00:11:22:33:44:55 FB_HOST_MAC=aa:bb:cc:dd:ee:ff W redact)" \
-	"got 192.0.2.5 via box-mac host host-mac not 110.1.7.5"
+	"$(echo 'got 10.200.7.5 via 00:11:22:33:44:55 host AA:BB:CC:DD:EE:FF not 110.200.7.5' |
+		FB_PREFIX=10.200.7. FB_ROUTER_MAC=00:11:22:33:44:55 FB_HOST_MAC=aa:bb:cc:dd:ee:ff W redact)" \
+	"got 192.0.2.5 via box-mac host host-mac not 110.200.7.5"
 
 # Refusals: each exits 2 before any docker call (a docker stub on PATH records a call).
 mkdir -p "$T/bin"
@@ -141,18 +141,22 @@ ARG=cleanup refuse "cleanup without FB_CONFIRM" "FB_CONFIRM must be" FB_OUT="$T/
 # and shape.
 O=$T/run
 mkdir -p "$O/ev/macvlan/A1"
-printf 'ROUTER=10.1.7.1\nPREFIX=10.1.7.\nROUTER_MAC=00:11:22:33:44:55\nHOST_MAC=aa:bb:cc:dd:ee:ff\n' >"$O/lan.env"
-printf 'macvlan\tA1\tPASS\t2026-10-31T12:00:00Z\tgot 10.1.7.23 from 00:11:22:33:44:55\nmacvlan-ipam\tA1\tFAIL\t2026-10-31T12:01:00Z\tno ACK\n' >"$O/results.tsv"
-echo 'discover ACK 10.1.7.23 - offers=1 -' >"$O/ev/macvlan/A1/exchanges-1.txt"
+printf 'ROUTER=10.200.7.1\nPREFIX=10.200.7.\nROUTER_MAC=00:11:22:33:44:55\nHOST_MAC=aa:bb:cc:dd:ee:ff\n' >"$O/lan.env"
+printf 'macvlan\tA1\tPASS\t2026-10-31T12:00:00Z\tgot 10.200.7.23 from 00:11:22:33:44:55\nmacvlan-ipam\tA1\tFAIL\t2026-10-31T12:01:00Z\tno ACK\n' >"$O/results.tsv"
+echo 'discover ACK 10.200.7.23 - offers=1 -' >"$O/ev/macvlan/A1/exchanges-1.txt"
 PATH="$T/bin:$PATH" FB_CONFIRM=home-fritzbox-nondisruptive FB_OUT="$O" bash "$RUN" render >/dev/null
 B=$O/bundle
 want=$(($(grep -cE '^\s*Name[A-Za-z0-9]+\s*= "' "$REPO/internal/scenario/catalog.go") * 2))
 check "render: one verdict per catalog row and shape" "$(find "$B" -name '*.verdict' | wc -l | tr -d ' ')" "$want"
 check "render: PASS carries its redacted evidence" "$(cat "$B/evidence/macvlan/A1-first-lease/exchanges-1.txt")" "discover ACK 192.0.2.23 - offers=1 -"
-check "render: no live prefix or MAC anywhere in the bundle" "$(grep -rlE '10\.1\.7\.|00:11:22:33:44:55|aa:bb:cc:dd:ee:ff' "$B" | wc -l | tr -d ' ')" "0"
+check "render: no live prefix or MAC anywhere in the bundle" "$(grep -rlE '10\.200\.7\.|00:11:22:33:44:55|aa:bb:cc:dd:ee:ff' "$B" | wc -l | tr -d ' ')" "0"
 check "render: a row outside the plan is N/A with the plan's reason" \
 	"$(sed -n 's/^reason: //p' "$B/fritzbox-home-macvlan-C7-rogue-server.verdict")" \
 	"home router, non-disruptive cell: needs a router config change, stopping or disturbing the router, a rogue or squatting host, or weeks of run time"
+check "render: a group F row outside the plan keeps the plan's reason" \
+	"$(sed -n 's/^reason: //p' "$B/fritzbox-home-macvlan-F1-user-class-pool.verdict" | cut -c1-30)" "home router, non-disruptive ce"
+check "render: an IPv6 group F row is N/A for the missing IPv6" \
+	"$(sed -n 's/^reason: //p' "$B/fritzbox-home-macvlan-ipam-F5-temporary-address.verdict")" "the home LAN has no IPv6"
 (cd "$REPO" && go run ./cmd/labctl matrix --root "$B" --out "$T/page.md" "$B") >/dev/null
 check "render: labctl matrix reads the bundle (1 PASS, 1 FAIL)" \
 	"$(grep -oF '[PASS](' "$T/page.md" | wc -l | tr -d ' ')/$(grep -oF '[FAIL](' "$T/page.md" | wc -l | tr -d ' ')" "1/1"
