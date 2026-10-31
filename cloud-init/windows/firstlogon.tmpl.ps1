@@ -135,8 +135,12 @@ if ($changed -and (Get-Service -Name DHCPServer -ErrorAction SilentlyContinue)) 
         Set-Content -Path $keys -Value '__PUBKEY__' -Encoding ascii
         & icacls.exe $keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'icacls failed on the authorized keys file' }
+        # cmd.exe, not PowerShell: a PowerShell shell costs 7 s per ssh call on
+        # this 2-vCPU guest (measured 2026-10-31), which alone exceeds the
+        # scenarios' 10 s reachability window (lab #14). Callers start
+        # powershell themselves.
         New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name 'DefaultShell' -PropertyType String -Force `
-            -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' | Out-Null
+            -Value 'C:\Windows\System32\cmd.exe' | Out-Null
         Start-Service -Name sshd
         Set-Stage 'ssh'
     }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -149,7 +150,7 @@ func parseWindowsLeases(out string, now time.Time) ([]Lease, error) {
 			if err != nil {
 				return nil, fmt.Errorf("windows: lease row %+v: %w", r, err)
 			}
-			l.ClientID = hexColon(id)
+			l.ClientID = hexColon(winWireClientID(id))
 			l.MAC = winMAC(id)
 		}
 		if r.Expiry > 0 {
@@ -158,6 +159,17 @@ func parseWindowsLeases(out string, now time.Time) ([]Lease, error) {
 		leases = append(leases, l)
 	}
 	return leases, nil
+}
+
+// winWireClientID restores the type byte Windows drops from its ClientId
+// column for an id that is not a hardware address: the ipvlan client-id
+// 00:<8 bytes> is listed as the 8 bytes (measured 2026-10-31, lab #14).
+// Other type bytes are not used by any scenario, so type 0 is assumed.
+func winWireClientID(id []byte) []byte {
+	if winMAC(id) != "" {
+		return id
+	}
+	return append([]byte{0}, id...)
 }
 
 // winClientID reads Windows's dash-separated client id hex.
@@ -239,17 +251,24 @@ func (a *WindowsAdapter) Start(ctx context.Context) error {
 	return err
 }
 
-// Reachable pings from the server; the image's firewall admits echo on
-// every profile (firstlogon "lab-icmp-in").
+// Reachable pings from the server with ping.exe straight through the ssh
+// shell (cmd.exe): a PowerShell start costs 7 s on this guest, which alone
+// exceeds the scenarios' 10 s window (lab #14). The image's firewall admits
+// echo on every profile (firstlogon "lab-icmp-in"). ping's exit status is 0
+// for "Destination host unreachable" replies from the server's own address,
+// so only a "Reply from <addr>: bytes=" or "time" line counts.
 func (a *WindowsAdapter) Reachable(ctx context.Context, addr string) error {
+	flag := "-4"
 	ip, err := validateAddr(addr)
 	if err != nil {
+		flag = "-6"
 		if ip, err = validateAddr6(addr); err != nil {
 			return err
 		}
 	}
-	if _, err := a.run(ctx, fmt.Sprintf(`if (-not (Test-Connection -ComputerName '%s' -Count 1 -Quiet)) { throw 'no reply' }`, ip)); err != nil {
-		return fmt.Errorf("ping %s: %w", ip, err)
+	out, _ := a.Runner.Run(ctx, fmt.Sprintf("ping %s -n 1 -w 1000 %s", flag, ip))
+	if !regexp.MustCompile(`Reply from ` + regexp.QuoteMeta(ip) + `: (bytes=|time)`).MatchString(out) {
+		return fmt.Errorf("ping %s: no reply", ip)
 	}
 	return nil
 }
@@ -280,8 +299,10 @@ func (a *WindowsAdapter) doOrUndo(ctx context.Context, do string, restore func(c
 	return restore, nil
 }
 
-// SetDNSOption sets option 6 by id, which skips the DNS reachability
-// check -DnsServer makes; restore writes back the addresses read first.
+// SetDNSOption sets option 6 with -Force: without it the cmdlet resolves
+// the server and refuses an address that runs no DNS ("is not a valid DNS
+// server", measured 2026-10-31, lab #14). Restore writes back the
+// addresses read first.
 func (a *WindowsAdapter) SetDNSOption(ctx context.Context, addr string) (func(context.Context) error, error) {
 	ip, err := validateAddr(addr)
 	if err != nil {
@@ -302,9 +323,9 @@ func (a *WindowsAdapter) SetDNSOption(ctx context.Context, addr string) (func(co
 			}
 			q = append(q, "'"+v+"'")
 		}
-		undo = winScope + `Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Value ` + strings.Join(q, ",")
+		undo = winScope + `Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Force -Value ` + strings.Join(q, ",")
 	}
-	return a.doOrUndo(ctx, winScope+fmt.Sprintf(`Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Value '%s'`, ip), a.restoreFn(undo, "SetDNSOption"))
+	return a.doOrUndo(ctx, winScope+fmt.Sprintf(`Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Force -Value '%s'`, ip), a.restoreFn(undo, "SetDNSOption"))
 }
 
 // ShortenLeaseTime sets the scope's lease duration; restore writes back
@@ -398,6 +419,17 @@ func narrowRanges(start, end netip.Addr, ex [][2]netip.Addr, first, last netip.A
 	return add, nil
 }
 
+// carveBand returns the exclusion that holds first..last whole, or the zero
+// range when none does.
+func carveBand(ex [][2]netip.Addr, first, last netip.Addr) [2]netip.Addr {
+	for _, r := range ex {
+		if !first.Less(r[0]) && !r[1].Less(last) {
+			return r
+		}
+	}
+	return [2]netip.Addr{}
+}
+
 func (a *WindowsAdapter) NarrowPool(ctx context.Context, first, last string) (func(context.Context) error, error) {
 	f, l, err := validatePool(first, last)
 	if err != nil {
@@ -407,14 +439,35 @@ func (a *WindowsAdapter) NarrowPool(ctx context.Context, first, last string) (fu
 	if err != nil {
 		return nil, fmt.Errorf("windows: NarrowPool: %w", err)
 	}
-	add, err := narrowRanges(start, end, ex, f, l)
-	if err != nil {
-		return nil, fmt.Errorf("windows: NarrowPool: %w", err)
-	}
+	band := carveBand(ex, f, l)
+	var add [][2]netip.Addr
 	do, undo := winScope, winScope+"$ErrorActionPreference = 'Continue'; "
-	for _, r := range add {
-		do += winExclusion("Add", r)
-		undo += winExclusion("Remove", r)
+	if band[0].IsValid() {
+		// The pool sits in a band the image excludes (C8 asks for the
+		// F1 band): the band is replaced by the scope below the pool and
+		// the band's rest above it (lab #14).
+		if f.Less(start) || end.Less(l) {
+			return nil, fmt.Errorf("windows: NarrowPool: pool %s-%s is not inside %s-%s", f, l, start, end)
+		}
+		do += winExclusion("Remove", band)
+		add = append(add, [2]netip.Addr{start, f.Prev()})
+		if l.Less(band[1]) {
+			add = append(add, [2]netip.Addr{l.Next(), band[1]})
+		}
+		for _, r := range add {
+			do += winExclusion("Add", r)
+			undo += winExclusion("Remove", r)
+		}
+		undo += winExclusion("Add", band)
+	} else {
+		add, err = narrowRanges(start, end, ex, f, l)
+		if err != nil {
+			return nil, fmt.Errorf("windows: NarrowPool: %w", err)
+		}
+		for _, r := range add {
+			do += winExclusion("Add", r)
+			undo += winExclusion("Remove", r)
+		}
 	}
 	// The undo runs on a failed do too, where a range may be missing.
 	undo += winScope + "$true"
@@ -467,7 +520,7 @@ func (a *WindowsAdapter) Renumber(ctx context.Context, subnet, addr, first, last
 	do := winScope + `Remove-DhcpServerv4Scope -ScopeId $sid -Force; ` + winSetNIC(p.addr.String(), p.subnet.Bits()) +
 		fmt.Sprintf(`Add-DhcpServerv4Scope -Name 'lab' -StartRange '%s' -EndRange '%s' -SubnetMask '%s' -State Active -LeaseDuration ([TimeSpan]::FromSeconds(%d)); `,
 			p.first, p.last, p.netmask(), secs) +
-		fmt.Sprintf(`Set-DhcpServerv4OptionValue -ScopeId '%[1]s' -OptionId 3 -Value '%[2]s'; Set-DhcpServerv4OptionValue -ScopeId '%[1]s' -OptionId 6 -Value '%[2]s'; `, net, p.addr) +
+		fmt.Sprintf(`Set-DhcpServerv4OptionValue -ScopeId '%[1]s' -OptionId 3 -Value '%[2]s'; Set-DhcpServerv4OptionValue -ScopeId '%[1]s' -OptionId 6 -Force -Value '%[2]s'; `, net, p.addr) +
 		"Restart-Service -Name DHCPServer -Force; " + winWaitRunning
 	return a.doOrUndo(ctx, do, a.restoreFn(undo, "Renumber"))
 }

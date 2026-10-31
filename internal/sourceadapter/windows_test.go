@@ -18,6 +18,7 @@ type winRunner struct {
 	t       *testing.T
 	replies []winReply
 	scripts []string
+	raw     []string
 }
 
 type winReply struct {
@@ -43,7 +44,23 @@ func winDecode(t *testing.T, cmd string) string {
 	return string(utf16.Decode(u))
 }
 
+// winCmdLimit is cmd.exe's command-line bound; the image's ssh shell is
+// cmd.exe, so a longer command is cut off on the guest (lab #14).
+const winCmdLimit = 8191
+
 func (w *winRunner) Run(_ context.Context, cmd string) (string, error) {
+	if len(cmd) >= winCmdLimit {
+		w.t.Errorf("command of %d bytes exceeds cmd.exe's %d", len(cmd), winCmdLimit)
+	}
+	if !strings.HasPrefix(cmd, "powershell ") {
+		w.raw = append(w.raw, cmd)
+		for _, r := range w.replies {
+			if strings.Contains(cmd, r.has) {
+				return r.out, r.err
+			}
+		}
+		return "", nil
+	}
 	s := winDecode(w.t, cmd)
 	w.scripts = append(w.scripts, s)
 	for _, r := range w.replies {
@@ -85,7 +102,7 @@ func TestParseWindowsLeasesReadsIDsStatesAndTheGuestClock(t *testing.T) {
 	want := []Lease{
 		{MAC: "52:54:00:aa:bb:01", Address: "10.200.16.150", Hostname: "c1", ClientID: "52:54:00:aa:bb:01", Expires: now.Add(600 * time.Second)},
 		{MAC: "52:54:00:aa:bb:02", Address: "10.200.16.211", ClientID: "01:52:54:00:aa:bb:02"},
-		{Address: "10.200.16.216", Hostname: "c3", ClientID: "ff:00:00:00:01:00:01:2c:aa", Expires: now.Add(3600 * time.Second)},
+		{Address: "10.200.16.216", Hostname: "c3", ClientID: "00:ff:00:00:00:01:00:01:2c:aa", Expires: now.Add(3600 * time.Second)},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d leases %+v, want %d", len(got), got, len(want))
@@ -168,10 +185,10 @@ func TestWindowsRestoresWriteBackWhatWasRead(t *testing.T) {
 	if err := undo(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if s := r.scripts[1]; !strings.Contains(s, "-OptionId 6 -Value '10.200.16.253'") {
+	if s := r.scripts[1]; !strings.Contains(s, "-OptionId 6 -Force -Value '10.200.16.253'") {
 		t.Errorf("set: %q", s)
 	}
-	if s := r.scripts[2]; !strings.Contains(s, "Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Value '10.200.16.2'") {
+	if s := r.scripts[2]; !strings.Contains(s, "Set-DhcpServerv4OptionValue -ScopeId $sid -OptionId 6 -Force -Value '10.200.16.2'") {
 		t.Errorf("restore: %q", s)
 	}
 	undo, err = a.ShortenLeaseTime(ctx, 60)
@@ -282,7 +299,7 @@ func TestWindowsRenumberPointsOptionsAtItselfAndImportsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	do := r.scripts[1]
-	for _, w := range []string{"-IPAddress '10.201.16.2' -PrefixLength 24", "-StartRange '10.201.16.100' -EndRange '10.201.16.200' -SubnetMask '255.255.255.0'", "-ScopeId '10.201.16.0' -OptionId 3 -Value '10.201.16.2'", "-ScopeId '10.201.16.0' -OptionId 6 -Value '10.201.16.2'", "FromSeconds(3600)", "Restart-Service"} {
+	for _, w := range []string{"-IPAddress '10.201.16.2' -PrefixLength 24", "-StartRange '10.201.16.100' -EndRange '10.201.16.200' -SubnetMask '255.255.255.0'", "-ScopeId '10.201.16.0' -OptionId 3 -Value '10.201.16.2'", "-ScopeId '10.201.16.0' -OptionId 6 -Force -Value '10.201.16.2'", "FromSeconds(3600)", "Restart-Service"} {
 		if !strings.Contains(do, w) {
 			t.Errorf("renumber lacks %q: %q", w, do)
 		}
@@ -467,5 +484,70 @@ func TestWindowsNAReasonCoversEveryUndeclaredCapabilityItKnows(t *testing.T) {
 		if why, ok := a.NAReason(c); !ok || why == "" {
 			t.Errorf("no N/A reason for %q", c)
 		}
+	}
+}
+
+func TestWindowsReachableCountsOnlyAnEchoReplyFromTheAddress(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+		out  string
+		err  error
+		want string
+		ok   bool
+	}{
+		{"reply", "10.200.16.150", "Reply from 10.200.16.150: bytes=32 time=1ms TTL=128", nil, "ping -4 -n 1 -w 1000 10.200.16.150", true},
+		{"timeout", "10.200.16.150", "Request timed out.", errors.New("exit status 1"), "ping -4 -n 1 -w 1000 10.200.16.150", false},
+		{"unreachable from the server itself", "10.200.16.150", "Reply from 10.200.16.2: Destination host unreachable.", nil, "ping -4 -n 1 -w 1000 10.200.16.150", false},
+		{"another host answers", "10.200.16.150", "Reply from 10.200.16.15: bytes=32 time=1ms TTL=128", nil, "ping -4 -n 1 -w 1000 10.200.16.150", false},
+		{"v6", "2001:db8::5", "Reply from 2001:db8::5: time<1ms", nil, "ping -6 -n 1 -w 1000 2001:db8::5", true},
+	}
+	for _, c := range cases {
+		a, r := newWin(t, winReply{has: "ping", out: c.out, err: c.err})
+		err := a.Reachable(context.Background(), c.addr)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
+		}
+		if len(r.raw) != 1 || r.raw[0] != c.want || len(r.scripts) != 0 {
+			t.Errorf("%s: sent raw %q scripts %q, want one raw %q", c.name, r.raw, r.scripts, c.want)
+		}
+	}
+}
+
+func TestParseWindowsLeasesPutsTheDroppedTypeByteBackOnANonHardwareID(t *testing.T) {
+	// Windows listed the ipvlan client-id 00:c6:0c:91:96:e9:fa:98:88 without its type byte (lab #14).
+	out := "1761870000\n" + `[{"IPAddress":"10.200.16.100","ClientId":"c6-0c-91-96-e9-fa-98-88","HostName":"","AddressState":"Active","Expiry":0}]`
+	got, err := parseWindowsLeases(out, time.Unix(1761870000, 0))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	if got[0].ClientID != "00:c6:0c:91:96:e9:fa:98:88" || got[0].MAC != "" {
+		t.Errorf("client id %q mac %q", got[0].ClientID, got[0].MAC)
+	}
+}
+
+func TestWindowsNarrowPoolInsideTheExcludedBandReplacesTheBandAndRestoresIt(t *testing.T) {
+	ctx := context.Background()
+	a, r := newWin(t, winReply{has: "StartRange.IPAddressToString", out: winShapeFixture})
+	undo, err := a.NarrowPool(ctx, "10.200.16.201", "10.200.16.202")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := undo(ctx); err != nil {
+		t.Fatal(err)
+	}
+	band := "-StartRange '10.200.16.201' -EndRange '10.200.16.220'"
+	do, back := r.scripts[1], r.scripts[2]
+	rm, add := "Remove-DhcpServerv4ExclusionRange -ScopeId $sid "+band, "Add-DhcpServerv4ExclusionRange -ScopeId $sid "
+	if !strings.Contains(do, rm) || strings.Index(do, rm) > strings.Index(do, add) {
+		t.Errorf("the band is not removed before any range is added: %q", do)
+	}
+	for _, rg := range []string{"-StartRange '10.200.16.100' -EndRange '10.200.16.200'", "-StartRange '10.200.16.203' -EndRange '10.200.16.220'"} {
+		if !strings.Contains(do, add+rg) || !strings.Contains(back, "Remove-DhcpServerv4ExclusionRange -ScopeId $sid "+rg) {
+			t.Errorf("range %s not added and removed again: %q / %q", rg, do, back)
+		}
+	}
+	if !strings.Contains(back, add+band) {
+		t.Errorf("the band is not put back: %q", back)
 	}
 }

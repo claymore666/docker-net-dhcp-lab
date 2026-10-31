@@ -104,21 +104,24 @@ echo "${!#}" >>"$SSH_LOG"
 echo "option=1"
 STUB
 
-# windows (#14): PowerShell reads, no shell files and no sudo. The stock
-# side is the build's baseline export, the live side a fresh export; the
-# capture sends them as they are and drops the CR PowerShell ends lines in.
-[ "$(source_version_cmd windows)" = $'windows\t[System.Environment]::OSVersion.VersionString' ] || bad "windows: version $(source_version_cmd windows)"
+# windows (#14): PowerShell reads through the image's cmd.exe ssh shell, no
+# shell files and no sudo. The stock side is the build's baseline export,
+# the live side a fresh export; the capture sends them as they are and
+# drops the CR PowerShell ends lines in.
+ps_text() { sed 's/^.*-EncodedCommand //' <<<"$1" | base64 -d | iconv -f UTF-16LE -t UTF-8; }
+case "$(source_version_cmd windows)" in "windows"$'\t'"powershell -NonInteractive -NoProfile -EncodedCommand "*) ;; *) bad "windows: version $(source_version_cmd windows)" ;; esac
+[ "$(ps_text "$(source_version_cmd windows)")" = '[System.Environment]::OSVersion.VersionString' ] || bad "windows: version text"
 [ "$(source_config_pairs windows)" = baseline.xml:dhcp-export ] || bad "windows: pairs $(source_config_pairs windows)"
 [ "$(source_stock_mask windows)" = 0 ] || bad "windows: stock mask"
-[ "$(source_stock_cmd windows baseline.xml)" = 'Get-Content -Raw C:\ProgramData\lab\baseline.xml' ] || bad "windows: stock read $(source_stock_cmd windows baseline.xml)"
-case "$(source_live_cmd windows dhcp-export)" in *'Export-DhcpServer -File'*'Get-Content -Raw'*) ;; *) bad "windows: live read $(source_live_cmd windows dhcp-export)" ;; esac
+[ "$(ps_text "$(source_stock_cmd windows baseline.xml)")" = 'Get-Content -Raw C:\ProgramData\lab\baseline.xml' ] || bad "windows: stock read"
+case "$(ps_text "$(source_live_cmd windows dhcp-export)")" in *'Export-DhcpServer -File'*'Get-Content -Raw'*) ;; *) bad "windows: live read" ;; esac
 for cmd in "$(source_version_cmd windows)" "$(source_stock_cmd windows x)" "$(source_live_cmd windows x)"; do
 	case "$cmd" in *sudo* | *"'"* | *'"'*) bad "windows: read carries sudo or a quote: $cmd" ;; esac
 done
 cat >"$tmp/bin/ssh" <<'STUB'
 #!/bin/bash
 echo "${!#}" >>"$SSH_LOG"
-case "${!#}" in
+case "$(sed 's/^.*-EncodedCommand //' <<<"${!#}" | base64 -d | iconv -f UTF-16LE -t UTF-8)" in
 'Get-Content -Raw'*) printf '<DHCPServer>\r\n<Scope>10.200.16.0</Scope>\r\n</DHCPServer>\r\n' ;;
 *) printf '<DHCPServer>\r\n<Scope>10.200.16.0</Scope>\r\n<Lease>10.200.16.101</Lease>\r\n</DHCPServer>\r\n' ;;
 esac
