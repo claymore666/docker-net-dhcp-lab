@@ -59,6 +59,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       labctl resolve <lab.yaml> <cell-name>")
 	fmt.Fprintln(os.Stderr, "       labctl leases <source-type> <mgmt-ip> <known-hosts>")
 	fmt.Fprintln(os.Stderr, "       labctl run <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <work-dir> <evidence-dir> <pcap-path|-> [scenario-name,...]")
+	fmt.Fprintln(os.Stderr, "           (LAB_SOAK_DURATION, a Go duration, and LAB_SOAK_LEASE, seconds, set E5-soak's window and lease)")
 	fmt.Fprintln(os.Stderr, "       labctl remaining <lab.yaml> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir>")
 	fmt.Fprintln(os.Stderr, "       labctl abort-blocked <lab.yaml> <repo-root> <cell-name> <bridge|macvlan|ipvlan|bridge-ipam|macvlan-ipam> <evidence-dir> <reason>")
 	fmt.Fprintln(os.Stderr, "       labctl matrix --root <bundle-root> [--out <path>] <bundle-dir> [<bundle-dir> ...]")
@@ -521,6 +522,11 @@ func cmdRun(args []string) int {
 		fmt.Fprintf(os.Stderr, "labctl run: unknown shape %q, want one of bridge, macvlan, ipvlan, bridge-ipam, macvlan-ipam\n", shapeArg)
 		return 2
 	}
+	soak, err := scenario.SoakFromEnv(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "labctl run:", err)
+		return 2
+	}
 
 	cfg, err := labyaml.Load(labYAML)
 	if err != nil {
@@ -563,6 +569,7 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	source := env.Source
+	env.Soak = soak
 
 	gitSHA, err := gitRevParseHEAD(repoRoot)
 	if err != nil {

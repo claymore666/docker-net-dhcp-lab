@@ -89,6 +89,16 @@ func runContainerFixedMAC(ctx context.Context, r sourceadapter.Runner, shape Sha
 	return inspectContainer(ctx, r, shape, name)
 }
 
+// runContainerFor is runContainer for a container that must outlive the
+// default 600 s sleep: E5's soak window runs an hour or more (#15).
+func runContainerFor(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name string, life time.Duration) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	if _, err = r.Run(ctx, fmt.Sprintf("sudo docker run -d --name %s --network %s alpine:3.20 sleep %d", name, net, int(life.Seconds()))); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
 // runContainerWith is runContainer with extra docker-run flags, for group
 // B (#23): --mac-address, --hostname. extra is built by the caller from
 // validated values only.

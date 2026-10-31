@@ -81,6 +81,7 @@ var PlainNames = map[string]string{
 	scenario.NameE2:   "metrics against the source log",
 	scenario.NameE3a:  "host-side link names",
 	scenario.NameE3b:  "VLAN parent and tagged lease",
+	scenario.NameE5:   "soak at a short lease time",
 }
 
 // Order is the row order the results page renders in: scenario.Catalog's
