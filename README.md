@@ -313,12 +313,10 @@ scripts/down-cell.sh kea <work-dir>
 | Kea failover pair (hot standby) | `kea-ha` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 110 PASS, 102 FAIL, 19 BLOCKED, most of the FAIL rows the lab's teardown defect #137 (fixed in #140). Every row BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run (#121) |
 | ISC dhcpd failover pair | `isc-failover` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 204 PASS, 14 FAIL, 8 BLOCKED; C7, C5b and C5c were the judge and a precondition (#128, #129), fixed since |
 | Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
-| A physical Fritz.Box (v0.4.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
+| A home Fritz.Box (v0.4.0, #13) | `fritzbox-home` | [v0.4.0 Fritz.Box page](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md): 31 PASS, 3 FAIL, 102 N/A; 18 non-disruptive scenarios on macvlan and macvlan-ipam, run by `scripts/fritzbox-home-run.sh` outside the labctl cells. The `fritzbox` cell in `lab.yaml` still has a placeholder adapter (`internal/sourceadapter/fritzbox.go`) |
 
 Work on `dev` that has no verdicts on a results page yet:
 
-- **Fritz.Box cell** (#13, v0.4.0): the `fritzbox` cell and its schema are in
-  `lab.yaml`; the adapter is a placeholder that reads nothing.
 - **Windows Server 2025 image** (#14, v0.4.0): `scripts/build-windows-image.sh`
   builds the evaluation image the `windows` cell boots. The cell is in
   `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
