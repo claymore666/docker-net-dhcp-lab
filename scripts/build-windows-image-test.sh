@@ -130,7 +130,17 @@ grep -qF "Mac = '$want_seg'" "$fl" || bad "no segment MAC $want_seg in the first
 grep -qE "Name 'Ethernet|InterfaceAlias '?Ethernet|-Name Ethernet" "$fl" && bad "an adapter is addressed by its Windows name"
 grep -qF "Ip = '10.200.16.2'; Prefix = 24" "$fl" || bad "no segment address in the first-logon script"
 grep -qF "Ip = '10.200.255.161'; Prefix = 24; Gw = '10.200.255.1'" "$fl" || grep -qE "Ip = '10.200.255.161'; Prefix = 24; Gw = '[0-9.]+'" "$fl" || bad "no management address in the first-logon script"
-grep -qF -- "-StartRange '10.200.16.100' -EndRange '10.200.16.200'" "$fl" || bad "no scope in the first-logon script"
+grep -qF -- "-StartRange '10.200.16.100' -EndRange '10.200.16.230'" "$fl" || bad "no scope in the first-logon script"
+grep -qF -- "Add-DhcpServerv4ExclusionRange -ScopeId '10.200.16.0' -StartRange '10.200.16.201' -EndRange '10.200.16.220'" "$fl" || bad "the band between the main and the class pool is not excluded"
+grep -qF -- "Add-DhcpServerv4PolicyIPRange -Name 'b5' -ScopeId '10.200.16.0' -StartRange '10.200.16.221' -EndRange '10.200.16.230'" "$fl" || bad "no B5 class pool policy range"
+grep -qF -- "-VendorClass EQ, 'lab-class-b5'" "$fl" || bad "the B5 policy does not match the vendor class"
+# The class pool band is up-source.sh's (and internal/scenario's).
+for v in class_first_host class_last_host; do
+	[ "$(grep -E "^$v=" scripts/up-source.sh)" = "$(grep -E "^$v=" scripts/build-windows-image.sh)" ] || bad "$v differs between up-source.sh and the build script"
+done
+sed '/^  - name: windows$/,$ s/pool_end: 10\.200\.16\.200/pool_end: 10.200.16.221/' "$tmp/lab.yaml" >"$tmp/lab-gap.yaml"
+if LAB_YAML="$tmp/lab-gap.yaml" $B --id windows >"$tmp/o" 2>&1; then bad "a pool reaching the class band was accepted"; fi
+grep -qF "reaches the class pool band" "$tmp/o" || bad "the class band refusal is not worded: $(cat "$tmp/o")"
 grep -qF -- "-ConflictDetectionAttempts 0" "$fl" || bad "conflict detection is not the stock default"
 grep -qF "'PasswordAuthentication no'" "$fl" || bad "sshd keeps password authentication"
 grep -qF "'AutoAdminLogon' -Value '0'" "$fl" || bad "autologon is not switched off"
@@ -168,6 +178,11 @@ sed '/^  - name: windows$/,$ s/pool_end: 10\.200\.16\.200/pool_end: 10.200.16.19
 [ "$(LAB_PUBKEY="ssh-ed25519 BBBB other" $B --id windows)" != "$id" ] || bad "a key change left the id unchanged"
 printf '%s  windows-server-2025-eval.iso\n' "$(printf a | sha256sum | cut -d' ' -f1)" >"$tmp/pin-a"
 [ "$(LAB_WINDOWS_ISO_PIN="$tmp/pin-a" $B --id windows)" != "$id" ] || bad "a pin change left the id unchanged"
+grep -v ' virtio-win-' images/windows-2025-eval.sha256 >"$tmp/pin-v"
+printf '%s  virtio-win-0.1.302.iso\n' "$(printf a | sha256sum | cut -d' ' -f1)" >>"$tmp/pin-v"
+[ "$(LAB_WINDOWS_ISO_PIN="$tmp/pin-v" $B --id windows)" != "$id" ] || bad "a virtio pin change left the id unchanged"
+grep -qE '^[0-9a-f]{64}  virtio-win-0\.1\.302\.iso$' images/windows-2025-eval.sha256 || bad "the checked-in pin file pins no virtio ISO"
+grep -qF 'archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso' scripts/build-windows-image.sh || bad "the virtio URL is not the versioned release"
 if $B --id dnsmasq >"$tmp/o" 2>&1; then bad "a dnsmasq cell was accepted"; fi
 grep -q REFUSED "$tmp/o" || bad "the dnsmasq refusal is not worded: $(cat "$tmp/o")"
 
@@ -181,8 +196,9 @@ grep -q "has source type 'dnsmasq', not windows" "$tmp/o" || bad "the type refus
 export LAB_IMAGE_CACHE=$tmp/cache WINDOWS_BUILD_DIR=$tmp/cache/windows-build
 mkdir -p "$LAB_IMAGE_CACHE/iso"
 printf 'not a windows iso' >"$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso"
-printf 'not a virtio iso' >"$LAB_IMAGE_CACHE/iso/virtio-win.iso"
+printf 'not a virtio iso' >"$LAB_IMAGE_CACHE/iso/virtio-win-0.1.302.iso"
 isosum=$(sha256sum "$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso" | cut -d' ' -f1)
+vline="$(sha256sum "$LAB_IMAGE_CACHE/iso/virtio-win-0.1.302.iso" | cut -d' ' -f1)  virtio-win-0.1.302.iso"
 export PATH="$stub:$PATH"
 export LAB_WINDOWS_ISO_PIN=$tmp/pin
 refused() { # DESC WANT-SUBSTRING [env...]
@@ -197,22 +213,26 @@ refused() { # DESC WANT-SUBSTRING [env...]
 	grep -q '^virt-install' "$STUB_LOG" && bad "$desc: a VM was started"
 	return 0
 }
-cp images/windows-2025-eval.sha256 "$tmp/pin"
-refused "the checked-in pin (header only)" "no checksum is pinned for the ISO in" "X=1"
-printf '%s  x\n' "not-a-hash" >"$tmp/pin"
+grep -v ' windows-server-2025-eval.iso$' images/windows-2025-eval.sha256 >"$tmp/pin"
+refused "a pin file without the Windows ISO line" "no checksum is pinned for the ISO in" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "not-a-hash" "$vline" >"$tmp/pin"
 refused "a malformed pin" "is not a sha256" "X=1"
-printf '%s  windows-server-2025-eval.iso\n' "$(printf b | sha256sum | cut -d' ' -f1)" >"$tmp/pin"
-refused "a pin that differs from the ISO" "replace the pinned line in" "X=1"
 printf '%s  windows-server-2025-eval.iso\n' "$isosum" >"$tmp/pin"
+refused "no virtio pin line" "no sha256 is pinned for virtio-win-0.1.302.iso" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s  virtio-win-0.1.302.iso\n' "$isosum" "$(printf c | sha256sum | cut -d' ' -f1)" >"$tmp/pin"
+refused "a virtio ISO that differs from its pin" "download https://fedorapeople.org" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$(printf b | sha256sum | cut -d' ' -f1)" "$vline" >"$tmp/pin"
+refused "a pin that differs from the ISO" "replace the pinned line in" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$isosum" "$vline" >"$tmp/pin"
 refused "an ISO that is not there" "is not there" "LAB_WINDOWS_ISO_DIR=$tmp/none"
 mkdir -p "$tmp/noiso" && cp "$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso" "$tmp/noiso/"
-refused "no virtio ISO" "virtio-win.iso" "LAB_WINDOWS_ISO_DIR=$tmp/noiso"
+refused "no virtio ISO" "virtio-win-0.1.302.iso is not there" "LAB_WINDOWS_ISO_DIR=$tmp/noiso"
 refused "the cell's source domain exists" "tear the cell down first" "STUB_DOMINFO_EXISTS=1"
 if $B dnsmasq >"$tmp/o" 2>"$tmp/e"; then bad "a dnsmasq cell was built"; fi
 [ ! -e "$LAB_IMAGE_CACHE/windows-2025-eval.qcow2" ] || bad "a refused build left an image"
 
 # The id covers the pin, so it is read with the pin the build will use.
-printf '%s  windows-server-2025-eval.iso\n' "$isosum" >"$tmp/pin"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$isosum" "$vline" >"$tmp/pin"
 id=$($B --id windows)
 export STUB_ID=$id
 
@@ -224,6 +244,15 @@ dest=$LAB_IMAGE_CACHE/windows-2025-eval
 [ -f "$dest.qcow2" ] || bad "no golden image"
 [ "$(cat "$dest.build-id" 2>/dev/null)" = "$id" ] || bad "the build-id sidecar is not the cell's id"
 [ ! -e "$dest.qcow2.part" ] || bad "a .part file is left"
+keep=$dest-$(date -u +%Y%m%d)
+for x in qcow2 build-id sources; do
+	[ -f "$keep.$x" ] || bad "no dated copy $keep.$x"
+	[ "$(stat -c %a "$keep.$x" 2>/dev/null)" = 444 ] || bad "the dated copy $keep.$x is not read-only"
+done
+cmp -s "$dest.qcow2" "$keep.qcow2" || bad "the dated copy differs from the image"
+[ "$(stat -c %i "$dest.qcow2")" != "$(stat -c %i "$keep.qcow2" 2>/dev/null)" ] || bad "the dated copy is a hard link"
+cmp -s "$dest.build-id" "$keep.build-id" || bad "the dated build-id differs"
+grep -qE '^[0-9a-f]{64}  virtio-win-0\.1\.302\.iso$' "$dest.sources" || bad "the sources sidecar does not name the pinned virtio ISO"
 [ -z "$(ls -A "$WINDOWS_BUILD_DIR")" ] || bad "the work directory is left: $(ls "$WINDOWS_BUILD_DIR")"
 vi=$(grep '^virt-install' "$STUB_LOG")
 for want in "--clock offset=utc" "--memory 4096" "--vcpus 2" "--os-variant win2k25" "network=net-mgmt,model=virtio,mac=$(echo -n lab-windows-source-mgmt | md5sum | cut -c1-6 | sed -E 's/(..)(..)(..)/52:54:00:\1:\2:\3/')" "--import"; do

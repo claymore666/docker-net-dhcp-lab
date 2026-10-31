@@ -1,12 +1,16 @@
-# Pinned checksum for the Windows Server 2025 evaluation ISO (issue #14).
-# The ISO is fetched by hand through Microsoft's Evaluation Center form (a
-# scripted request is refused) and placed at
-# $LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso on the lab host.
+# Pinned checksums for the Windows Server 2025 evaluation build (issue #14).
+# scripts/build-windows-image.sh refuses to build unless both files below
+# are in $LAB_IMAGE_CACHE/iso on the lab host and match these lines.
 #
-# NO CHECKSUM IS PINNED YET. scripts/build-windows-image.sh refuses to
-# build until a line "<sha256>  windows-server-2025-eval.iso" follows this
-# header; the first host run adds it from the ISO it downloaded.
+# windows-server-2025-eval.iso: fetched by hand through Microsoft's
+# Evaluation Center form (a scripted request is refused), en-US, build
+# 26100.32230. The unattend file selects the image by name, not index:
+#   Windows Server 2025 SERVERSTANDARDCORE  (index 1, edition ServerStandardEval)
 #
-# The unattend file selects the image by name, not index:
-#   Windows Server 2025 SERVERSTANDARDCORE
-# Record here the ISO build it was written for when the line is added.
+# virtio-win-0.1.302.iso: the Fedora virtio-win archive release 0.1.302-1,
+#   archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso
+# The archive publishes md5 sums of its rpms only; this sum is the ISO
+# inside virtio-win-0.1.302-1.noarch.rpm, whose md5 matched the archive's
+# CHECKSUM file (66f65c16ab3e8dfe12c2855a0d1ac303).
+7b052573ba7894c9924e3e87ba732ccd354d18cb75a883efa9b900ea125bfd51  windows-server-2025-eval.iso
+303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d  virtio-win-0.1.302.iso
