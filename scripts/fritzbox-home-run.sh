@@ -309,6 +309,8 @@ s_A2() {
 
 s_A3() {
 	local net=lab-fb-$S-a3 f=$OUT/compose-a3.yml c=lab-fb-$S-a3-1 a1 reuse
+	# docker compose 2.26.1 on engine API 1.45 drops a service-level mac_address and keeps the per-network key
+	# (measured 2026-10-31, lab #13), so the MAC is pinned under the network.
 	cat >"$f" <<EOF
 name: lab-fb-a3
 services:
@@ -318,8 +320,9 @@ services:
     hostname: lab-fb-1
     init: true
     command: ["sleep", "infinity"]
-    mac_address: ${MACS[0]}
-    networks: [$net]
+    networks:
+      $net:
+        mac_address: ${MACS[0]}
 networks:
   $net:
     external: true

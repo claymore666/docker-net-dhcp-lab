@@ -157,5 +157,11 @@ check "render: a row outside the plan is N/A with the plan's reason" \
 check "render: labctl matrix reads the bundle (1 PASS, 1 FAIL)" \
 	"$(grep -oF '[PASS](' "$T/page.md" | wc -l | tr -d ' ')/$(grep -oF '[FAIL](' "$T/page.md" | wc -l | tr -d ' ')" "1/1"
 
+# docker compose 2.26.1 on engine API 1.45 drops a service-level mac_address and keeps the per-network key (measured
+# on the session box, lab #13 run 1 aborted on it); A3's compose file must pin the MAC under the network.
+a3=$(sed -n '/^s_A3() {/,/^EOF$/p' "$RUN")
+check "A3 compose pins the MAC under its network, not at service level" \
+	"$(echo "$a3" | grep -cE '^        mac_address: ')/$(echo "$a3" | grep -cE '^    mac_address: ')" "1/0"
+
 [ "$fails" -eq 0 ] || { echo "fritzbox-home-test.sh: $fails failed" >&2; exit 1; }
 echo "fritzbox-home-test.sh: all passed"
