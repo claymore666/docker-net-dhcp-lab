@@ -866,7 +866,7 @@ e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|%s|PASS|D3c-auto-silent-dhcpv6-server\n' "$D3C" >"$e/state/emit.a.1"
 cells "$e" -j 1 a
-[ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ] || bad "case 21d: a PASS was moved under retried/"
+if ! { [ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ]; }; then bad "case 21d: a PASS was moved under retried/"; fi
 
 # one cell per spelling in one run: only the cells with a match are rerun
 e=$(new_env)
@@ -883,8 +883,8 @@ e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|%s\nA2.verdict|%s|PASS|D2b\nA3.verdict|%s NetworkDriver.CreateEndpoint: failed to get initial IP address via DHCP: context deadline exceeded\n' "$SIG" "$D3C" "$PRE" >"$e/state/emit.a.1"
 cells "$e" -j 1 a
-[ -f "$e/root/evidence/a/retried/A1.verdict" ] && [ -f "$e/root/evidence/a/A2.verdict" ] && [ -f "$e/root/evidence/a/A3.verdict" ] || bad "case 21d: the mixed cell moved the wrong files: $(ls "$e/root/evidence/a" "$e/root/evidence/a/retried" 2>&1 | tr '\n' ' ')"
-[ ! -e "$e/root/evidence/a/retried/A2.verdict" ] && [ ! -e "$e/root/evidence/a/retried/A3.verdict" ] || bad "case 21d: a PASS or a DHCP timeout was moved"
+if ! { [ -f "$e/root/evidence/a/retried/A1.verdict" ] && [ -f "$e/root/evidence/a/A2.verdict" ] && [ -f "$e/root/evidence/a/A3.verdict" ]; }; then bad "case 21d: the mixed cell moved the wrong files: $(find "$e/root/evidence/a" -name '*.verdict' | sort | tr '\n' ' ')"; fi
+if ! { [ ! -e "$e/root/evidence/a/retried/A2.verdict" ] && [ ! -e "$e/root/evidence/a/retried/A3.verdict" ]; }; then bad "case 21d: a PASS or a DHCP timeout was moved"; fi
 e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|CreateEndpoint failed\\nPost "http://plugin.moby.localhost/NetworkDriver.CreateEndpoint": context deadline exceeded\n' >"$e/state/emit.a.1"
@@ -898,7 +898,7 @@ printf 'A1.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" >"$e/state/emit.a.1"
 cells "$e" -j 1 a
 expect "case 21g (E3b skipped)" 0 "$e"
 [ "$(starts_of "$e" a)" -eq 1 ] || bad "case 21g: E3b-vlan-parent was rerun"
-[ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ] || bad "case 21g: E3b-vlan-parent was moved"
+if ! { [ -f "$e/root/evidence/a/A1.verdict" ] && [ ! -e "$e/root/evidence/a/retried" ]; }; then bad "case 21g: E3b-vlan-parent was moved"; fi
 e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" >"$e/state/emit.a.1"
@@ -908,7 +908,7 @@ e=$(new_env)
 meminfo "$e" 60
 printf 'A1.verdict|%s|FAIL|A8-fleet-burst\nA2.verdict|%s|FAIL|E3b-vlan-parent\n' "$SIG" "$SIG" >"$e/state/emit.a.1"
 cells "$e" -j 1 --retry-skip 'A8-fleet-burst|B1' a
-[ -e "$e/root/evidence/a/A1.verdict" ] && [ -e "$e/root/evidence/a/retried/A2.verdict" ] || bad "case 21g: --retry-skip did not replace the default list"
+if ! { [ -e "$e/root/evidence/a/A1.verdict" ] && [ -e "$e/root/evidence/a/retried/A2.verdict" ]; }; then bad "case 21g: --retry-skip did not replace the default list"; fi
 # a scenario name that only contains a skipped name is not skipped
 e=$(new_env)
 meminfo "$e" 60
