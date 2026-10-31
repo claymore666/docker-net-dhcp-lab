@@ -46,6 +46,7 @@ for s in qemu-img ssh-keygen sleep ssh; do
 done
 # The CHR's ready probe (#9) reads lab-ready, or the stock identity once
 # while $STUB_LOG.stock exists, or is refused while $STUB_LOG.lockout
+# exists, or fails once with a refused connection while $STUB_LOG.early
 # exists; every other call logs as the generic stub does.
 cat >"$tmp/bin/ssh" <<'EOF'
 #!/bin/bash
@@ -54,6 +55,10 @@ cat >"$tmp/bin/ssh" <<'EOF'
 if [ -e "$STUB_LOG.stock" ]; then
 	rm -f "$STUB_LOG.stock"
 	echo MikroTik
+elif [ -e "$STUB_LOG.early" ]; then
+	rm -f "$STUB_LOG.early"
+	echo 'lab@10.200.255.141: Connection refused' >&2
+	exit 255
 elif [ -e "$STUB_LOG.lockout" ]; then
 	echo 'lab@10.200.255.141: Permission denied (publickey).' >&2
 	exit 255
@@ -151,14 +156,21 @@ touch "$tmp/log.stock"
 variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
 grep -qx 'exit=0' "$tmp/got-variant" || bad "qga stock: up-source did not finish: $(tail -5 "$tmp/got-variant")"
 grep -q '^sudo -n virsh qemu-agent-command .*guest-ping' "$tmp/got-variant" || bad "qga stock: the stock identity counted as ready"
-# Seeded, but the lab key is refused: every poll names the failed login.
-touch "$tmp/log.lockout"
+# The login fails before the seed and works after it: the poll that seeds
+# must not print the pre-seed ssh error as if it were the current state.
 mv "$tmp/repo/scripts/seed-chr.sh" "$tmp/seed-chr.sh.real"
 cat >"$tmp/repo/scripts/seed-chr.sh" <<'EOF'
 #!/bin/bash
 echo "seed-chr: $1 is seeded"
 EOF
 chmod +x "$tmp/repo/scripts/seed-chr.sh"
+touch "$tmp/log.early"
+variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
+grep -qx 'exit=0' "$tmp/got-variant" || bad "qga early: up-source did not finish: $(tail -5 "$tmp/got-variant")"
+grep -qF 'is seeded, but' "$tmp/got-variant" && bad "qga early: the seeding poll printed a stale login error: $(grep 'seeded, but' "$tmp/got-variant")"
+rm -f "$tmp/log.early"
+# Seeded, but the lab key is refused: every poll names the failed login.
+touch "$tmp/log.lockout"
 variant '.source_image.seed = "qga" | .source_image.firmware = "bios"'
 grep -qx 'exit=1' "$tmp/got-variant" || bad "qga lockout: a refused lab login counted as ready"
 grep -qF 'is seeded, but the lab login read identity "": lab@10.200.255.141: Permission denied (publickey).' "$tmp/got-variant" ||
