@@ -3,11 +3,14 @@ package sourceadapter
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,24 +30,111 @@ const owLeaseLine = "1791666707 02:00:00:00:09:01 10.200.15.129 m4client 01:02:0
 
 type owRunner struct {
 	files map[string]string
-	addr  string
+	addr  string // what eth1 carries
 	calls []string
+
+	// netifd's side (lab #127): cfgAddr is network.lan.ipaddr, applied to
+	// eth1 by a network reload; start and limit are the uci pool, -1 for
+	// "as the dhcp file says".
+	cfgAddr, cfgAddr0 string
+	start, limit      int
+	// faults a test may set
+	staleView bool // dnsmasq.init keeps deriving the pool from the old subnet
+	revert    bool // netifd puts the old address back a moment after the reload
+	noReload  bool // the reload changes nothing
+	// forceRange replaces the lan pool "first,last" in dnsmasq.init's output;
+	// keepConf drops the write of the lab conf, so its router option stays old.
+	forceRange string
+	keepConf   bool
+	reloaded   bool
 }
+
+var (
+	owAddListRE = regexp.MustCompile(`'add_list' 'network\.lan\.ipaddr=([^']+)'`)
+	owStartRE   = regexp.MustCompile(`'set' 'dhcp\.lan\.start=(\d+)'`)
+	owLimitRE   = regexp.MustCompile(`'set' 'dhcp\.lan\.limit=(\d+)'`)
+	owOptNumRE  = regexp.MustCompile(`option (start|limit) '(\d+)'`)
+)
+
+// generated is dnsmasq.init's output: the lan pool from uci's offsets and
+// netifd's view of lan, then the lab conf's vendor-class range.
+func (r *owRunner) generated() string {
+	view := netip.MustParsePrefix(r.addr)
+	if r.staleView {
+		view = netip.MustParsePrefix(r.cfgAddr0)
+	}
+	start, limit := r.start, r.limit
+	for _, m := range owOptNumRE.FindAllStringSubmatch(r.files[openwrtDHCPConf], -1) {
+		n, _ := strconv.Atoi(m[2])
+		if m[1] == "start" && start < 0 {
+			start = n
+		}
+		if m[1] == "limit" && limit < 0 {
+			limit = n
+		}
+	}
+	base := view.Masked().Addr().As4()
+	first := netip.AddrFrom4([4]byte{base[0], base[1], base[2], base[3] + byte(start)})
+	last := netip.AddrFrom4([4]byte{base[0], base[1], base[2], base[3] + byte(start+limit-1)})
+	pool := first.String() + "," + last.String()
+	if r.forceRange != "" {
+		pool = r.forceRange
+	}
+	return fmt.Sprintf("conf-file=/etc/dnsmasq.conf\ndhcp-authoritative\ndhcp-range=set:lan,%s,255.255.255.0,12h\n%s", pool,
+		owRangeRE.FindString(r.files[openwrtLabConf]))
+}
+
+var owRangeRE = regexp.MustCompile(`(?m)^dhcp-range=tag:b5.*\n`)
 
 var owAddrAddRE = regexp.MustCompile(`ip addr add (\S+) brd \+ dev eth1`)
 var owWriteRE = regexp.MustCompile(`(?s)^sudo tee (\S+) >/dev/null <<'LABEOF'\n(.*)LABEOF\n$`)
 
 func newOwRunner() *owRunner {
-	return &owRunner{files: map[string]string{openwrtDHCPConf: owDHCP, openwrtLabConf: owConf, openwrtLeaseFile: owLeaseLine, openwrtNetConf: "config interface 'lan'\n"}, addr: "10.200.15.2/24"}
+	return &owRunner{files: map[string]string{openwrtDHCPConf: owDHCP, openwrtLabConf: owConf, openwrtLeaseFile: owLeaseLine, openwrtNetConf: "config interface 'lan'\n"},
+		addr: "10.200.15.2/24", cfgAddr: "10.200.15.2/24", cfgAddr0: "10.200.15.2/24", start: -1, limit: -1}
 }
 
 func (r *owRunner) Run(_ context.Context, cmd string) (string, error) {
 	r.calls = append(r.calls, cmd)
 	if p, ok := strings.CutPrefix(cmd, "sudo cat "); ok {
+		if p == openwrtGenConf {
+			return r.generated(), nil
+		}
 		return r.files[p], nil
 	}
 	if m := owWriteRE.FindStringSubmatch(cmd); m != nil {
+		if m[1] == openwrtLabConf && r.keepConf && strings.Contains(m[2], "dhcp-option=3,10.200.115.2") {
+			return "", nil
+		}
 		r.files[m[1]] = m[2]
+		switch m[1] {
+		case openwrtNetConf:
+			r.cfgAddr = r.cfgAddr0
+		case openwrtDHCPConf:
+			r.start, r.limit = -1, -1
+		}
+		return "", nil
+	}
+	if strings.HasPrefix(cmd, openwrtUCI) {
+		if m := owAddListRE.FindStringSubmatch(cmd); m != nil {
+			r.cfgAddr = m[1]
+		}
+		if m := owStartRE.FindStringSubmatch(cmd); m != nil {
+			r.start, _ = strconv.Atoi(m[1])
+		}
+		if m := owLimitRE.FindStringSubmatch(cmd); m != nil {
+			r.limit, _ = strconv.Atoi(m[1])
+		}
+	}
+	switch {
+	case cmd == "sudo /etc/init.d/network reload":
+		if !r.noReload {
+			r.addr = r.cfgAddr
+		}
+		r.reloaded = true
+		return "", nil
+	case cmd == "sleep 2" && r.revert && r.reloaded:
+		r.addr = r.cfgAddr0
 		return "", nil
 	}
 	if strings.HasPrefix(cmd, "printf 'addr:'") {
@@ -180,7 +270,7 @@ var owPathRE = regexp.MustCompile(`/(?:etc|tmp|var|run|usr)/[^\s'"|;&>:]*`)
 // file, which Recover restores from Ready's baseline (lab #9).
 func TestOpenwrtEditsWriteOnlyUCIAndDnsmasqConf(t *testing.T) {
 	allowed := map[string]bool{openwrtDHCPConf: true, openwrtNetConf: true, openwrtLabConf: true, openwrtLeaseFile: true,
-		"/etc/init.d/dnsmasq": true, "/etc/init.d/network": true, "/sbin/uci": true}
+		"/etc/init.d/dnsmasq": true, "/etc/init.d/network": true, "/sbin/uci": true, openwrtGenConf: true}
 	writeRE := regexp.MustCompile(`(?:tee(?: -a)?|sed -i '[^']*'|truncate -s 0) (/\S+)`)
 	for _, c := range owExercise(t) {
 		for _, p := range owPathRE.FindAllString(c, -1) {
@@ -429,5 +519,139 @@ func TestReachableAsPrefixesBothFamiliesAndKeepsTheGuard(t *testing.T) {
 	}
 	if len(r.calls) != 0 {
 		t.Errorf("a bad address reached the runner: %q", r.calls)
+	}
+}
+
+// ---- Renumber (lab #127) ---------------------------------------------
+
+func owRenumber(t *testing.T, r *owRunner) (func(context.Context) error, error) {
+	t.Helper()
+	return (&OpenwrtAdapter{Runner: r}).Renumber(context.Background(), "10.200.115.0/24", "10.200.115.2", "10.200.115.100", "10.200.115.200")
+}
+
+func owIndex(calls []string, sub string) int {
+	for i, c := range calls {
+		if strings.Contains(c, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// owUntouched: the failed or restored source is the one the test started from.
+func owUntouched(t *testing.T, r *owRunner, files map[string]string) {
+	t.Helper()
+	for p, want := range files {
+		if r.files[p] != want {
+			t.Errorf("%s = %q, want the original %q", p, r.files[p], want)
+		}
+	}
+	if r.addr != "10.200.15.2/24" {
+		t.Errorf("eth1 carries %s, want the original 10.200.15.2/24", r.addr)
+	}
+}
+
+func owCopy(r *owRunner) map[string]string {
+	c := map[string]string{}
+	for p, s := range r.files {
+		c[p] = s
+	}
+	return c
+}
+
+func TestOpenwrtRenumberGoesThroughUCIAndNetifd(t *testing.T) {
+	r := newOwRunner()
+	orig := owCopy(r)
+	restore, err := owRenumber(t, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.addr != "10.200.115.2/24" {
+		t.Fatalf("eth1 carries %s after the renumber", r.addr)
+	}
+	uci := owIndex(r.calls, "'add_list' 'network.lan.ipaddr=10.200.115.2/24'")
+	reload := owIndex(r.calls, "/etc/init.d/network reload")
+	restart := owIndex(r.calls, "/etc/init.d/dnsmasq restart")
+	if uci < 0 || reload < uci || restart < reload {
+		t.Fatalf("uci %d, network reload %d, dnsmasq restart %d: want that order\n%q", uci, reload, restart, r.calls)
+	}
+	for _, want := range []string{"'delete' 'network.lan.ipaddr'", "'set' 'dhcp.lan.start=100'", "'set' 'dhcp.lan.limit=101'", "'commit' 'network'", "'commit' 'dhcp'"} {
+		if !strings.Contains(r.calls[uci], want) {
+			t.Errorf("the uci command lacks %s: %s", want, r.calls[uci])
+		}
+	}
+	for _, c := range r.calls {
+		if strings.Contains(c, "network.mgmt") || strings.Contains(c, "ip -4 addr flush") || strings.Contains(c, "ip addr add") {
+			t.Errorf("Renumber ran %q: only network.lan goes through uci, never a hand-made move", c)
+		}
+	}
+	lab := r.files[openwrtLabConf]
+	for _, keep := range []string{"# lab header\n", "dhcp-vendorclass=set:b5,lab-class-b5\n", "dhcp-range=tag:b5,10.200.15.221,10.200.15.230,12h\n", "dhcp-option=3,10.200.115.2\n"} {
+		if !strings.Contains(lab, keep) {
+			t.Errorf("the lab conf lost %q: %q", keep, lab)
+		}
+	}
+	if strings.Contains(lab, "dhcp-option=3,10.200.15.2") {
+		t.Errorf("the lab conf still names the old router: %q", lab)
+	}
+	if err := restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	owUntouched(t, r, orig)
+	if i := owIndex(r.calls[uci+1:], "/etc/init.d/network reload"); i < 0 {
+		t.Error("restore did not reload the network")
+	}
+}
+
+// Each of these ends with the source put back and an error that names
+// what the source showed, never a renumber the scenario then judges.
+func TestOpenwrtRenumberChecksTheSourceAndPutsItBack(t *testing.T) {
+	cases := []struct {
+		name  string
+		fault func(r *owRunner)
+		want  string
+	}{
+		{"dnsmasq.init keeps deriving the old pool", func(r *owRunner) { r.staleView = true }, "dnsmasq still serves 10.200.15.100"},
+		{"netifd puts the old address back", func(r *owRunner) { r.revert = true }, "eth1 carries [10.200.15.2/24], want only 10.200.115.2/24"},
+		{"the reload changes nothing", func(r *owRunner) { r.noReload = true }, "20 s after the network reload"},
+		{"the pool ends outside the new subnet", func(r *owRunner) { r.forceRange = "10.200.115.100,10.200.116.50" }, "outside 10.200.115.0/24"},
+		{"the pool starts elsewhere in the new subnet", func(r *owRunner) { r.forceRange = "10.200.115.150,10.200.115.200" }, "no pool starting at 10.200.115.100"},
+		{"the router option keeps the old address", func(r *owRunner) { r.keepConf = true }, "router option is"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newOwRunner()
+			orig := owCopy(r)
+			c.fault(r)
+			restore, err := owRenumber(t, r)
+			if err == nil || restore != nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("Renumber = (%v, %v), want an error containing %q", restore != nil, err, c.want)
+			}
+			if r.addr != "10.200.15.2/24" {
+				t.Errorf("eth1 carries %s, want the original 10.200.15.2/24", r.addr)
+			}
+			if r.files[openwrtLabConf] != orig[openwrtLabConf] || r.files[openwrtNetConf] != orig[openwrtNetConf] || r.files[openwrtDHCPConf] != orig[openwrtDHCPConf] {
+				t.Errorf("the files were not put back: %v", r.files)
+			}
+		})
+	}
+}
+
+func TestOpenwrtRenumberRefusesBeforeChangingAnything(t *testing.T) {
+	for name, edit := range map[string]func(r *owRunner){
+		"no router option":               func(r *owRunner) { r.files[openwrtLabConf] = "# lab header\n" },
+		"two router options":             func(r *owRunner) { r.files[openwrtLabConf] += "dhcp-option=3,10.200.15.9\n" },
+		"a file without a final newline": func(r *owRunner) { r.files[openwrtNetConf] = "config interface 'lan'" },
+	} {
+		r := newOwRunner()
+		edit(r)
+		if restore, err := owRenumber(t, r); err == nil || restore != nil {
+			t.Errorf("%s: Renumber = (%v, %v), want a refusal", name, restore != nil, err)
+		}
+		for _, c := range r.calls {
+			if strings.Contains(c, "/sbin/uci") || strings.HasPrefix(c, "sudo tee ") || strings.Contains(c, "init.d") {
+				t.Errorf("%s: changed the source before refusing: %q", name, c)
+			}
+		}
 	}
 }

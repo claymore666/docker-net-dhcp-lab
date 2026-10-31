@@ -23,16 +23,28 @@ const eWindow = 3 * time.Second
 const (
 	eBound = "bound"
 	eRenew = "renew"
-	eOther = "other"
+	// eResume is the plugin's INIT-REBOOT at Join (RFC 2131 section
+	// 4.3.2): it re-asserts an address an earlier exchange granted. The
+	// ledger and leases_obtained count that address once, at the
+	// DISCOVER-started exchange, so a resume is in neither count (lab #123).
+	eResume = "resume"
+	eOther  = "other"
 )
 
 // wireExchange is one XID's exchange that ended in an ACK. Class says
 // what started it: a DISCOVER (bound), a unicast REQUEST carrying ciaddr
-// (renew), or anything else, which no ledger kind covers (#15 row M).
+// (renew), an INIT-REBOOT REQUEST of an address already granted (resume),
+// or anything else, which no ledger kind covers (#15 row M).
 type wireExchange struct {
 	XID, Class, IP, Start string
 	At                    time.Time
 	Unseen                bool // the ACK's request is not in the capture
+}
+
+// isInitReboot is RFC 2131 section 4.3.2's INIT-REBOOT REQUEST: no server
+// identifier, no ciaddr, the previous address in option 50.
+func isInitReboot(m DHCPMsg) bool {
+	return m.Type == "REQUEST" && (m.CIAddr == "" || m.CIAddr == "0.0.0.0") && m.Server == "" && m.Requested != ""
 }
 
 func classifyStart(st DHCPMsg, seen bool) (class, why string) {
@@ -43,10 +55,12 @@ func classifyStart(st DHCPMsg, seen bool) (class, why string) {
 		return eBound, "DISCOVER"
 	case st.Type == "REQUEST" && st.CIAddr != "" && st.CIAddr != "0.0.0.0" && st.Dst != "255.255.255.255":
 		return eRenew, "unicast REQUEST with ciaddr"
+	case isInitReboot(st):
+		return eResume, "INIT-REBOOT REQUEST for " + st.Requested
 	case st.Type == "REQUEST" && st.CIAddr != "":
 		return eOther, "broadcast REQUEST with ciaddr (a rebind)"
 	case st.Type == "REQUEST":
-		return eOther, "REQUEST without ciaddr (INIT-REBOOT)"
+		return eOther, "REQUEST with no ciaddr that names a server or carries no requested address"
 	}
 	return eOther, st.Type
 }
@@ -55,6 +69,7 @@ func classifyStart(st DHCPMsg, seen bool) (class, why string) {
 func wireExchanges(msgs []DHCPMsg) []wireExchange {
 	starts := map[string]DHCPMsg{}
 	acked := map[string]bool{}
+	granted := map[string]bool{}
 	var out []wireExchange
 	for _, m := range msgs {
 		switch m.Type {
@@ -69,6 +84,12 @@ func wireExchanges(msgs []DHCPMsg) []wireExchange {
 			acked[m.XID] = true
 			st, seen := starts[m.XID]
 			class, why := classifyStart(st, seen)
+			if class == eResume && st.Requested != m.YIAddr {
+				class, why = eOther, fmt.Sprintf("INIT-REBOOT REQUEST for %s, ACKed as %s, not the address it asked for", st.Requested, m.YIAddr)
+			} else if class == eResume && !granted[m.YIAddr] {
+				class, why = eOther, fmt.Sprintf("INIT-REBOOT REQUEST for %s, ACKed as %s, that no earlier exchange granted", st.Requested, m.YIAddr)
+			}
+			granted[m.YIAddr] = true
 			out = append(out, wireExchange{XID: m.XID, Class: class, IP: m.YIAddr, Start: why, At: m.At, Unseen: !seen})
 		}
 	}
@@ -162,7 +183,7 @@ func eUnclassified(ex []wireExchange) []string {
 	var out []string
 	for _, x := range ex {
 		if x.Class == eOther {
-			out = append(out, fmt.Sprintf("exchange %s for %s started by %s is neither a DISCOVER nor a unicast renewal", x.XID, x.IP, x.Start))
+			out = append(out, fmt.Sprintf("exchange %s for %s started by %s is neither a DISCOVER, a unicast renewal nor an INIT-REBOOT resume of an address already granted", x.XID, x.IP, x.Start))
 		}
 	}
 	return out
@@ -237,7 +258,7 @@ func judgeE1(o e1Obs) fOutcome {
 	fails = append(fails, eUnclassified(ex)...)
 	var wantKinds, wantIPs []string
 	for _, x := range ex {
-		if x.Class != eOther {
+		if x.Class == eBound || x.Class == eRenew {
 			wantKinds = append(wantKinds, x.Class)
 			wantIPs = append(wantIPs, x.IP)
 		}

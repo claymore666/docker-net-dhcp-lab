@@ -1,10 +1,10 @@
 #!/bin/bash
 # Seed a MikroTik CHR source VM (lab #9). guest-exec scripts run with a
 # policy that may write config but not users or keys (M3), so the guest
-# agent runs lab-mgmt.rsc (vendor export, mgmt address) and pushes lab.pub,
-# lab-baseline.rsc and lab-seed.rsc with guest-file-write; the stock admin
-# (blank password, once) then imports lab-seed.rsc over the mgmt address,
-# and that script disables admin. up-source.sh's ready_qga calls this until
+# agent runs lab-mgmt.rsc (vendor export, mgmt address); the stock admin
+# (blank password, once) then uploads lab.pub, lab-baseline.rsc and
+# lab-seed.rsc and imports lab-seed.rsc over the mgmt address, and that
+# script disables admin. up-source.sh's ready_qga calls this until
 # the identity reads lab-ready. Exit 0: seeded; exit 1: not there yet,
 # poll again; exit 2: refused, stop.
 set -euo pipefail
@@ -44,22 +44,42 @@ qga() {
 field() { sed -n "s/.*\"$1\":\"\{0,1\}\([^\",}]*\).*/\1/p" <<<"$2"; }
 
 # ros SCRIPT: run RouterOS script text through guest-exec; sets out and
-# code (-1 on a script error, M3).
+# code (-1 on a script error, M3), and leaves code empty when the script
+# has not exited after 30 s (lab #130). An agent that answers guest-ping
+# but not guest-exec in time is slow, not refusing: exit 1 asks for
+# another poll, and up-source.sh's bound ends the wait with a named
+# error. unfinished_ok=1 lets a caller whose script must not run twice
+# handle the empty code itself.
+unfinished_ok=0
 ros() {
 	local r pid s=''
-	r=$(qga "{\"execute\":\"guest-exec\",\"arguments\":{\"input-data\":\"$(printf '%s\n' "$1" | base64 -w0)\",\"capture-output\":true}}")
+	r=$(qga "{\"execute\":\"guest-exec\",\"arguments\":{\"input-data\":\"$(printf '%s\n' "$1" | base64 -w0)\",\"capture-output\":true}}") || {
+		echo "seed-chr: the guest agent of $DOMAIN did not answer guest-exec within 30 s" >&2
+		exit 1
+	}
 	pid=$(field pid "$r")
+	[ -n "$r" ] || {
+		echo "seed-chr: the guest agent of $DOMAIN sent no answer to guest-exec" >&2
+		exit 1
+	}
 	[ -n "$pid" ] || {
 		echo "seed-chr: REFUSED -- guest-exec answered: $r" >&2
 		exit 2
 	}
 	for _ in $(seq 1 30); do
-		s=$(qga "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}")
+		s=$(qga "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}") || {
+			echo "seed-chr: the guest agent of $DOMAIN did not answer guest-exec-status within 30 s" >&2
+			exit 1
+		}
 		[ "$(field exited "$s")" = true ] && break
 		sleep 1
 	done
 	out=$(field out-data "$s" | base64 -d 2>/dev/null | tr -d '\r' || true)
 	code=$(field exitcode "$s")
+	if [ -z "$code" ] && [ "$unfinished_ok" != 1 ]; then
+		echo "seed-chr: the script has not finished on $DOMAIN after 30 s; last agent reply: $(cut -c1-200 <<<"$s")" >&2
+		exit 1
+	fi
 }
 
 if ! qga '{"execute":"guest-ping"}' 2>/dev/null | grep -q '"return"'; then
@@ -98,32 +118,36 @@ case "$code:$out" in
 	;;
 esac
 
+unfinished_ok=1
 ros "$(cat "$SEED_DIR/lab-mgmt.rsc")"
+unfinished_ok=0
+if [ -z "$code" ]; then
+	echo "seed-chr: TIMEOUT -- lab-mgmt.rsc had not finished on $DOMAIN after 30 s; it is not run again, as its state is unknown" >&2
+	exit 2
+fi
 [ "$code" = 0 ] || {
 	echo "seed-chr: REFUSED -- lab-mgmt.rsc exited ${code:-without an exit code}: $out" >&2
 	exit 2
 }
 
-for f in lab.pub lab-baseline.rsc lab-seed.rsc; do
-	r=$(qga "{\"execute\":\"guest-file-open\",\"arguments\":{\"path\":\"$f\",\"mode\":\"w\"}}")
-	handle=$(field return "$r")
-	case "$handle" in '' | *[!0-9]*)
-		echo "seed-chr: REFUSED -- guest-file-open $f answered: $r" >&2
-		exit 2
-		;;
-	esac
-	r=$(qga "{\"execute\":\"guest-file-write\",\"arguments\":{\"handle\":$handle,\"buf-b64\":\"$(base64 -w0 <"$SEED_DIR/$f")\"}}")
-	qga "{\"execute\":\"guest-file-close\",\"arguments\":{\"handle\":$handle}}" >/dev/null
-	if [ "$(field count "$r")" != "$(stat -c %s "$SEED_DIR/$f")" ]; then
-		echo "seed-chr: REFUSED -- guest-file-write $f answered: $r" >&2
-		exit 2
-	fi
-done
+# Through virsh the agent never answers guest-file-close (measured on the
+# lab host 2026-10-30, lab #130), so the files go over the stock admin
+# login the import uses. SSH_ASKPASS=/bin/true answers the password prompt
+# with the stock blank password. 255 is the login itself: sshd not up yet
+# (admin disabled by an earlier run is ruled out above).
+rc=0
+out=$(SSH_ASKPASS=/bin/true SSH_ASKPASS_REQUIRE=force scp -P "${SEED_SSH_PORT:-22}" -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "$SEED_DIR/lab.pub" "$SEED_DIR/lab-baseline.rsc" "$SEED_DIR/lab-seed.rsc" "admin@$MGMT_IP:" </dev/null 2>&1) || rc=$?
+if [ "$rc" = 255 ]; then
+	echo "seed-chr: the admin upload to $DOMAIN failed: $out" >&2
+	exit 1
+fi
+if [ "$rc" != 0 ]; then
+	echo "seed-chr: REFUSED -- the admin upload to $DOMAIN exited $rc: $out" >&2
+	exit 2
+fi
 
-# SSH_ASKPASS=/bin/true answers the password prompt with the stock blank
-# password; a parse error still exits 0 (M3), so the import's own success
-# line is what counts. 255 is the login itself: sshd not up yet (admin
-# disabled by an earlier run is ruled out above).
+# A parse error still exits 0 (M3), so the import's own success line is
+# what counts.
 rc=0
 out=$(SSH_ASKPASS=/bin/true SSH_ASKPASS_REQUIRE=force ssh -p "${SEED_SSH_PORT:-22}" -o UserKnownHostsFile="$KNOWN_HOSTS" -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive "admin@$MGMT_IP" '/import file-name=lab-seed.rsc' </dev/null 2>&1) || rc=$?
 out=$(tr -d '\r' <<<"$out")

@@ -146,7 +146,7 @@ func TestCellEnvWiresTheRelay(t *testing.T) {
 	relay := &fakeHost{reply: "02:11:00:00:00:01\n02:11:00:00:00:02\n"}
 	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): src, hostPart(cell.Relay.MgmtAddress): relay}
 	work := t.TempDir()
-	env, err := cellEnv(context.Background(), cell, "kea-relay", "/repo", work, dialFakes(hosts))
+	env, err := cellEnv(context.Background(), cell, "kea-relay", "/repo", work, scenario.SoakParams{}, dialFakes(hosts))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestCellEnvLeavesAPlainCellAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts := map[string]*fakeHost{hostPart(cell.Source.MgmtAddress): {}}
-	env, err := cellEnv(context.Background(), cell, "kea", "/repo", t.TempDir(), dialFakes(hosts))
+	env, err := cellEnv(context.Background(), cell, "kea", "/repo", t.TempDir(), scenario.SoakParams{}, dialFakes(hosts))
 	if err != nil {
 		t.Fatal(err)
 	}

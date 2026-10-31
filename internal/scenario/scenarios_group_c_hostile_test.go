@@ -281,7 +281,7 @@ func TestRunC6IsNAOnIpvlanBeforeTouchingAnything(t *testing.T) {
 	v := runC6Tuned(context.Background(), r.e, cFast)
 	needResult(t, v, NA)
 	needWritten(t, r.e, v)
-	for _, want := range []string{"conflict_check=wait", "refused on ipvlan", "RFC 5227 section 2.1.1", "C6b covers async"} {
+	for _, want := range []string{"conflict_check=wait", "refused on ipvlan", "RFC 5227 section 2.1.1", "C6b covers async and judges the first DECLINE"} {
 		needReason(t, v, want)
 	}
 	f := r.src.fakeAdapter
@@ -290,12 +290,129 @@ func TestRunC6IsNAOnIpvlanBeforeTouchingAnything(t *testing.T) {
 	}
 }
 
-// C6b drives async, which ipvlan accepts, so it stays a real run there.
-func TestRunC6bIsNotNAOnIpvlan(t *testing.T) {
-	r := hSetup(t, ShapeIpvlan)
-	r.cap.fn = func(string) []DHCPMsg { return nil }
-	if v := runC6bTuned(context.Background(), r.e, cFast); v.Result == NA {
-		t.Errorf("C6b on ipvlan answered N/A: %s", v.Reason)
+// Lab #132: on ipvlan C6b judges the first DECLINE as on every shape (host
+// run 4: isc-dhcp, host-ubuntu2404-isc-dhcp and isc-failover passed it).
+// N/A only when the server re-offers the address just declined and the
+// client keeps it: the pihole ipvlan cell of run 4, where the plugin's
+// probe after that ACK hears nothing (docs/reference.md, conflict_check).
+func c6bReofferRig(t *testing.T, shape Shape) *hRig {
+	r := hSetup(t, shape)
+	name := containerName(r.e, NameC6b)
+	var squatted bool
+	var at time.Time
+	r.src.onSquat = func() { squatted = true; at = time.Now() }
+	r.cap.fn = func(ident string) []DHCPMsg {
+		if !squatted {
+			return nil
+		}
+		d := dmsg(at, "DECLINE", "a", ident, "", "")
+		d.Requested = "10.200.1.101"
+		o := dmsg(at.Add(time.Millisecond), "OFFER", "b", ident, "10.200.1.101", "")
+		k := dmsg(at.Add(2*time.Millisecond), "ACK", "b", ident, "10.200.1.101", "")
+		return []DHCPMsg{d, o, k}
+	}
+	r.src.fn = func(int) []sourceadapter.Lease {
+		l, _ := r.leaseOf(name, "10.200.1.101")
+		return []sourceadapter.Lease{l}
+	}
+	return r
+}
+
+func TestRunC6bIsNAOnIpvlanWhenTheServerReoffersTheDeclinedAddress(t *testing.T) {
+	r := c6bReofferRig(t, ShapeIpvlan)
+	v := runC6bTuned(context.Background(), r.e, cFast)
+	needResult(t, v, NA)
+	needWritten(t, r.e, v)
+	for _, want := range []string{"DECLINEd 10.200.1.101", "re-offered it", "RFC 5227 section 2.1.1", "plugin #1347"} {
+		needReason(t, v, want)
+	}
+	needStops(t, "squatter", r.src.squatStops, 1)
+}
+
+// Either an OFFER or an ACK of the declined address is a re-offer, and the
+// first DECLINE is the one the later message is measured against.
+func TestReofferedAfterDeclineCountsOfferAckAndTheFirstDecline(t *testing.T) {
+	const x = "10.200.1.101"
+	t0 := time.Now()
+	at := func(ms int) time.Time { return t0.Add(time.Duration(ms) * time.Millisecond) }
+	decline := func(ms int) DHCPMsg {
+		d := dmsg(at(ms), "DECLINE", "d", "i", "", "")
+		d.Requested = x
+		return d
+	}
+	for name, c := range map[string]struct {
+		msgs []DHCPMsg
+		want bool
+	}{
+		"offer only":                    {[]DHCPMsg{decline(0), dmsg(at(1), "OFFER", "b", "i", x, "")}, true},
+		"ack only":                      {[]DHCPMsg{decline(0), dmsg(at(1), "ACK", "b", "i", x, "")}, true},
+		"other address":                 {[]DHCPMsg{decline(0), dmsg(at(1), "ACK", "b", "i", "10.200.1.150", "")}, false},
+		"offer before the decline":      {[]DHCPMsg{dmsg(at(0), "OFFER", "b", "i", x, ""), decline(1)}, false},
+		"re-offer between two declines": {[]DHCPMsg{decline(0), dmsg(at(1), "OFFER", "b", "i", x, ""), decline(2)}, true},
+		"no decline":                    {[]DHCPMsg{dmsg(at(1), "ACK", "b", "i", x, "")}, false},
+	} {
+		if got := reofferedAfterDecline(c.msgs, x); got != c.want {
+			t.Errorf("%s: got %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestRunC6bReofferIsAFailOffIpvlan(t *testing.T) {
+	for _, shape := range []Shape{ShapeBridge, ShapeMacvlan} {
+		r := c6bReofferRig(t, shape)
+		v := runC6bTuned(context.Background(), r.e, cFast)
+		needResult(t, v, FAIL)
+		needReason(t, v, "DECLINE of 10.200.1.101 seen: true")
+	}
+}
+
+func TestRunC6bOnIpvlanWithoutAnyDeclineStaysAFail(t *testing.T) {
+	r := c6bReofferRig(t, ShapeIpvlan)
+	r.cap.fn = func(ident string) []DHCPMsg {
+		return []DHCPMsg{dmsg(time.Now(), "ACK", "b", ident, "10.200.1.101", "")}
+	}
+	v := runC6bTuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "DECLINE of 10.200.1.101 seen: false")
+}
+
+func TestRunC6bOnIpvlanDeclinedWithoutAReofferStaysAFail(t *testing.T) {
+	r := c6bReofferRig(t, ShapeIpvlan)
+	f := r.cap.fn
+	r.cap.fn = func(ident string) []DHCPMsg {
+		if m := f(ident); len(m) > 0 {
+			return m[:1]
+		}
+		return nil
+	}
+	v := runC6bTuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "DECLINE of 10.200.1.101 seen: true")
+}
+
+// The recorded pihole ipvlan capture (host run 4): DECLINE of .167 at
+// 00:48:42, then DISCOVER, OFFER and ACK of the same address.
+func TestC6bIpvlanReofferReadsTheRecordedPiholeCapture(t *testing.T) {
+	msgs := irWire(t, "pihole-ipvlan-c6b-capture.txt")
+	const x = "10.200.13.167"
+	e := Env{Shape: ShapeIpvlan, Cell: "pihole"}
+	if why, ok := c6bIpvlanReoffer(e, msgs, x, []string{x}); !ok || !strings.Contains(why, "re-offered it") {
+		t.Fatalf("pihole capture: ok %v, %q", ok, why)
+	}
+	if _, ok := c6bIpvlanReoffer(e, msgs, x, []string{"10.200.13.200"}); ok {
+		t.Error("a client that left the address was called N/A")
+	}
+	e.Shape = ShapeMacvlan
+	if _, ok := c6bIpvlanReoffer(e, msgs, x, []string{x}); ok {
+		t.Error("macvlan was called N/A")
+	}
+	before := msgs[:8]
+	e.Shape = ShapeIpvlan
+	if _, ok := c6bIpvlanReoffer(e, before, x, []string{x}); ok {
+		t.Error("a capture without a DECLINE was called N/A")
+	}
+	if _, ok := c6bIpvlanReoffer(e, msgs[:9], x, []string{x}); ok {
+		t.Error("a DECLINE without a later re-offer was called N/A")
 	}
 }
 
@@ -830,4 +947,88 @@ func TestHostLinkCountRefusesANonNumber(t *testing.T) {
 	if _, err := hostLinkCount(context.Background(), r); err == nil {
 		t.Fatal("an empty answer counted")
 	}
+}
+
+// ---- C7 on a failover pair (lab #128) ----
+
+// c7PairRig is c7Rig on a pair whose partner answers (10.200.1.3): the
+// first capture read is the deny network c7, the second the allow-list
+// network c7b, and server picks whom each REQUEST names.
+func c7PairRig(t *testing.T, server func(call int) string) (*hRig, *fakePair) {
+	r := c7Rig(t, ShapeBridge)
+	p := newFakePair(r.src)
+	p.ids["primary"] = r.e.SourceAddr
+	r.e.Source = p
+	f := r.cap.fn
+	call := 0
+	r.cap.fn = func(ident string) []DHCPMsg {
+		m := f(ident)
+		m[2].Server = server(call)
+		call++
+		return m
+	}
+	return r, p
+}
+
+// Host run 4: on every isc-failover cell the client REQUESTed the
+// partner 10.200.9.3 and both peers ACKed; the judge wanted the primary.
+func TestRunC7OnAPairAcceptsARequestToThePartnerOnTheDenyNetwork(t *testing.T) {
+	r, _ := c7PairRig(t, func(call int) string {
+		if call == 0 {
+			return "10.200.1.3"
+		}
+		return "10.200.1.1"
+	})
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+}
+
+// The address the lab reaches the source on stays acceptable even when the
+// pair reports other ids for its members (preservation of the pre-pair
+// rule, lab #128).
+func TestRunC7OnAPairStillAcceptsTheSourceAddress(t *testing.T) {
+	r, p := c7PairRig(t, func(int) string { return "10.200.1.1" })
+	p.ids["primary"] = "10.200.1.2"
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, PASS)
+}
+
+// The allow-list names the primary alone, so a partner REQUEST on c7b
+// means the filter failed and stays a FAIL.
+func TestRunC7OnAPairKeepsTheAllowListNetworkStrict(t *testing.T) {
+	r, _ := c7PairRig(t, func(int) string { return "10.200.1.3" })
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "c7b")
+	needReason(t, v, "no REQUEST from")
+}
+
+func TestRunC7OnAPairStillFailsARequestToAStranger(t *testing.T) {
+	r, _ := c7PairRig(t, func(int) string { return "10.200.1.77" })
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "no REQUEST from")
+}
+
+func TestRunC7OnAPairBlocksWhenAPartnerIDIsUnreadable(t *testing.T) {
+	r, p := c7PairRig(t, func(int) string { return "10.200.1.3" })
+	delete(p.ids, "partner")
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "server id of peer partner")
+}
+
+// A cell that is not a pair keeps the single-source rule: a REQUEST to
+// 10.200.1.3 is not credited.
+func TestRunC7OffAPairDoesNotCreditAnotherServer(t *testing.T) {
+	r := c7Rig(t, ShapeBridge)
+	f := r.cap.fn
+	r.cap.fn = func(ident string) []DHCPMsg {
+		m := f(ident)
+		m[2].Server = "10.200.1.3"
+		return m
+	}
+	v := runC7Tuned(context.Background(), r.e, cFast)
+	needResult(t, v, FAIL)
+	needReason(t, v, "no REQUEST from")
 }

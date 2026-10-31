@@ -25,6 +25,9 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y kea-dhcp4-server kea-dhcp6-server kea-ctrl-agent radvd jq dnsmasq-base iputils-arping
   # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
   # -o vlan=100 makes the matching eth1.100 on the docker host.
+  # link names the netplan id seg0 of source-network-config.tmpl.yaml, not the
+  # kernel name eth1: netplan refuses "interface eth1 is not defined" and the
+  # VLAN never exists (#121).
   - |
     cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
     network:
@@ -32,7 +35,7 @@ runcmd:
       vlans:
         eth1.__VLAN_ID__:
           id: __VLAN_ID__
-          link: eth1
+          link: seg0
           addresses: [__VLAN_ADDR__/24]
     NETEOF
   - chmod 600 /etc/netplan/60-lab-vlan.yaml

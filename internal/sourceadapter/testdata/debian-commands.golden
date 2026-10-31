@@ -63,7 +63,7 @@
 "sudo systemctl restart radvd"
 ## kea Impair err=false
 # restore err=false
-"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root"
 "sudo /usr/sbin/tc qdisc del dev eth1 root"
 ## kea SendForceRenewUnsigned err=false
 "ping -c1 -W2 10.200.1.150"
@@ -218,7 +218,7 @@
 "sudo systemctl restart radvd"
 ## isc-dhcp Impair err=false
 # restore err=false
-"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root"
 "sudo /usr/sbin/tc qdisc del dev eth1 root"
 ## isc-dhcp SendForceRenewUnsigned err=false
 "ping -c1 -W2 10.200.1.150"
@@ -377,7 +377,7 @@
 "sudo systemctl restart dnsmasq"
 ## dnsmasq Impair err=false
 # restore err=false
-"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root"
 "sudo /usr/sbin/tc qdisc del dev eth1 root"
 ## dnsmasq SendForceRenewUnsigned err=false
 "ping -c1 -W2 10.200.1.150"
@@ -522,7 +522,7 @@
 "sudo systemctl restart udhcpd"
 ## udhcpd Impair err=false
 # restore err=false
-"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root"
 "sudo /usr/sbin/tc qdisc del dev eth1 root"
 ## udhcpd SendForceRenewUnsigned err=true
 ## udhcpd SendForceRenewSigned err=true
@@ -616,7 +616,7 @@
 "{ sudo systemctl reset-failed pihole-FTL || true; } && sudo systemctl restart pihole-FTL"
 ## pihole Impair err=false
 # restore err=false
-"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root | grep -q netem"
+"sudo modprobe sch_netem 2>/dev/null; sudo /usr/sbin/tc qdisc replace dev eth1 root netem delay 150ms loss 5% && /usr/sbin/tc qdisc show dev eth1 root"
 "sudo /usr/sbin/tc qdisc del dev eth1 root"
 ## pihole SendForceRenewUnsigned err=false
 "ping -c1 -W2 10.200.1.150"

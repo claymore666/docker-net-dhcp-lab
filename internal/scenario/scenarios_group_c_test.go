@@ -21,9 +21,10 @@ const ms = time.Millisecond
 // are constants and stay in seconds, so the fakes report wall times and
 // wire timestamps at those scales.
 var cFast = cTiming{
-	lease: 120, anchor: 300 * ms, poll: 5 * ms,
+	lease: cLease, anchor: 300 * ms, poll: 5 * ms,
 	stopAfter: 20 * ms, c2Start: 60 * ms, c2Settle: 400 * ms,
-	c3Record: 40 * ms, c3Start: 80 * ms, c3Window: 200 * ms,
+	c2T1: 40 * ms, c2T2: 80 * ms, c3Expiry: 90 * ms, margin: 8 * ms,
+	c3Record: 40 * ms, c3Start: 110 * ms, c3Window: 200 * ms,
 	c4Wait: 40 * ms, c1Settle: 5 * ms, c10Lift: 300 * ms,
 	c6bWindow: 200 * ms, c8Settle: 20 * ms, c8Links: 50 * ms, c9Wait: 300 * ms,
 	c5Wait: 50 * ms, c12bWait: 60 * ms,
@@ -380,6 +381,25 @@ func TestParseMessageLogReadsThirteenFieldsAndDashes(t *testing.T) {
 	}
 }
 
+func TestAckDelay(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	m := []DHCPMsg{
+		dmsg(t0, "REQUEST", "x", "a", "", ""),
+		dmsg(t0.Add(time.Second), "REQUEST", "x", "a", "", ""), // retransmit: the first one counts
+		dmsg(t0.Add(2100*ms), "ACK", "x", "a", "y", ""),
+		dmsg(t0.Add(500*ms), "ACK", "other", "a", "y", ""),   // no REQUEST of that xid
+		dmsg(t0.Add(3*time.Second), "NAK", "x", "a", "", ""), // a NAK is no ACK
+		dmsg(t0.Add(10*time.Second), "REQUEST", "z", "a", "", ""),
+		dmsg(t0.Add(10300*ms), "ACK", "z", "a", "y", ""), // a quicker exchange later: the longest counts
+	}
+	if d, ok := ackDelay(m); !ok || d != 2100*ms {
+		t.Errorf("ack delay %v %v, want 2.1s from the first REQUEST", d, ok)
+	}
+	if _, ok := ackDelay([]DHCPMsg{dmsg(t0, "OFFER", "x", "a", "y", "")}); ok {
+		t.Error("an OFFER alone gave an ACK delay")
+	}
+}
+
 func TestMessageFiltersAndGaps(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	m := []DHCPMsg{
@@ -396,9 +416,6 @@ func TestMessageFiltersAndGaps(t *testing.T) {
 	}
 	if n := len(messagesAfter(m, t0.Add(5*time.Second))); n != 2 {
 		t.Errorf("after kept %d", n)
-	}
-	if d, ok := offerDelay(m); !ok || d != 2*time.Second {
-		t.Errorf("offer delay %v %v, want 2s matched by xid", d, ok)
 	}
 	if sawClientUnicast(m) {
 		t.Error("broadcast only, yet unicast seen")
@@ -489,6 +506,8 @@ func TestRunC1WallBoundsAreInclusiveAndHoldTheMeasuredWalls(t *testing.T) {
 		wantInReason string
 	}{
 		{"the measured walls", 15460 * time.Millisecond, 31290 * time.Millisecond, true, ""},
+		{"the plugin's own 34 s timer ends c1 (#141 repro)", 16018 * time.Millisecond, 38359 * time.Millisecond, true, ""},
+		{"the hung walls of host run 5 stay failures", 15356 * time.Millisecond, 60040 * time.Millisecond, false, "c1 failed after"},
 		{"both at the lower bound", c1bWallMin, c1WallMin, true, ""},
 		{"both at the upper bound", c1bWallMax, c1WallMax, true, ""},
 		{"c1b just under its lower bound", c1bWallMin - time.Millisecond, 31 * time.Second, false, "c1b failed after"},
@@ -518,7 +537,7 @@ func TestRunC1Fails(t *testing.T) {
 	}{
 		{"a container started with the source down", "c1 started with the source down", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.rc[base+"-c1"] = 0 }},
 		{"the short timeout failed late", "c1b failed after 20s, outside 12s-18.5s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1b"] = 20 * time.Second }},
-		{"the default timeout failed early", "c1 failed after 20s, outside 28s-37s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
+		{"the default timeout failed early", "c1 failed after 20s, outside 28s-40.5s", func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-c1"] = 20 * time.Second }},
 		{"the second gap is off schedule", "c1: DISCOVER gap 2 was 10.2s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1"][2] = 14 * time.Second }},
 		{"the first gap is off schedule", "c1b: DISCOVER gap 1 was 5.5s", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"][1] = 5500 * ms }},
 		{"too few DISCOVERs", "c1b: the capture shows 1 DISCOVER(s)", func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["c1b"] = offs["c1b"][:1] }},
@@ -833,6 +852,133 @@ func TestRunC3Fails(t *testing.T) {
 	}
 }
 
+// ---- the down window (lab #134) -------------------------------------
+
+// Run 4, macvlan-ipam C2: bind ACK 08:03:58.5, Stop returned 08:08:30
+// after 46 ssh attempts, Start followed at once: a 0 s window that the
+// cell judged as "no renewal attempted".
+func TestOutageShortOnTheRun4Stamps(t *testing.T) {
+	bind := time.Date(2026, 10, 30, 8, 3, 58, 541e6, time.UTC)
+	back := time.Date(2026, 10, 30, 8, 8, 30, 0, time.UTC)
+	for name, need := range map[string]cSpan{
+		"C2": cDefault.straddle(bind, cDefault.c2T1),
+		"C3": cDefault.straddle(bind, cDefault.c3Expiry),
+	} {
+		if got := outageShort(back, back, need); !strings.Contains(got, "was down for 0s") || !strings.Contains(got, "08:08:30.000") {
+			t.Errorf("%s: the 0 s window judged as %q", name, got)
+		}
+	}
+	// The spans are T1 and expiry, one margin either side.
+	if c2 := cDefault.straddle(bind, cDefault.c2T1); c2.from.Sub(bind) != 59*time.Second || c2.to.Sub(bind) != 61*time.Second {
+		t.Errorf("C2 span is bind + %s to bind + %s, want 59 s to 61 s", c2.from.Sub(bind), c2.to.Sub(bind))
+	}
+	if c3 := cDefault.straddle(bind, cDefault.c3Expiry); c3.from.Sub(bind) != 119*time.Second || c3.to.Sub(bind) != 121*time.Second {
+		t.Errorf("C3 span is bind + %s to bind + %s, want 119 s to 121 s", c3.from.Sub(bind), c3.to.Sub(bind))
+	}
+	// Control: the planned run (stop at bind + 10 s, start at bind + 80 s
+	// and bind + 150 s) holds both spans.
+	if got := outageShort(bind.Add(10*time.Second), bind.Add(80*time.Second), cDefault.straddle(bind, cDefault.c2T1)); got != "" {
+		t.Errorf("the planned C2 window judged short: %q", got)
+	}
+	if got := outageShort(bind.Add(10*time.Second), bind.Add(150*time.Second), cDefault.straddle(bind, cDefault.c3Expiry)); got != "" {
+		t.Errorf("the planned C3 window judged short: %q", got)
+	}
+	// Either edge: stopped a millisecond after the span opens, started a
+	// millisecond before it closes.
+	need := cDefault.straddle(bind, cDefault.c2T1)
+	if outageShort(need.from.Add(time.Millisecond), bind.Add(80*time.Second), need) == "" {
+		t.Error("a stop after the span's start passed")
+	}
+	if outageShort(bind.Add(10*time.Second), need.to.Add(-time.Millisecond), need) == "" {
+		t.Error("a start before the span's end passed")
+	}
+}
+
+// lateStop makes Stop return at bind + after, as run 4's ssh stall did.
+func lateStop(b *cBoundRig, after time.Duration) {
+	b.src.onStop = func() {
+		b.stopT = time.Now()
+		time.Sleep(time.Until(b.bind.Add(after)))
+	}
+}
+
+func TestRunC2AndC3BlockWhenStopReturnsAfterThePlannedStart(t *testing.T) {
+	for name, run := range map[string]func() (*cBoundRig, Verdict){
+		"C2": func() (*cBoundRig, Verdict) {
+			b := c2Rig(t, ShapeMacvlan)
+			lateStop(b, cFast.c2Start+10*ms)
+			return b, runC2Tuned(context.Background(), b.e, cFast)
+		},
+		"C3": func() (*cBoundRig, Verdict) {
+			b := c3Rig(t)
+			lateStop(b, cFast.c3Start+10*ms)
+			return b, runC3Tuned(context.Background(), b.e, cFast)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, v := run()
+			needResult(t, v, BLOCKED)
+			needReason(t, v, "lab: the source was down for")
+			needReason(t, v, "the plugin was not judged")
+			if b.src.starts != 1 {
+				t.Errorf("the source was started %d time(s), want once to put it back", b.src.starts)
+			}
+			b.needPutBack(t)
+		})
+	}
+}
+
+// Each scenario straddles its own instant: a Stop that returns at
+// bind + 36 ms is late for C2 (T1 at 40 ms, latest stop 32 ms) and in
+// time for C3 (expiry at 90 ms, latest stop 82 ms).
+func TestRunC2AndC3StraddleTheirOwnInstant(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	lateStop(b, cFast.c2T1-cFast.margin+4*ms)
+	needResult(t, runC2Tuned(context.Background(), b.e, cFast), BLOCKED)
+	c := c3Rig(t)
+	lateStop(c, cFast.c2T1-cFast.margin+4*ms)
+	needResult(t, runC3Tuned(context.Background(), c.e, cFast), PASS)
+}
+
+// stallingStop is a Source whose Stop hangs until its context ends, as
+// the ssh retries did for 4m18s in run 4.
+type stallingStop struct{ sourceadapter.Adapter }
+
+func (s stallingStop) Stop(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestRunC2CutsAStalledStopAtTheLatestUsefulMoment(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	b.e.Source = stallingStop{b.src}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	v := runC2Tuned(ctx, b.e, cFast)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "lab: the source did not stop before")
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the stall ran %s: it was not cut at the deadline", d)
+	}
+	if b.src.starts != 1 {
+		t.Errorf("the source was started %d time(s) after the cut Stop", b.src.starts)
+	}
+}
+
+// A plan whose stop is already past the span's start touches nothing.
+func TestRunC2BlocksBeforeStoppingWhenTheClockIsPastTheSpan(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	late := cFast
+	late.stopAfter = late.c2T1
+	v := runC2Tuned(context.Background(), b.e, late)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "the source was not touched")
+	if b.src.stops != 0 || b.src.starts != 0 {
+		t.Errorf("stops %d starts %d: the source was touched", b.src.stops, b.src.starts)
+	}
+}
+
 // c4Rig: the reset empties the table, then the client is leased again;
 // final is the table at the judgement.
 func c4Rig(t *testing.T) (*cBoundRig, *[]sourceadapter.Lease) {
@@ -927,14 +1073,15 @@ func finalAfter(b *cBoundRig, f []sourceadapter.Lease) func(int) []sourceadapter
 
 // ---- C10 --------------------------------------------------------------
 
-// c10Rig: (a) is offered 2.5 s after its DISCOVER and starts in 5 s;
+// c10Rig: (a) is offered 2.5 s after its DISCOVER, requests at once and is
+// acknowledged offs["a-ack"] later (2.1 s), and starts in 5 s;
 // (b) sends DISCOVERs at the offsets in offs["b"] and is offered at
 // offs["b-offer"]. The table leases every container docker started.
 func c10Rig(t *testing.T) (*cRig, map[string][]time.Duration, string) {
 	r := cSetup(t, ShapeMacvlan)
 	base := containerName(r.e, NameC10)
 	r.h.wall[base+"-a"], r.h.wall[base+"-b"] = 5*time.Second, 13*time.Second
-	offs := map[string][]time.Duration{"a-offer": {2500 * ms}, "b": {0, 4 * time.Second, 12 * time.Second}, "b-offer": {12200 * ms}}
+	offs := map[string][]time.Duration{"a-offer": {2500 * ms}, "a-ack": {2100 * ms}, "a-disc": {0}, "b": {0, 4 * time.Second, 12 * time.Second}, "b-offer": {12200 * ms}}
 	r.src.fn = func(int) []sourceadapter.Lease {
 		var ls []sourceadapter.Lease
 		for _, s := range []string{"-a", "-b"} {
@@ -947,8 +1094,13 @@ func c10Rig(t *testing.T) (*cRig, map[string][]time.Duration, string) {
 	r.cap.fn = func(ident string) []DHCPMsg {
 		var out []DHCPMsg
 		if c, at, ok := r.h.container(base + "-a"); ok && (ident == "*" || ident == c.mac) {
-			out = append(out, dmsg(at, "DISCOVER", "a", c.mac, "", "255.255.255.255"),
-				dmsg(at.Add(offs["a-offer"][0]), "OFFER", "a", c.mac, c.addr, "255.255.255.255"))
+			for _, d := range offs["a-disc"] {
+				out = append(out, dmsg(at.Add(d), "DISCOVER", "a", c.mac, "", "255.255.255.255"))
+			}
+			reqAt := at.Add(offs["a-offer"][0] + 10*ms)
+			out = append(out, dmsg(at.Add(offs["a-offer"][0]), "OFFER", "a", c.mac, c.addr, "255.255.255.255"),
+				dmsg(reqAt, "REQUEST", "a", c.mac, "", "255.255.255.255"),
+				dmsg(reqAt.Add(offs["a-ack"][0]), "ACK", "a", c.mac, c.addr, "255.255.255.255"))
 		}
 		if c, at, ok := r.h.container(base + "-b"); ok && (ident == "*" || ident == c.mac) {
 			xid := ""
@@ -989,7 +1141,18 @@ func TestRunC10Judges(t *testing.T) {
 		restored int
 		edit     func(r *cRig, offs map[string][]time.Duration, base string)
 	}{
-		{"the offer was not late", BLOCKED, "the delay did not act", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["a-offer"][0] = 500 * ms }},
+		{"the ACK was not late", BLOCKED, "no ACK 2s or more after its REQUEST", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) { offs["a-ack"][0] = 50 * ms }},
+		// Run 4 (lab #125): the client retransmits its DISCOVER, the
+		// first OFFER lands right after the retransmit, and the delayed
+		// ACK is the only honest measure. Must PASS.
+		{"the DISCOVER was retransmitted (run 4)", PASS, "", 2, func(_ *cRig, offs map[string][]time.Duration, _ string) {
+			offs["a-disc"], offs["a-offer"][0] = []time.Duration{0, 4800 * ms}, 4850*ms
+		}},
+		// A server that pings before it offers is 3 s late with no netem
+		// at all; its instant ACK must still BLOCK.
+		{"a slow OFFER but an instant ACK", BLOCKED, "no ACK 2s or more after its REQUEST", 1, func(_ *cRig, offs map[string][]time.Duration, _ string) {
+			offs["a-offer"][0], offs["a-ack"][0] = 3*time.Second, 20*ms
+		}},
 		{"the run was too fast for the delay", BLOCKED, "the delay did not act", 1, func(r *cRig, _ map[string][]time.Duration, base string) { r.h.wall[base+"-a"] = 3 * time.Second }},
 		{"(a) did not start", FAIL, "(a) with a 2s reply delay the container did not start", 1, func(r *cRig, _ map[string][]time.Duration, base string) { r.h.rc[base+"-a"] = 125 }},
 		{"(b) retransmitted too little", FAIL, "2 DISCOVER(s)", 2, func(_ *cRig, offs map[string][]time.Duration, _ string) {
@@ -1131,5 +1294,67 @@ func TestRunC11IsNotApplicableOnBridgeQuotingThePluginDocs(t *testing.T) {
 	needReason(t, v, `"Bridge mode rejects the option."`)
 	if len(r.h.cmds) != 0 {
 		t.Fatalf("acted on the host: %v", r.h.cmds)
+	}
+}
+
+// A Start that stalls the way run 4's Stop did (ssh retries) is a lab
+// result, not the plugin's: C2 past its settle deadline is BLOCKED, and
+// C3 counts its window from when Start returned (lab #134).
+func TestRunC2BlocksWhenStartReturnsPastTheSettleDeadline(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	b.src.onStart = func() {
+		b.startT = time.Now()
+		time.Sleep(time.Until(b.bind.Add(cFast.c2Settle + 10*ms)))
+	}
+	v := runC2Tuned(context.Background(), b.e, cFast)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "lab: the source took until")
+	needReason(t, v, "the plugin was not judged")
+	b.needPutBack(t)
+}
+
+// The plugin sends no REQUEST between T2 and expiry (RFC 2131 4.4.5), so
+// a Start that returns after T2 leaves C2 nothing to see: BLOCKED, also
+// with the address moved as C3 expects after expiry.
+func TestRunC2BlocksWhenStartReturnsAfterT2(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	b.src.onStart = func() {
+		b.startT = time.Now()
+		time.Sleep(time.Until(b.bind.Add(cFast.c2T2 + 5*ms)))
+		b.h.setAddrs(b.name, "10.200.1.150")
+	}
+	v := runC2Tuned(context.Background(), b.e, cFast)
+	needResult(t, v, BLOCKED)
+	needReason(t, v, "lab: the source took until")
+	b.needPutBack(t)
+}
+
+func TestRunC2StartInTimeIsStillJudged(t *testing.T) {
+	b := c2Rig(t, ShapeMacvlan)
+	b.src.onStart = func() {
+		b.startT = time.Now()
+		time.Sleep(time.Until(b.bind.Add(cFast.c2T2 - 15*ms)))
+	}
+	needResult(t, runC2Tuned(context.Background(), b.e, cFast), PASS)
+}
+
+func TestRunC3CountsItsWindowFromWhenStartReturned(t *testing.T) {
+	b := c3Rig(t)
+	b.src.onStart = func() {
+		time.Sleep(cFast.c3Window + 30*ms)
+		b.startT = time.Now()
+		time.AfterFunc(40*ms, func() { b.h.setAddrs(b.name, "10.200.1.150") })
+	}
+	v := runC3Tuned(context.Background(), b.e, cFast)
+	needResult(t, v, PASS)
+	needReason(t, v, "moved from 10.200.1.101 to 10.200.1.150")
+	b.needPutBack(t)
+}
+
+// T2 of the lease the scenarios set is 105 s (RFC 2131 4.5: 0.875 of the
+// lease), derived and not a literal.
+func TestC2LatestStartIsT2OfTheLease(t *testing.T) {
+	if cDefault.c2T2 != 105*time.Second {
+		t.Fatalf("c2T2 %s, want 105s for a %d s lease", cDefault.c2T2, cDefault.lease)
 	}
 }

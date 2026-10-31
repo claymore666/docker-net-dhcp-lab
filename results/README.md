@@ -15,3 +15,6 @@ Pages:
 - [v0.1.0](v0.1.0.md), and the same lab run against [plugin v2.5.0](v0.1.0-plugin-v2.5.0.md).
 - [v0.2.0, plugin v2.6.0-rc1](v0.2.0-plugin-v2.6.0-rc1.md).
 - [v0.3.0 (run on lab dev 98899a0, before the v0.3.0 fixes), plugin v2.6.0-rc2](v0.3.0-plugin-v2.6.0-rc2.md).
+- [v0.4.0 (run on lab v0.3.0), plugin v2.7.0-rc1](v0.4.0-plugin-v2.7.0-rc1.md).
+- [v0.4.0 (run on lab dev 67c28eb, v0.3.0 plus #122), plugin v2.7.0-rc2](v0.4.0-plugin-v2.7.0-rc2.md).
+- [v0.4.0 (run on lab dev 2c3e925), plugin v2.7.0, a home Fritz.Box](v0.4.0-plugin-v2.7.0-fritzbox-home.md).

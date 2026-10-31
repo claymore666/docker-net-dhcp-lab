@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -87,6 +89,16 @@ func runContainerFixedMAC(ctx context.Context, r sourceadapter.Runner, shape Sha
 	return inspectContainer(ctx, r, shape, name)
 }
 
+// runContainerFor is runContainer for a container that must outlive the
+// default 600 s sleep: E5's soak window runs an hour or more (#15).
+func runContainerFor(ctx context.Context, r sourceadapter.Runner, shape Shape, net, name string, life time.Duration) (mac, addr, endpointID string, err error) {
+	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	if _, err = r.Run(ctx, fmt.Sprintf("sudo docker run -d --name %s --network %s alpine:3.20 sleep %d", name, net, int(life.Seconds()))); err != nil {
+		return "", "", "", fmt.Errorf("docker run: %w", err)
+	}
+	return inspectContainer(ctx, r, shape, name)
+}
+
 // runContainerWith is runContainer with extra docker-run flags, for group
 // B (#23): --mac-address, --hostname. extra is built by the caller from
 // validated values only.
@@ -107,8 +119,89 @@ func inspectField(ctx context.Context, r sourceadapter.Runner, name, field strin
 	return strings.TrimSpace(out), nil
 }
 
+// cleanupRetryBound and cleanupRetryPoll bound a container removal that
+// keeps failing; host run 5 lost the C9 container to one `docker rm -f`
+// whose ssh failed after the connect retries had run out (#139).
+var (
+	cleanupRetryBound           = 2 * time.Minute
+	cleanupRetryPoll            = 5 * time.Second
+	cleanupLog        io.Writer = os.Stderr
+)
+
+// removeContainer removes a scenario's container, retries a failure and
+// says on cleanupLog when the container is still there at the end.
 func removeContainer(ctx context.Context, r sourceadapter.Runner, name string) {
-	_, _ = r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+	if err := removeContainerVerified(ctx, r, name); err != nil {
+		fmt.Fprintf(cleanupLog, "lab: container %s could not be removed: %v\n", name, err)
+	}
+}
+
+// removeContainerVerified repeats `docker rm -f` until docker answers that
+// no container of that name is left; an ssh failure on either call is not
+// an answer. The container's macvlan or ipvlan child dies with its
+// namespace, and the next shape's ParentReady reads it (#139).
+func removeContainerVerified(ctx context.Context, r sourceadapter.Runner, name string) error {
+	deadline := time.Now().Add(cleanupRetryBound)
+	for {
+		_, err := r.Run(ctx, fmt.Sprintf("sudo docker rm -f %s", name))
+		if err == nil {
+			var out string
+			if out, err = r.Run(ctx, fmt.Sprintf("sudo docker ps -a -q --filter 'name=^/%s$'", name)); err == nil {
+				if strings.TrimSpace(out) == "" {
+					return nil
+				}
+				err = fmt.Errorf("docker ps -a still lists %s", strings.Fields(out)[0])
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("%w (after %s)", err, cleanupRetryBound)
+		}
+		if sleepCtx(ctx, cleanupRetryPoll) != nil {
+			return err
+		}
+	}
+}
+
+// RemoveLeftoverContainers removes every lab container of this cell that
+// an earlier shape or scenario left on the docker host and records the
+// names in <cell>-<shape>-leftover-containers.txt; nothing is written
+// when there are none. A container that cannot be removed is an error,
+// since its child link would hold the parent (#139).
+func RemoveLeftoverContainers(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, evidenceDir string) error {
+	if !safeNetnsName.MatchString(cell) {
+		return fmt.Errorf("lab: cell name %q is not safe to pass to a command", cell)
+	}
+	out, err := runRetrying(ctx, r, fmt.Sprintf("sudo docker ps -a --format '{{.Names}}' --filter 'name=^/lab-%s-'", cell))
+	if err != nil {
+		return fmt.Errorf("lab: could not list the containers an earlier shape left: %w", err)
+	}
+	var record strings.Builder
+	var stuck []string
+	for _, name := range strings.Fields(out) {
+		if !safeNetnsName.MatchString(name) {
+			fmt.Fprintf(&record, "skipped %q: name not safe to pass to a command\n", name)
+			stuck = append(stuck, name)
+			continue
+		}
+		if rerr := removeContainerVerified(ctx, r, name); rerr != nil {
+			fmt.Fprintf(&record, "could not remove %s: %v\n", name, rerr)
+			stuck = append(stuck, name)
+			continue
+		}
+		fmt.Fprintf(&record, "removed %s\n", name)
+	}
+	if record.Len() == 0 {
+		return nil
+	}
+	file := fmt.Sprintf("%s-%s-leftover-containers.txt", cell, shape)
+	text := "containers of this cell found on the docker host before the shape started:\n" + record.String()
+	if werr := os.WriteFile(filepath.Join(evidenceDir, file), []byte(text), 0o644); werr != nil {
+		return fmt.Errorf("leftover-containers evidence: %w", werr)
+	}
+	if len(stuck) > 0 {
+		return fmt.Errorf("lab: an earlier shape left %s on the docker host and it could not be removed (record: %s)", strings.Join(stuck, ", "), file)
+	}
+	return nil
 }
 
 func waitContainerRunning(ctx context.Context, r sourceadapter.Runner, name string) error {

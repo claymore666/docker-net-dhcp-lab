@@ -203,6 +203,9 @@ func runB3(ctx context.Context, e Env) Verdict {
 }
 
 func runB3Tuned(ctx context.Context, e Env, tries int, gap time.Duration) Verdict {
+	if v, ok := bIPAMNA(NameB3, e); ok {
+		return v
+	}
 	if _, err := netip.ParseAddr(e.SourceAddr); err != nil {
 		return fail(NameB3, e.Cell, e.Shape, fmt.Sprintf("no source segment address to query (%q): %v", e.SourceAddr, err), nil, e.GitSHA)
 	}

@@ -320,39 +320,162 @@ func addrOffset(from, to netip.Addr) uint32 {
 		(uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3]))
 }
 
-var openwrtLeaseTimeRE = regexp.MustCompile(`^[0-9]+[smhdw]?$`)
+// openwrtGenConf is where dnsmasq.init writes the config it generates
+// from uci and netifd's view of lan (the file name carries a section id).
+const openwrtGenConf = "/var/etc/dnsmasq.conf.*"
 
-// Renumber moves eth1 by hand and serves the new subnet from
-// openwrtLabConf. The uci lan range follows netifd's view of lan, which
-// still names the old subnet, so dnsmasq leaves it unused; netifd is not
-// reloaded because the management link shares it (lab #9).
+var openwrtRangeRE = regexp.MustCompile(`(?m)^dhcp-range=(.*)$`)
+
+// openwrtLabRange marks the lab conf's vendor-class pool, which is not
+// the lan pool and keeps the first subnet.
+const openwrtLabRange = "tag:b5"
+
+// Renumber moves lan through uci and netifd, so that netifd, the uci
+// dhcp section and dnsmasq.init agree on the new subnet (lab #127). The
+// hand-made eth1 move of run 4 left netifd's view of lan on the old
+// subnet and the source kept serving it. The lab conf keeps its lines
+// and only its router option changes. Before it returns, the source is
+// read back: eth1 carries exactly the new address, the generated dnsmasq
+// config names the pool in the new subnet and no other, and the router
+// option is the new address; any other state is an error, never a
+// judged scenario. Only network.lan changes, because the management
+// link shares netifd (lab #9).
 func (a *OpenwrtAdapter) Renumber(ctx context.Context, subnet, addr, first, last string) (func(context.Context) error, error) {
 	p, err := validateRenumber(subnet, addr, first, last)
 	if err != nil {
 		return nil, err
 	}
-	lt, err := a.Runner.Run(ctx, uciCmd("get", "dhcp.lan.leasetime"))
+	h := a.host()
+	oldAddrs, err := h.segmentAddrs(ctx, a.Runner)
 	if err != nil {
-		return nil, fmt.Errorf("openwrt: read the lease time: %w", err)
+		return nil, fmt.Errorf("openwrt: %w", err)
 	}
-	lt = strings.TrimSpace(lt)
-	if !openwrtLeaseTimeRE.MatchString(lt) {
-		return nil, fmt.Errorf("openwrt: lease time %q is not a dnsmasq duration", lt)
+	if len(oldAddrs) == 0 {
+		return nil, fmt.Errorf("openwrt: %s carries no IPv4 address to restore later", h.nic)
 	}
-	render := func(orig string, p renumberPlan) (string, error) {
-		if _, err := onlyMatch(dnsmasqRouterOptionRE, orig, "router options"); err != nil {
-			return "", err
+	files := []string{openwrtNetConf, openwrtDHCPConf, openwrtLabConf}
+	orig := map[string]string{}
+	for _, f := range files {
+		s, err := a.Runner.Run(ctx, "sudo cat "+f)
+		if err != nil {
+			return nil, fmt.Errorf("openwrt: read %s before renumbering: %w", f, err)
 		}
-		var keep []string
-		for _, line := range strings.Split(strings.TrimSuffix(orig, "\n"), "\n") {
-			if strings.HasPrefix(line, "#") {
-				keep = append(keep, line)
+		if !strings.HasSuffix(s, "\n") {
+			return nil, fmt.Errorf("openwrt: %s does not end in a newline, cannot write it back byte for byte", f)
+		}
+		orig[f] = s
+	}
+	if _, err := onlyMatch(dnsmasqRouterOptionRE, orig[openwrtLabConf], "router options"); err != nil {
+		return nil, fmt.Errorf("openwrt: %w", err)
+	}
+	conf := dnsmasqRouterOptionRE.ReplaceAllString(orig[openwrtLabConf], "dhcp-option=3,"+p.addr.String())
+	start := addrOffset(p.subnet.Addr(), p.first)
+	limit := addrOffset(p.first, p.last) + 1
+	cidr := netip.PrefixFrom(p.addr, p.subnet.Bits())
+
+	restore := func(ctx context.Context) error {
+		var errs []error
+		for _, f := range files {
+			errs = append(errs, writeRemoteConfig(ctx, a.Runner, f, orig[f]))
+		}
+		errs = append(errs, a.reloadNetwork(ctx, oldAddrs), a.Restart(ctx))
+		if err := errors.Join(errs...); err != nil {
+			return fmt.Errorf("openwrt: renumber restore: %w", err)
+		}
+		return nil
+	}
+	undo := func(err error) (func(context.Context) error, error) {
+		return nil, errors.Join(fmt.Errorf("openwrt: renumber to %s: %w", p.subnet, err), restore(context.WithoutCancel(ctx)))
+	}
+	uci := strings.Join([]string{
+		uciCmd("delete", "network.lan.ipaddr"), uciCmd("add_list", "network.lan.ipaddr="+cidr.String()),
+		uciCmd("set", fmt.Sprintf("dhcp.lan.start=%d", start)), uciCmd("set", fmt.Sprintf("dhcp.lan.limit=%d", limit)),
+		uciCmd("commit", "network"), uciCmd("commit", "dhcp")}, " && ")
+	if _, err := a.Runner.Run(ctx, uci); err != nil {
+		return undo(fmt.Errorf("uci: %w", err))
+	}
+	if err := writeRemoteConfig(ctx, a.Runner, openwrtLabConf, conf); err != nil {
+		return undo(err)
+	}
+	if err := a.reloadNetwork(ctx, []netip.Prefix{cidr}); err != nil {
+		return undo(err)
+	}
+	if err := a.Restart(ctx); err != nil {
+		return undo(err)
+	}
+	// A settle: netifd must not put the old address back behind us.
+	if _, err := a.Runner.Run(ctx, "sleep 2"); err != nil {
+		return undo(err)
+	}
+	if err := a.verifyRenumber(ctx, p, cidr); err != nil {
+		return undo(err)
+	}
+	return restore, nil
+}
+
+// reloadNetwork reloads netifd (the changed lan only) and waits until
+// eth1 carries exactly want.
+func (a *OpenwrtAdapter) reloadNetwork(ctx context.Context, want []netip.Prefix) error {
+	if _, err := a.Runner.Run(ctx, openwrtService("network").restart); err != nil {
+		return fmt.Errorf("network reload: %w", err)
+	}
+	var got []netip.Prefix
+	var err error
+	for i := 0; i < 20; i++ {
+		if got, err = a.host().segmentAddrs(ctx, a.Runner); err == nil && fmt.Sprint(got) == fmt.Sprint(want) {
+			return nil
+		}
+		if _, serr := a.Runner.Run(ctx, "sleep 1"); serr != nil {
+			return serr
+		}
+	}
+	return fmt.Errorf("%s carries %v 20 s after the network reload, want %v (%v)", segmentNIC, got, want, err)
+}
+
+// verifyRenumber reads the source's own state: the address on eth1, the
+// pool dnsmasq.init generated, and the router option (lab #127).
+func (a *OpenwrtAdapter) verifyRenumber(ctx context.Context, p renumberPlan, cidr netip.Prefix) error {
+	got, err := a.host().segmentAddrs(ctx, a.Runner)
+	if err != nil {
+		return err
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]netip.Prefix{cidr}) {
+		return fmt.Errorf("source check: %s carries %v, want only %v", segmentNIC, got, cidr)
+	}
+	gen, err := a.Runner.Run(ctx, "sudo cat "+openwrtGenConf)
+	if err != nil {
+		return fmt.Errorf("source check: read the generated dnsmasq config: %w", err)
+	}
+	served := false
+	for _, m := range openwrtRangeRE.FindAllStringSubmatch(gen, -1) {
+		if strings.Contains(m[1], openwrtLabRange) {
+			continue
+		}
+		var ips []netip.Addr
+		for _, f := range strings.Split(m[1], ",") {
+			if ip, err := netip.ParseAddr(f); err == nil && ip.Is4() {
+				ips = append(ips, ip)
 			}
 		}
-		return fmt.Sprintf("%s\ndhcp-option=3,%s\ndhcp-range=%s,%s,%s,%s\n", strings.Join(keep, "\n"), p.addr, p.first, p.last, p.netmask(), lt), nil
+		if len(ips) < 2 {
+			continue
+		}
+		if !p.subnet.Contains(ips[0]) || !p.subnet.Contains(ips[1]) {
+			return fmt.Errorf("source check: dnsmasq still serves %s - %s, outside %s", ips[0], ips[1], p.subnet)
+		}
+		served = served || ips[0] == p.first
 	}
-	return a.host().renumberVia(ctx, a.Runner, openwrtLabConf, p, render,
-		func(ctx context.Context) error { return a.Restart(ctx) }, "openwrt")
+	if !served {
+		return fmt.Errorf("source check: the generated dnsmasq config has no pool starting at %s", p.first)
+	}
+	lab, err := a.Runner.Run(ctx, "sudo cat "+openwrtLabConf)
+	if err != nil {
+		return fmt.Errorf("source check: read %s: %w", openwrtLabConf, err)
+	}
+	if r, err := onlyMatch(dnsmasqRouterOptionRE, lab, "router options"); err != nil || r != "dhcp-option=3,"+p.addr.String() {
+		return fmt.Errorf("source check: router option is %q (%v), want %s", r, err, p.addr)
+	}
+	return nil
 }
 
 func (a *OpenwrtAdapter) Ready(ctx context.Context) error {

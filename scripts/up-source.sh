@@ -230,10 +230,10 @@ ready_cloud_init() {
 		lab@"$mgmt_ip" 'test -f /var/lib/cloud/lab-bootstrap-done' 2>/dev/null
 }
 
-# qga (CHR, #9): RouterOS has no cloud-init. The three scripts and the key
-# go to the VM through its guest agent once it boots; seed-chr.sh does it
-# from ready_qga, which polls until the identity the seed sets last reads
-# back over ssh as lab.
+# qga (CHR, #9): RouterOS has no cloud-init. Its guest agent sets the mgmt
+# address once it boots, then the stock admin uploads the three scripts and
+# the key (#130); seed-chr.sh does it from ready_qga, which polls until
+# the identity the seed sets last reads back over ssh as lab.
 seed_qga() {
 	if [ -n "$partner_seg$relay_client" ]; then
 		echo "up-source: REFUSED -- the qga seed builds a single source with no relay" >&2
@@ -259,12 +259,16 @@ seed_qga() {
 
 # seed-chr.sh exits 1 while the agent or sshd is not up yet; 2 is a refusal.
 # A seeded CHR the lab key cannot log in to says why on every poll (#9).
-ready_qga() {
-	local id
-	id=$(ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
+lab_identity() {
+	ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
 		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
 		-o ControlMaster=no -o ControlPath=none -i ~/.ssh/id_ed25519_lab \
-		lab@"$mgmt_ip" ':put [/system identity get name]' 2>"$WORK/lab-login.err" | tr -d '\r') || true
+		lab@"$mgmt_ip" ':put [/system identity get name]' 2>"$WORK/lab-login.err" | tr -d '\r'
+}
+
+ready_qga() {
+	local id
+	id=$(lab_identity) || true
 	[ "$id" = lab-ready ] && return 0
 	local rc=0
 	"$REPO_ROOT/scripts/seed-chr.sh" "$domain" "$seed_dir" "$mgmt_ip" "$known_hosts" || rc=$?
@@ -273,6 +277,9 @@ ready_qga() {
 		exit 1
 	fi
 	if [ "$rc" = 0 ]; then
+		# The seed just ran: read the login again, the first read predates it.
+		id=$(lab_identity) || true
+		[ "$id" = lab-ready ] && return 0
 		echo "up-source: $domain is seeded, but the lab login read identity \"$id\": $(tr -d '\r' <"$WORK/lab-login.err")" >&2
 	fi
 	return 1

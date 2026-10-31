@@ -27,6 +27,9 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq dnsmasq-base iputils-arping
   # E3b (#15): VLAN 100 sub-interface for the second pool. The plugin's
   # -o vlan=100 makes the matching eth1.100 on the docker host.
+  # link names the netplan id seg0 of source-network-config.tmpl.yaml, not the
+  # kernel name eth1: netplan refuses "interface eth1 is not defined" and the
+  # VLAN never exists (#121).
   - |
     cat >/etc/netplan/60-lab-vlan.yaml <<'NETEOF'
     network:
@@ -34,7 +37,7 @@ runcmd:
       vlans:
         eth1.100:
           id: 100
-          link: eth1
+          link: seg0
           addresses: [10.200.153.2/24]
     NETEOF
   - chmod 600 /etc/netplan/60-lab-vlan.yaml
@@ -65,11 +68,14 @@ runcmd:
     ra-param=eth1,10,1800
     DNSMASQEOF
   # E3b (#15): the VLAN 100 pool is a drop-in, so the adapter's edits of
-  # dnsmasq.conf still see exactly the main and the class range.
+  # dnsmasq.conf still see exactly the main and the class range. Its own
+  # option 3: the global one is the segment address, which a client on the
+  # VLAN subnet cannot route to (macvlan create failed, host run 4, #121).
   - |
     cat >/etc/dnsmasq.d/lab-vlan.conf <<'DNSMASQEOF'
     interface=eth1.100
-    dhcp-range=10.200.153.100,10.200.153.200,12h
+    dhcp-range=set:vlan100,10.200.153.100,10.200.153.200,12h
+    dhcp-option=tag:vlan100,3,10.200.153.2
     DNSMASQEOF
   - systemctl enable --now dnsmasq
   - touch /var/lib/cloud/lab-bootstrap-done

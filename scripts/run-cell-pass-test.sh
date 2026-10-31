@@ -23,7 +23,9 @@ stub() {
 	chmod +x "$1"
 }
 stub "$fake/scripts/capture-check-regenerate.sh" 'echo "regen|${3:-none}" >>"$CALLS"'
-for s in up-cell.sh capture-source-config-diff.sh down-cell.sh; do
+# UP_RC makes the bring-up fail, with UP_MSG on stderr (#130).
+stub "$fake/scripts/up-cell.sh" '[ -z "${UP_RC:-}" ] || { printf "%s\n" "${UP_MSG:-}" >&2; exit "$UP_RC"; }'
+for s in capture-source-config-diff.sh down-cell.sh; do
 	stub "$fake/scripts/$s" 'exit 0'
 done
 stub "$fake/scripts/capture-start.sh" ': >"$3/observer.ready"'
@@ -31,7 +33,7 @@ stub "$fake/scripts/capture-stop.sh" 'echo "$1" >"$2/observer.pcap"'
 stub "$tmp/bin/git" 'echo 0000000'
 # every peer answers its own address; the docker host's journal is $JOURNAL
 stub "$tmp/bin/ssh" 'case "$*" in
-*"journalctl -u docker"*) echo "plugin=1234 $JOURNAL" ;;
+*"journalctl -u docker"*) echo "journal|$*" >>"$CALLS"; echo "plugin=1234 $JOURNAL" ;;
 *dpkg-query*) echo "ver-$(echo "$*" | grep -oE "lab@[0-9.]+" | cut -d@ -f2)" ;;
 *) echo stub ;;
 esac'
@@ -82,7 +84,17 @@ expect() {
 ev() { echo "$tmp/$1/evidence"; }
 
 # #95: a main pass, a retry pass and a third pass each keep the one before.
+start=$(date -u +%s)
 run main pair || { cat "$tmp/main/out" >&2; fail=1; }
+end=$(date -u +%s)
+
+# #141: the journal is read from the cell's own start, not a fixed window
+# a long cell outruns.
+since=$(grep '^journal|' "$tmp/main/calls" | grep -oE "since '[^']*'" | head -1)
+expect "the journal was not read from an absolute UTC time: $since" 'grep -qxE "since .[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} UTC." <<<"$since"'
+# shellcheck disable=SC2034 # read inside the expect strings below
+since_s=$(date -u -d "$(echo "$since" | cut -d"'" -f2)" +%s 2>/dev/null || echo 0)
+expect "the journal since $since is not the cell's start less 5 min (start $start, end $end)" '[ "$since_s" -ge $((start - 300)) ] && [ "$since_s" -le $((end - 300)) ]'
 expect "the main pass's journal is not in t-pair-plugin-log.txt" 'grep -q '\''J-main'\'' "$(ev main)/t-pair-plugin-log.txt"'
 expect "a main pass wrote a .retry journal" '[ ! -e "$(ev main)/t-pair-plugin-log.retry.txt" ]'
 
@@ -133,6 +145,31 @@ expect "a labctl that said nothing gets no generic reason: $(grep '^abort|' "$tm
 expect "shapes that finished asked for BLOCKED rows" '[ "$(grep -c '\''^abort|'\'' "$tmp/main/calls")" -eq 0 ]'
 run die3 pair DIE_SHAPE=bridge DIE_RC=3 'DIE_MSG=pool too small' || true
 expect "exit 3 (its own BLOCKED rows, cell aborted) asked for abort rows or kept running shapes" '[ "$(grep -c '\''^abort|'\'' "$tmp/die3/calls")" -eq 0 ] && [ "$(grep -c '\''^run '\'' "$tmp/die3/calls")" -eq 1 ]'
+
+# #130: a cell that does not come up ends with BLOCKED rows that name the
+# reason in every shape, a non-zero exit, and no scenario run.
+if run up-fails pair UP_RC=1 'UP_MSG=noise line
+up-source: REFUSED -- seed-chr exited 2' ; then
+	echo "$t: FAIL -- run-cell exited 0 after a failed bring-up" >&2
+	fail=1
+fi
+expect "a failed bring-up still ran scenarios" '[ "$(grep -c '\''^run '\'' "$tmp/up-fails/calls")" -eq 0 ]'
+expect "a failed bring-up did not write BLOCKED rows for the five shapes: $(grep '^abort|' "$tmp/up-fails/calls")" '[ "$(grep -c '\''^abort|'\'' "$tmp/up-fails/calls")" -eq 5 ]'
+expect "the BLOCKED rows lack the lab-error reason" '[ "$(grep -c '\''^abort|.*|the cell did not come up (lab error, not a plugin finding): up-source: REFUSED -- seed-chr exited 2$'\'' "$tmp/up-fails/calls")" -eq 5 ]'
+expect "the shapes are not the five of a cell" '[ "$(grep "^abort|" "$tmp/up-fails/calls" | cut -d"|" -f2 | tr "\n" " ")" = "bridge macvlan ipvlan bridge-ipam macvlan-ipam " ]'
+expect "run-cell printed no FAIL line for a failed bring-up" 'grep -q "^run-cell: FAIL -- the cell did not come up" "$tmp/up-fails/out"'
+expect "a failed bring-up left no resolved lab.json for the matrix" '[ -s "$(ev up-fails)/t-pair-resolved-lab.json" ]'
+run up-silent pair UP_RC=7 || true
+expect "a silent bring-up failure has no named reason: $(grep '^abort|' "$tmp/up-silent/calls" | head -1)" 'grep -q "^abort|bridge|.*|the cell did not come up (lab error, not a plugin finding): up-cell exited with status 7$" "$tmp/up-silent/calls"'
+
+# #130: of several bring-up lines only the last two name the reason, joined by
+# a space; earlier ones (the first cause of a cascade) are not in the row.
+run up-many pair UP_RC=1 'UP_MSG=up-cell: first cause
+up-source: middle
+seed-chr: last but one
+up-cell: the end' || true
+expect "a bring-up with four named lines did not keep exactly the last two: $(grep '^abort|bridge|' "$tmp/up-many/calls")" '[ "$(grep "^abort|bridge|" "$tmp/up-many/calls")" = "abort|bridge|$(ev up-many)|the cell did not come up (lab error, not a plugin finding): seed-chr: last but one up-cell: the end" ]'
+expect "an earlier bring-up line leaked into the reason" '! grep -qE "first cause|middle" "$tmp/up-many/calls"'
 
 [ "$fail" -eq 0 ] && echo "$t: PASS"
 exit "$fail"

@@ -157,13 +157,17 @@ func ParentBusyReason(parent string, window time.Duration, left []ParentChild) s
 }
 
 // ParentReady is the between-shapes step, run before every shape: it waits
-// for a clean SegmentNIC, writes the wait to <cell>-<shape>-parent-ready.txt
+// for a clean SegmentNIC after removing the cell's leftover containers
+// (#139), writes the wait to <cell>-<shape>-parent-ready.txt
 // in evidenceDir and returns a non-empty blocked reason when the parent
 // never cleared.
 func ParentReady(ctx context.Context, r sourceadapter.Runner, cell string, shape Shape, evidenceDir string, window, poll time.Duration) (blocked string, err error) {
 	// The bridge shapes too: the kernel will not make a NIC with a macvlan
 	// or ipvlan child a bridge port, and bridge-ipam ended as an
 	// infrastructure error behind such a child in the 2026-10-09 run (lab#38).
+	if err := RemoveLeftoverContainers(ctx, r, cell, shape, evidenceDir); err != nil {
+		return "", err
+	}
 	report, left, werr := WaitParentClean(ctx, r, SegmentNIC, window, poll)
 	name := fmt.Sprintf("%s-%s-parent-ready.txt", cell, shape)
 	if err := os.WriteFile(filepath.Join(evidenceDir, name), []byte(report), 0o644); err != nil {
