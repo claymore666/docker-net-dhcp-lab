@@ -19,12 +19,12 @@ The run before it: [967 PASS, 931 N/A, 79 FAIL, 2110 BLOCKED](results/v0.4.0-plu
 plugin v2.7.0-rc1 on lab v0.3.0, fifteen cells, 2026-10-29. Six cells ran
 their scenarios; six were stopped on every row by one lab defect (#121,
 fixed in #122) and re-run in the newest run. Its plugin finding, D4b
-(prefix withdrawn, plugin #1412), is fixed in v2.7.0-rc2.
+(the route of a withdrawn prefix, plugin #1412), is fixed in v2.7.0-rc2.
 
 Earlier runs: [1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md),
 plugin v2.6.0-rc2 on the lab as it stood before the v0.3.0 fixes (lab
-98899a0), fourteen cells, thirteen of them with verdicts.
-Earlier run: [1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)
+98899a0), fourteen cells, thirteen of them with verdicts; and
+[1030 PASS, 781 N/A, 264 FAIL, 592 BLOCKED](results/v0.2.0-plugin-v2.6.0-rc1.md)
 in docker-net-dhcp-lab v0.2.0 against plugin v2.6.0-rc1, fourteen cells.
 
 Oldest run: [504 PASS, 6 N/A, 0 FAIL](results/v0.1.0.md) in
@@ -314,18 +314,20 @@ scripts/down-cell.sh kea <work-dir>
 | Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
 | A physical Fritz.Box (v0.4.0, #13) | `fritzbox` | no host run yet: the cell loads, its adapter is a placeholder (`internal/sourceadapter/fritzbox.go`) |
 
-Work for v0.3.0 and v0.4.0 is on `dev` and has no host run yet, so none of
-it appears on a results page:
+Work on `dev` that has no verdicts on a results page yet:
 
 - **Fritz.Box cell** (#13, v0.4.0): the `fritzbox` cell and its schema are in
   `lab.yaml`; the adapter is a placeholder that reads nothing.
 - **Windows Server 2025 image** (#14, v0.4.0): `scripts/build-windows-image.sh`
   builds the evaluation image the `windows` cell boots. The cell is in
   `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
-  first host build are still to come, and `labctl` refuses the cell until then.
-- **Server events** (#15): Kea, ISC dhcpd and dnsmasq list the DHCP
-  messages they logged, and E1 and E2 judge the plugin's ledger and metrics
-  against them (group E above). E3a and E3b need no server events.
+  first host build are still to come, so the cell is skipped as
+  `skipped-image` (67 BLOCKED on the v0.4.0 rc1 page).
+
+**Server events** (#15) have their first verdicts on the v0.4.0 pages: Kea,
+ISC dhcpd and dnsmasq list the DHCP messages they logged, and E1 and E2
+judge the plugin's ledger and metrics against them (group E above). E3a and
+E3b need no server events.
 
 Pi-hole's FTL is an embedded dnsmasq that rebuilds its dnsmasq config from
 `pihole.toml` on every start, so the lab never edits the toml: scenario
