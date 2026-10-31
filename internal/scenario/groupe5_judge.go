@@ -91,7 +91,9 @@ func e5Bounds(held, lease time.Duration) (floor, ceiling int) {
 // judgeE5 -- every container keeps the address it started with for the
 // whole window, the source logs no NAK, DECLINE or RELEASE for it, and
 // the source's own log counts at least the renewals the lease required
-// and never a lapse or a second DISCOVER (#15 soak).
+// and never a lapse or a second DISCOVER (#15 soak). Renewals and
+// DISCOVERs are counted up to the capture's last ACK; lapses over every
+// ACK the source logged.
 func judgeE5(o e5Obs) fOutcome {
 	label := fmt.Sprintf("accelerated soak (%ds lease, %s window)", o.Lease, o.Window)
 	var fails, blocks, parts []string
@@ -149,8 +151,11 @@ func judgeE5(o e5Obs) fOutcome {
 		if b := eCount(ex, eBound); b != 1 {
 			fails = append(fails, fmt.Sprintf("%s: %d DISCOVER-started exchanges, want the one bind: the lease was lost and acquired again", m.Name, b))
 		}
-		for j := 1; j < len(sg); j++ {
-			if gap := sg[j].First.Sub(sg[j-1].First); gap >= lease {
+		// the gap check reads every ACK the source logged, past the cut too (#15):
+		// a capture that stopped early must not hide a lapse after it
+		all := serverGroups(acks[i])
+		for j := 1; j < len(all); j++ {
+			if gap := all[j].First.Sub(all[j-1].First); gap >= lease {
 				fails = append(fails, fmt.Sprintf("%s: %s between two ACKs on the source's clock, at or past the %s lease: the lease lapsed", m.Name, gap, lease))
 			}
 		}

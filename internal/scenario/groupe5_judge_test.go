@@ -191,6 +191,34 @@ func TestJudgeE5CutsTheSourceAtTheCapture(t *testing.T) {
 	wantOutcome(t, judgeE5(o), FAIL, "the source logged NAK for 02:aa:bb:cc:dd:01")
 }
 
+// A capture that stopped more than a lease before the cut must not hide
+// a lapse the source logged after it (row 3, lab #15 review).
+func TestJudgeE5LapseAfterTheCaptureEndsFails(t *testing.T) {
+	o := happyE5()
+	a, wa := e5Run(eMAC, eIP, 20, 80, 40*time.Second)
+	a = append(a, e5Srv("ACK", eMAC, eIP, 140), e5Srv("ACK", eMAC, eIP, 160), e5Srv("ACK", eMAC, eIP, 180))
+	o.Fresh = append(a, o.Fresh[10:]...)
+	o.Members[0].Wire = wa
+	o.Cut = eAt(185)
+	wantOutcome(t, judgeE5(o), FAIL, "c1: 1m0s between two ACKs on the source's clock, at or past the 40s lease")
+	// the same short capture over a source without the gap is only lag
+	b, _ := e5Run(eMAC, eIP, 20, 180, 40*time.Second)
+	o.Fresh = append(b, o.Fresh[len(a):]...)
+	wantOutcome(t, judgeE5(o), PASS, "c1 kept 10.200.1.150: 4 renewals")
+}
+
+// The lease is the longest option 51 the wire shows, not the last.
+func TestGrantedLeaseIsTheLongest(t *testing.T) {
+	w := withLease(cat(boundWire("b0", eIP, 0)), 120*time.Second)
+	w = append(w, withLease(renewWire("r1", eIP, 20), 40*time.Second)...)
+	if got := grantedLease(w, eIP); got != 120*time.Second {
+		t.Fatalf("grantedLease = %s, want 2m0s", got)
+	}
+	if got := grantedLease(w, "10.200.1.99"); got != 0 {
+		t.Fatalf("grantedLease of another address = %s, want 0", got)
+	}
+}
+
 // A definite failure on one member is not hidden by another's block.
 func TestJudgeE5FailOutranksBlock(t *testing.T) {
 	o := happyE5()

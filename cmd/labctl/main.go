@@ -205,9 +205,10 @@ func hostPart(cidr string) string { return strings.SplitN(cidr, "/", 2)[0] }
 
 // cellEnv builds the cell half of a run's Env: the source adapter, wrapped
 // with the relay's Ready checks and Recover in a relay cell, and the router,
-// source, relay and second-capture fields (#11). dial opens a runner on a
-// management address; cmdRun fills the shape half.
-func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
+// source, relay and second-capture fields (#11), and E5's soak parameters
+// (#15). dial opens a runner on a management address; cmdRun fills the
+// shape half.
+func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDir string, soak scenario.SoakParams, dial func(host string) sourceadapter.Runner) (scenario.Env, error) {
 	// One runner per host, so the adapter and the relay's source probes
 	// share the primary's retry state.
 	sourceHost := hostPart(cell.Source.MgmtAddress)
@@ -231,6 +232,7 @@ func cellEnv(ctx context.Context, cell *labyaml.Cell, cellName, repoRoot, workDi
 		PoolEnd:   cell.Source.PoolEnd,
 		Capture:   scenario.ObserverCapture{Cell: cellName, RepoRoot: repoRoot},
 		VLAN:      scenario.ObserverVLAN{Cell: cellName, Bridge: cell.Segment.Bridge},
+		Soak:      soak,
 	}
 	hostImage, err := labyaml.LookupBaseImage(cell.DockerHost.BaseImage)
 	if err != nil {
@@ -560,7 +562,7 @@ func cmdRun(args []string) int {
 	hostRunner := &scenario.BusyCapture{Cell: cellName, EvidenceDir: evidenceDir, Log: os.Stderr,
 		Inner: &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: hostMgmtIP, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}}
-	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, func(host string) sourceadapter.Runner {
+	env, err := cellEnv(context.Background(), cell, cellName, repoRoot, workDir, soak, func(host string) sourceadapter.Runner {
 		return &sourceadapter.RetryRunner{Bound: 5 * time.Minute, Poll: 2 * time.Second, Log: os.Stderr,
 			Inner: sourceadapter.SSHRunner{Host: host, User: "lab", KeyPath: keyPath, KnownHosts: knownHosts}}
 	})
@@ -569,7 +571,6 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	source := env.Source
-	env.Soak = soak
 
 	gitSHA, err := gitRevParseHEAD(repoRoot)
 	if err != nil {

@@ -268,6 +268,28 @@ func TestRunE5HostEvents(t *testing.T) {
 	}
 }
 
+// Row 5: a container re-attached under the same start time and address
+// is a restart, not a PASS; and a plugin restart that comes with a
+// container restart is BLOCKED (the engine restarted), never a FAIL.
+func TestRunE5ReattachedAndEngineRestartBlock(t *testing.T) {
+	r := e5Setup(t, ShapeBridge)
+	r.onWindow = func() { r.h.containers[containerName(r.e, NameE5)+"-1"].endpointID = "reattached" }
+	v := r.run()
+	needResult(t, v, BLOCKED)
+	if !strings.Contains(v.Reason, "restarted inside the window") {
+		t.Errorf("reason %q", v.Reason)
+	}
+
+	r = e5Setup(t, ShapeBridge)
+	r.h.pids = []string{"4242", "5151"}
+	r.onWindow = func() { r.h.started[containerName(r.e, NameE5)+"-2"] = "2026-10-31T10:30:00Z" }
+	v = r.run()
+	needResult(t, v, BLOCKED)
+	if !strings.Contains(v.Reason, "pid 4242, then 5151") {
+		t.Errorf("reason %q", v.Reason)
+	}
+}
+
 // Row 2 and 13: docker reporting another address, or the source's table
 // losing the lease, fails.
 func TestRunE5EndStateFails(t *testing.T) {
