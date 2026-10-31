@@ -159,6 +159,12 @@ grep -qF "$LAB_PUBKEY" "$fl" || bad "the lab key is not baked"
 n=$(grep -n 'WriteAllText.*bootstrap-done' "$fl" | cut -d: -f1)
 [ "$(sed -n "$((n + 1))p" "$fl")" = "    Stop-Computer -Force" ] || bad "the marker is not followed by Stop-Computer"
 grep -qF "'$id'" "$fl" || bad "the rendered marker is not the printed id"
+# A NIC on a new PCI path keeps its name on the absent adapter (lab #14):
+# absent virtio NICs are removed before any rename.
+rm_line=$(grep -n "pnputil.exe /remove-device" "$fl" | head -n 1 | cut -d: -f1 || true)
+ren_line=$(grep -n "Rename-NetAdapter" "$fl" | head -n 1 | cut -d: -f1 || true)
+[ -n "$rm_line" ] && [ -n "$ren_line" ] && [ "$rm_line" -lt "$ren_line" ] || bad "absent virtio NICs are not removed before the rename"
+grep -qF -- "-not \$_.Present -and \$_.FriendlyName -like 'Red Hat VirtIO Ethernet*'" "$fl" || bad "the NIC cleanup is not limited to absent virtio NICs"
 
 if command -v pwsh >/dev/null; then
 	# shellcheck disable=SC2016 # the PowerShell program is a literal

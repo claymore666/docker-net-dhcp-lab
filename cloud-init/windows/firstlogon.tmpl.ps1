@@ -22,6 +22,12 @@ try {
     if (-not (Test-Stage 'net')) {
         $netconfig = @'
 $ErrorActionPreference = 'Stop'
+# A NIC on another PCI path is a new adapter to Windows, and the old one,
+# no longer present, keeps its name: the rename below then fails and the
+# NIC stays unaddressed (measured: an image built with a display, booted
+# without one, lab #14). Absent virtio NICs are removed first.
+Get-PnpDevice -Class Net | Where-Object { -not $_.Present -and $_.FriendlyName -like 'Red Hat VirtIO Ethernet*' } |
+    ForEach-Object { & pnputil.exe /remove-device $_.InstanceId | Out-Null }
 $nics = @(
     @{ Mac = '__MGMT_MAC__'; Name = 'mgmt'; Ip = '__MGMT_IP__'; Prefix = __MGMT_PREFIX__; Gw = '__MGMT_GW__' },
     @{ Mac = '__SEG_MAC__'; Name = 'seg'; Ip = '__SEG_IP__'; Prefix = __SEG_PREFIX__; Gw = '' }
