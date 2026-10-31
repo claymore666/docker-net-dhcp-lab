@@ -347,6 +347,7 @@ func c5StartOutage(ctx context.Context, e Env, scenario string, pc sourceadapter
 		v := fail(scenario, e.Cell, e.Shape, fmt.Sprintf("with the primary down the container started but %v", err), nil, e.GitSHA)
 		return o, cleanup, &v
 	}
+	// c1WallMax is C1's own 40.5 s maximum (34 s plus the start allowance), not the 34 s of the docs.
 	if o.wall > c1WallMax {
 		v := fail(scenario, e.Cell, e.Shape, fmt.Sprintf("with the primary down the lease took %s, over C1's %s bound", o.wall.Round(10*time.Millisecond), c1WallMax), nil, e.GitSHA)
 		return o, cleanup, &v
