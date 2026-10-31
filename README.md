@@ -9,11 +9,18 @@ Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
 **[1272 PASS, 890 N/A, 160 FAIL, 358 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc2.md)**
-in the newest host run: plugin v2.7.0-rc2 on lab dev 67c28eb (v0.3.0 plus
-the #122 fix), eight cells, 2026-10-30. Most FAIL and BLOCKED rows are three
+in the newest run on the lab's virtual cells: plugin v2.7.0-rc2 on lab dev
+67c28eb (v0.3.0 plus the #122 fix), eight cells, 2026-10-30. Most FAIL and BLOCKED rows are three
 lab teardown defects (#137, #138, #139, fixed in #140) and host load; the
 plugin finding is the relay cell: no renewal at T1 behind a relay (plugin
-#1419). The page lists the issue behind every non-PASS group.
+#1419). The page lists the issue behind every non-PASS group. The lab
+fixes made after that run (judges, teardown, OpenWrt, chr, the soak scenario
+E5) have no full host run yet.
+
+A real router has its own page: plugin v2.7.0 against a home Fritz.Box,
+[31 PASS, 3 FAIL, 102 N/A](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md),
+2026-10-31, 18 scenarios that do not disturb the home network, macvlan and
+macvlan-ipam only.
 
 The run before it: [967 PASS, 931 N/A, 79 FAIL, 2110 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc1.md),
 plugin v2.7.0-rc1 on lab v0.3.0, fifteen cells, 2026-10-29. Six cells ran
@@ -303,7 +310,7 @@ scripts/down-cell.sh kea <work-dir>
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) for kea and dnsmasq, [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) for isc-dhcp |
 | udhcpd | `udhcpd` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
 | Pi-hole | `pihole` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) (all five shapes ran; the v0.3.0 page had the macvlan shape only) |
-| MikroTik CHR | `chr` | no verdicts yet: the base image could not be built in the v0.3.0 page's run (#92, fixed), and in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run the guest never answered the lab (#130, open) |
+| MikroTik CHR | `chr` | no verdicts yet: the base image could not be built in the v0.3.0 page's run (#92, fixed), and in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run the guest never answered the lab (#130; the seed now uploads over the admin login, #144; not re-run) |
 | OpenWrt 25.12 | `openwrt` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 145 PASS, 11 FAIL (the v0.3.0 page's 117 FAIL were the lab's own source probe, fixed in #98) |
 | Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
 | ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
@@ -312,16 +319,35 @@ scripts/down-cell.sh kea <work-dir>
 | Kea behind a relay | `kea-relay` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 144 PASS, 16 FAIL, 11 BLOCKED, the first run past the relay probe (#91 fixed the probe); the FAIL rows are the plugin's missing T1 renewal behind a relay (plugin #1419). No verdicts in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run: the probe failed on #121 |
 | Kea failover pair (hot standby) | `kea-ha` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 110 PASS, 102 FAIL, 19 BLOCKED, most of the FAIL rows the lab's teardown defect #137 (fixed in #140). Every row BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run (#121) |
 | ISC dhcpd failover pair | `isc-failover` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 204 PASS, 14 FAIL, 8 BLOCKED; C7, C5b and C5c were the judge and a precondition (#128, #129), fixed since |
-| Windows Server 2025 DHCP (v0.4.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
+| Windows Server 2025 DHCP (v0.5.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
 | A home Fritz.Box (v0.4.0, #13) | `fritzbox-home` | [v0.4.0 Fritz.Box page](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md): 31 PASS, 3 FAIL, 102 N/A; 18 non-disruptive scenarios on macvlan and macvlan-ipam, run by `scripts/fritzbox-home-run.sh` outside the labctl cells. The `fritzbox` cell in `lab.yaml` still has a placeholder adapter (`internal/sourceadapter/fritzbox.go`) |
+
+`scripts/fritzbox-home-run.sh run|cleanup|render` is the home-router run. It
+is not a `labctl` cell and never runs on the lab host: it runs on a Docker
+host on the router's LAN, reads the LAN from that host, and refuses to start
+without `FB_CONFIRM=home-fritzbox-nondisruptive`, `FB_PARENT` (the host NIC on
+the LAN) and `FB_OUT` (an absolute directory outside the repo, where the packet
+captures stay: they are never published). It uses six fixed MAC addresses, no
+router login and no router setting, installs the plugin by its signature-verified
+digest, hands back every address it was given with a DHCPRELEASE, and `cleanup`
+removes what a cut run left. The router's lease table needs a login, so the
+verdicts rest on the router's own frames in the capture.
 
 Work on `dev` that has no verdicts on a results page yet:
 
-- **Windows Server 2025 image** (#14, v0.4.0): `scripts/build-windows-image.sh`
+- **Windows Server 2025 image** (#14, v0.5.0, in progress): `scripts/build-windows-image.sh`
   builds the evaluation image the `windows` cell boots. The cell is in
   `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
   first host build are still to come, so the cell is skipped as
   `skipped-image` (67 BLOCKED on the v0.4.0 rc1 page).
+
+- **Soak scenario E5** (#15): the first verdicts will come from the next host
+  run. The v0.4.0 pages ran on lab trees without it, or against the Fritz.Box,
+  where it is N/A.
+- **Lab fixes since lab dev 67c28eb**: the judge and parser fixes (#123, #124,
+  #126, #128, #129, #131, #132, #134, #141, #142), C10 (#125), the shape
+  teardown (#137 to #139), the OpenWrt renumber and chr seed (#127, #130,
+  #144) and the retry pass (#79) have no full host run.
 
 **Server events** (#15) have their first verdicts on the v0.4.0 pages: Kea,
 ISC dhcpd and dnsmasq list the DHCP messages they logged, and E1 and E2
