@@ -167,5 +167,7 @@ a3=$(sed -n '/^s_A3() {/,/^EOF$/p' "$RUN")
 check "A3 compose pins the MAC under its network, not at service level" \
 	"$(echo "$a3" | grep -cE '^        mac_address: ')/$(echo "$a3" | grep -cE '^    mac_address: ')" "1/0"
 
+check "run: a cleanup that cannot prove CLEAN fails the run" \
+	"$(grep -cxF "	trap 'cleanup || exit 4' EXIT" "$RUN")" "1"
 [ "$fails" -eq 0 ] || { echo "fritzbox-home-test.sh: $fails failed" >&2; exit 1; }
 echo "fritzbox-home-test.sh: all passed"

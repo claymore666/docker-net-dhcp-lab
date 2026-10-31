@@ -651,7 +651,8 @@ run() {
 	mkdir -p "$OUT/cap" "$OUT/ev"
 	[ -e "$RES" ] && die "$RES exists: one run per FB_OUT"
 	lan
-	trap 'cleanup' EXIT
+	# A cleanup that cannot prove CLEAN makes the run exit 4, even when every scenario ended (lab #13 run 2 exited 0).
+	trap 'cleanup || exit 4' EXIT
 	trap 'abort "signal"' TERM INT
 	helper_up || abort "helper did not start"
 	captures_start
