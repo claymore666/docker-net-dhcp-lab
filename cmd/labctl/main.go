@@ -277,9 +277,7 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 	case "fritzbox":
 		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
 	case "windows":
-		// run-cells.sh skips the cell while its image is absent (lab #14),
-		// so a run never reaches this; the adapter is the next change.
-		return nil, fmt.Errorf("source type windows has no adapter yet (lab #14); the cell is wired and cannot run")
+		return &sourceadapter.WindowsAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}

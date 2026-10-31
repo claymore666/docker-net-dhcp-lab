@@ -288,6 +288,7 @@ func TestServerEventsCapabilityScope(t *testing.T) {
 		"pihole":   &PiholeAdapter{},
 		"openwrt":  &OpenwrtAdapter{},
 		"routeros": &RouterOSAdapter{},
+		"windows":  &WindowsAdapter{},
 	}
 	for name, a := range absent {
 		if slices.Contains(a.Capabilities(), CapServerEvents) {
