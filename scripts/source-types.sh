@@ -78,6 +78,7 @@ source_stock_cmd() {
 	esac
 }
 source_live_cmd() {
+	# shellcheck disable=SC2016 # the text is PowerShell source, not a shell expansion (#14)
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat %s\n' "$2" ;;
 	routeros) printf '%s\n' "$2" ;;

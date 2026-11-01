@@ -108,7 +108,7 @@ STUB
 # shell files and no sudo. The stock side is the build's baseline export,
 # the live side a fresh export; the capture sends them as they are and
 # drops the CR PowerShell ends lines in.
-ps_text() { sed 's/^.*-EncodedCommand //' <<<"$1" | base64 -d | iconv -f UTF-16LE -t UTF-8; }
+ps_text() { local t=${1##*-EncodedCommand }; base64 -d <<<"$t" | iconv -f UTF-16LE -t UTF-8; }
 case "$(source_version_cmd windows)" in "windows"$'\t'"powershell -NonInteractive -NoProfile -EncodedCommand "*) ;; *) bad "windows: version $(source_version_cmd windows)" ;; esac
 [ "$(ps_text "$(source_version_cmd windows)")" = '[System.Environment]::OSVersion.VersionString' ] || bad "windows: version text"
 [ "$(source_config_pairs windows)" = baseline.xml:dhcp-export ] || bad "windows: pairs $(source_config_pairs windows)"

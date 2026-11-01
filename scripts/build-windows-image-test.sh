@@ -163,13 +163,13 @@ grep -qF "'$id'" "$fl" || bad "the rendered marker is not the printed id"
 # absent virtio NICs are removed before any rename.
 rm_line=$(grep -n "pnputil.exe /remove-device" "$fl" | head -n 1 | cut -d: -f1 || true)
 ren_line=$(grep -n "Rename-NetAdapter" "$fl" | head -n 1 | cut -d: -f1 || true)
-[ -n "$rm_line" ] && [ -n "$ren_line" ] && [ "$rm_line" -lt "$ren_line" ] || bad "absent virtio NICs are not removed before the rename"
+if [ -z "$rm_line" ] || [ -z "$ren_line" ] || [ "$rm_line" -ge "$ren_line" ]; then bad "absent virtio NICs are not removed before the rename"; fi
 grep -qF -- "-not \$_.Present -and \$_.FriendlyName -like 'Red Hat VirtIO Ethernet*'" "$fl" || bad "the NIC cleanup is not limited to absent virtio NICs"
 
 # A PowerShell ssh shell costs 7 s per call on the guest (lab #14): the shell
 # is cmd.exe, and the only DefaultShell value in the script.
 [ "$(grep -c "'DefaultShell'" "$fl")" -eq 1 ] || bad "DefaultShell is not set exactly once"
-grep -A1 "'DefaultShell'" "$fl" | grep -qF "'C:\\Windows\\System32\\cmd.exe'" || bad "the ssh shell is not cmd.exe"
+grep -A1 "'DefaultShell'" "$fl" | grep -qF "'C:\\Windows\\System32\\cmd.exe'" || bad "the guest login shell is not cmd.exe"
 
 if command -v pwsh >/dev/null; then
 	# shellcheck disable=SC2016 # the PowerShell program is a literal

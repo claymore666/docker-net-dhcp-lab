@@ -444,7 +444,7 @@ func (a *WindowsAdapter) NarrowPool(ctx context.Context, first, last string) (fu
 	do, undo := winScope, winScope+"$ErrorActionPreference = 'Continue'; "
 	if band[0].IsValid() {
 		// The pool sits in a band the image excludes (C8 asks for the
-		// F1 band): the band is replaced by the scope below the pool and
+		// user-class pool's band): the band is replaced by the scope below the pool and
 		// the band's rest above it (lab #14).
 		if f.Less(start) || end.Less(l) {
 			return nil, fmt.Errorf("windows: NarrowPool: pool %s-%s is not inside %s-%s", f, l, start, end)
