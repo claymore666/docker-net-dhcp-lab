@@ -168,7 +168,7 @@ func TestWindowsReservationsRefuseBadInputBeforeAnyCommand(t *testing.T) {
 	if err := a.ReserveMAC(ctx, "52:54:00:AA:BB:01", "10.200.16.211"); err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []string{"-IPAddress '10.200.16.216' -ClientId 'ff-00-00-00-01-00-01-2c-aa'", "-IPAddress '10.200.16.211' -ClientId '52-54-00-aa-bb-01'"} {
+	for i, want := range []string{"-IPAddress '10.200.16.216' -ClientId '00-00-00-01-00-01-2c-aa'", "-IPAddress '10.200.16.211' -ClientId '52-54-00-aa-bb-01'"} {
 		if s := r.scripts[i]; !strings.Contains(s, want) || !strings.Contains(s, "Remove-DhcpServerv4Reservation") || !strings.Contains(s, "Remove-DhcpServerv4Lease") {
 			t.Errorf("reservation %d: %q lacks %q or the clean-up", i, s, want)
 		}
@@ -549,5 +549,44 @@ func TestWindowsNarrowPoolInsideTheExcludedBandReplacesTheBandAndRestoresIt(t *t
 	}
 	if !strings.Contains(back, add+band) {
 		t.Errorf("the band is not put back: %q", back)
+	}
+}
+
+// Run 3 (lab #14): B2 reserved 00:6c:61:62:... in full, Windows kept it under
+// another form than the one the lease row listed, and the client got a pool
+// address. The reservation must carry the id as the table lists it, so a lease
+// read back and a reservation written from the same wire id name one client.
+func TestWindowsReserveClientIDWritesTheFormTheTableLists(t *testing.T) {
+	a, r := newWin(t)
+	const wire = "00:6c:61:62:2d:62:32:2d:62:72:69:64:67:65"
+	if err := a.ReserveClientID(context.Background(), wire, "10.200.16.216"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReserveClientID(context.Background(), "01:52:54:00:aa:bb:01", "10.200.16.217"); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"-ClientId '6c-61-62-2d-62-32-2d-62-72-69-64-67-65'", "-ClientId '52-54-00-aa-bb-01'"} {
+		if !strings.Contains(r.scripts[i], want) {
+			t.Errorf("reservation %d: %q lacks %q", i, r.scripts[i], want)
+		}
+	}
+	out := "1761870000\n" + `[{"IPAddress":"10.200.16.216","ClientId":"6c-61-62-2d-62-32-2d-62-72-69-64-67-65","HostName":"","AddressState":"Active","Expiry":0}]`
+	got, err := parseWindowsLeases(out, time.Unix(1761870000, 0))
+	if err != nil || len(got) != 1 || got[0].ClientID != wire {
+		t.Errorf("the listed row reads back as %v, %v; want client id %s", got, err, wire)
+	}
+	if err := a.ReserveClientID(context.Background(), "00", "10.200.16.218"); err == nil {
+		t.Error("an id of one byte (a type byte alone) was accepted")
+	}
+}
+
+func TestWindowsResetLeasesDropsReservationLeasesButNotInactiveReservations(t *testing.T) {
+	a, r := newWin(t)
+	if err := a.ResetLeases(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s := r.scripts[0]
+	if !strings.Contains(s, "-ne 'InactiveReservation'") || !strings.Contains(s, "Remove-DhcpServerv4Lease") || strings.Contains(s, "Remove-DhcpServerv4Reservation") || strings.Contains(s, "*Reservation") {
+		t.Errorf("reset script %q", s)
 	}
 }

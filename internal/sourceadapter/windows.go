@@ -172,6 +172,20 @@ func winWireClientID(id []byte) []byte {
 	return append([]byte{0}, id...)
 }
 
+// winStoredClientID is winWireClientID's inverse: the form Windows keeps
+// and lists for an option 61 value, without its leading type byte. An
+// Add-DhcpServerv4Reservation with the full wire id (type byte included)
+// is accepted but never matches the client (run 3, B2 on three shapes,
+// lab #14); the fixed-length ids of RFC 2132 9.14 (01 + MAC) become the
+// MAC the table lists.
+func winStoredClientID(wire string) (string, error) {
+	_, rest, ok := strings.Cut(wire, ":")
+	if !ok {
+		return "", fmt.Errorf("windows: client id %q has no bytes after its type byte", wire)
+	}
+	return winDash(rest), nil
+}
+
 // winClientID reads Windows's dash-separated client id hex.
 func winClientID(s string) ([]byte, error) {
 	var b []byte
@@ -231,7 +245,11 @@ func (a *WindowsAdapter) ReserveClientID(ctx context.Context, clientID, addr str
 	if err != nil {
 		return err
 	}
-	return a.reserve(ctx, winDash(id), ip)
+	stored, err := winStoredClientID(id)
+	if err != nil {
+		return err
+	}
+	return a.reserve(ctx, stored, ip)
 }
 
 const winWaitRunning = `(Get-Service -Name DHCPServer).WaitForStatus('Running', [TimeSpan]::FromSeconds(60))`
@@ -273,10 +291,13 @@ func (a *WindowsAdapter) Reachable(ctx context.Context, addr string) error {
 	return nil
 }
 
-// ResetLeases drops every lease row that is not a reservation, declined
-// (BAD_ADDRESS) rows included; reservations stay.
+// ResetLeases drops every lease row, declined (BAD_ADDRESS) rows and the
+// active rows of reservations included: C4 expects an empty table, and a
+// reservation's row is a lease (run 3 left .211 and .214 listed, lab #14).
+// An inactive reservation has no lease to remove and stays, as do all
+// reservations (configuration).
 func (a *WindowsAdapter) ResetLeases(ctx context.Context) error {
-	_, err := a.run(ctx, winScope+`Get-DhcpServerv4Lease -ScopeId $sid | Where-Object { $_.AddressState -notlike '*Reservation' } | Remove-DhcpServerv4Lease`)
+	_, err := a.run(ctx, winScope+`Get-DhcpServerv4Lease -ScopeId $sid | Where-Object { $_.AddressState -ne 'InactiveReservation' } | Remove-DhcpServerv4Lease`)
 	return err
 }
 
