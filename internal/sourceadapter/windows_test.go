@@ -580,13 +580,14 @@ func TestWindowsReserveClientIDWritesTheFormTheTableLists(t *testing.T) {
 	}
 }
 
-func TestWindowsResetLeasesDropsReservationLeasesButNotInactiveReservations(t *testing.T) {
+// Pinning a measured limit (lab #14): the lease row of a reservation cannot
+// be removed (DHCP 20019), so a reset that tries aborts the whole shape.
+func TestWindowsResetLeasesLeavesReservationRowsBecauseWindowsRefusesToDropThem(t *testing.T) {
 	a, r := newWin(t)
 	if err := a.ResetLeases(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	s := r.scripts[0]
-	if !strings.Contains(s, "-ne 'InactiveReservation'") || !strings.Contains(s, "Remove-DhcpServerv4Lease") || strings.Contains(s, "Remove-DhcpServerv4Reservation") || strings.Contains(s, "*Reservation") {
+	if s := r.scripts[0]; !strings.Contains(s, "-notlike '*Reservation'") || !strings.Contains(s, "Remove-DhcpServerv4Lease") {
 		t.Errorf("reset script %q", s)
 	}
 }
