@@ -295,7 +295,8 @@ func (a *WindowsAdapter) Reachable(ctx context.Context, addr string) error {
 // (BAD_ADDRESS) rows included; reservations stay. The row of a reservation
 // cannot be dropped: Remove-DhcpServerv4Lease answers "Failed to delete
 // lease" (DHCP 20019, measured 2026-11-01), which made every later reset
-// of the shape fail, so C4 stays BLOCKED on its own precondition (lab #14).
+// of the shape fail. A row left after the reset is a reservation or a lease
+// the container renewed during the reset (lab #14).
 func (a *WindowsAdapter) ResetLeases(ctx context.Context) error {
 	_, err := a.run(ctx, winScope+`Get-DhcpServerv4Lease -ScopeId $sid | Where-Object { $_.AddressState -notlike '*Reservation' } | Remove-DhcpServerv4Lease`)
 	return err
