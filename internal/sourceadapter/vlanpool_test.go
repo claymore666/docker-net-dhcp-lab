@@ -26,7 +26,7 @@ func TestVLANPoolIsDeclaredOrExplained(t *testing.T) {
 			t.Errorf("%s does not declare %s", name, CapVLANPool)
 		}
 	}
-	without := map[string]Adapter{"udhcpd": &UdhcpdAdapter{}, "pihole": &PiholeAdapter{}, "openwrt": &OpenwrtAdapter{}, "routeros": &RouterOSAdapter{}, "fritzbox": &FritzboxAdapter{}}
+	without := map[string]Adapter{"udhcpd": &UdhcpdAdapter{}, "pihole": &PiholeAdapter{}, "openwrt": &OpenwrtAdapter{}, "routeros": &RouterOSAdapter{}, "fritzbox": &FritzboxAdapter{}, "windows": &WindowsAdapter{}}
 	for name, a := range without {
 		if capIn(a.Capabilities(), CapVLANPool) {
 			t.Errorf("%s declares %s, but it has no template that carries a VLAN pool", name, CapVLANPool)

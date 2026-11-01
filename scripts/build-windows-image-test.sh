@@ -109,7 +109,9 @@ wellformed "$ua" || bad "autounattend.xml is not well-formed"
 grep -qF "<Value>Windows Server 2025 SERVERSTANDARDCORE</Value>" "$ua" || bad "the image is not selected by name"
 grep -qE '^WIN_IMAGE_NAME=.Windows Server 2025 SERVERSTANDARDCORE.$' scripts/build-windows-image.sh || bad "the image name constant moved from the answer file's"
 grep -qF "$(grep -F 'Windows Server 2025 SERVERSTANDARDCORE' images/windows-2025-eval.sha256)" images/windows-2025-eval.sha256 || bad "the pin header does not name the image"
-[ "$(grep -c '<Path>' "$ua")" -eq 16 ] || bad "driver paths: $(grep -c '<Path>' "$ua"), want 16"
+[ "$(grep -c '<Path>' "$ua")" -eq 8 ] || bad "driver paths: $(grep -c '<Path>' "$ua"), want 8"
+# A second tree of the same driver stops Setup with 0x80070103 (lab #14).
+grep -q '<Path>[^<]*\\2k2[^5]' "$ua" && bad "a driver path outside the 2k25 tree"
 for l in D E F G; do
 	for d in viostor NetKVM; do
 		grep -qF "<Path>$l:\\$d\\2k25\\amd64</Path>" "$ua" || bad "no driver path $l:\\$d\\2k25"
@@ -130,7 +132,17 @@ grep -qF "Mac = '$want_seg'" "$fl" || bad "no segment MAC $want_seg in the first
 grep -qE "Name 'Ethernet|InterfaceAlias '?Ethernet|-Name Ethernet" "$fl" && bad "an adapter is addressed by its Windows name"
 grep -qF "Ip = '10.200.16.2'; Prefix = 24" "$fl" || bad "no segment address in the first-logon script"
 grep -qF "Ip = '10.200.255.161'; Prefix = 24; Gw = '10.200.255.1'" "$fl" || grep -qE "Ip = '10.200.255.161'; Prefix = 24; Gw = '[0-9.]+'" "$fl" || bad "no management address in the first-logon script"
-grep -qF -- "-StartRange '10.200.16.100' -EndRange '10.200.16.200'" "$fl" || bad "no scope in the first-logon script"
+grep -qF -- "-StartRange '10.200.16.100' -EndRange '10.200.16.230'" "$fl" || bad "no scope in the first-logon script"
+grep -qF -- "Add-DhcpServerv4ExclusionRange -ScopeId '10.200.16.0' -StartRange '10.200.16.201' -EndRange '10.200.16.220'" "$fl" || bad "the band between the main and the class pool is not excluded"
+grep -qF -- "Add-DhcpServerv4PolicyIPRange -Name 'b5' -ScopeId '10.200.16.0' -StartRange '10.200.16.221' -EndRange '10.200.16.230'" "$fl" || bad "no B5 class pool policy range"
+grep -qF -- "-VendorClass EQ, 'lab-class-b5'" "$fl" || bad "the B5 policy does not match the vendor class"
+# The class pool band is up-source.sh's (and internal/scenario's).
+for v in class_first_host class_last_host; do
+	[ "$(grep -E "^$v=" scripts/up-source.sh)" = "$(grep -E "^$v=" scripts/build-windows-image.sh)" ] || bad "$v differs between up-source.sh and the build script"
+done
+sed '/^  - name: windows$/,$ s/pool_end: 10\.200\.16\.200/pool_end: 10.200.16.221/' "$tmp/lab.yaml" >"$tmp/lab-gap.yaml"
+if LAB_YAML="$tmp/lab-gap.yaml" $B --id windows >"$tmp/o" 2>&1; then bad "a pool reaching the class band was accepted"; fi
+grep -qF "reaches the class pool band" "$tmp/o" || bad "the class band refusal is not worded: $(cat "$tmp/o")"
 grep -qF -- "-ConflictDetectionAttempts 0" "$fl" || bad "conflict detection is not the stock default"
 grep -qF "'PasswordAuthentication no'" "$fl" || bad "sshd keeps password authentication"
 grep -qF "'AutoAdminLogon' -Value '0'" "$fl" || bad "autologon is not switched off"
@@ -147,6 +159,17 @@ grep -qF "$LAB_PUBKEY" "$fl" || bad "the lab key is not baked"
 n=$(grep -n 'WriteAllText.*bootstrap-done' "$fl" | cut -d: -f1)
 [ "$(sed -n "$((n + 1))p" "$fl")" = "    Stop-Computer -Force" ] || bad "the marker is not followed by Stop-Computer"
 grep -qF "'$id'" "$fl" || bad "the rendered marker is not the printed id"
+# A NIC on a new PCI path keeps its name on the absent adapter (lab #14):
+# absent virtio NICs are removed before any rename.
+rm_line=$(grep -n "pnputil.exe /remove-device" "$fl" | head -n 1 | cut -d: -f1 || true)
+ren_line=$(grep -n "Rename-NetAdapter" "$fl" | head -n 1 | cut -d: -f1 || true)
+if [ -z "$rm_line" ] || [ -z "$ren_line" ] || [ "$rm_line" -ge "$ren_line" ]; then bad "absent virtio NICs are not removed before the rename"; fi
+grep -qF -- "-not \$_.Present -and \$_.FriendlyName -like 'Red Hat VirtIO Ethernet*'" "$fl" || bad "the NIC cleanup is not limited to absent virtio NICs"
+
+# A PowerShell ssh shell costs 7 s per call on the guest (lab #14): the shell
+# is cmd.exe, and the only DefaultShell value in the script.
+[ "$(grep -c "'DefaultShell'" "$fl")" -eq 1 ] || bad "DefaultShell is not set exactly once"
+grep -A1 "'DefaultShell'" "$fl" | grep -qF "'C:\\Windows\\System32\\cmd.exe'" || bad "the guest login shell is not cmd.exe"
 
 if command -v pwsh >/dev/null; then
 	# shellcheck disable=SC2016 # the PowerShell program is a literal
@@ -168,6 +191,11 @@ sed '/^  - name: windows$/,$ s/pool_end: 10\.200\.16\.200/pool_end: 10.200.16.19
 [ "$(LAB_PUBKEY="ssh-ed25519 BBBB other" $B --id windows)" != "$id" ] || bad "a key change left the id unchanged"
 printf '%s  windows-server-2025-eval.iso\n' "$(printf a | sha256sum | cut -d' ' -f1)" >"$tmp/pin-a"
 [ "$(LAB_WINDOWS_ISO_PIN="$tmp/pin-a" $B --id windows)" != "$id" ] || bad "a pin change left the id unchanged"
+grep -v ' virtio-win-' images/windows-2025-eval.sha256 >"$tmp/pin-v"
+printf '%s  virtio-win-0.1.302.iso\n' "$(printf a | sha256sum | cut -d' ' -f1)" >>"$tmp/pin-v"
+[ "$(LAB_WINDOWS_ISO_PIN="$tmp/pin-v" $B --id windows)" != "$id" ] || bad "a virtio pin change left the id unchanged"
+grep -qE '^[0-9a-f]{64}  virtio-win-0\.1\.302\.iso$' images/windows-2025-eval.sha256 || bad "the checked-in pin file pins no virtio ISO"
+grep -qF 'archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso' scripts/build-windows-image.sh || bad "the virtio URL is not the versioned release"
 if $B --id dnsmasq >"$tmp/o" 2>&1; then bad "a dnsmasq cell was accepted"; fi
 grep -q REFUSED "$tmp/o" || bad "the dnsmasq refusal is not worded: $(cat "$tmp/o")"
 
@@ -181,8 +209,9 @@ grep -q "has source type 'dnsmasq', not windows" "$tmp/o" || bad "the type refus
 export LAB_IMAGE_CACHE=$tmp/cache WINDOWS_BUILD_DIR=$tmp/cache/windows-build
 mkdir -p "$LAB_IMAGE_CACHE/iso"
 printf 'not a windows iso' >"$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso"
-printf 'not a virtio iso' >"$LAB_IMAGE_CACHE/iso/virtio-win.iso"
+printf 'not a virtio iso' >"$LAB_IMAGE_CACHE/iso/virtio-win-0.1.302.iso"
 isosum=$(sha256sum "$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso" | cut -d' ' -f1)
+vline="$(sha256sum "$LAB_IMAGE_CACHE/iso/virtio-win-0.1.302.iso" | cut -d' ' -f1)  virtio-win-0.1.302.iso"
 export PATH="$stub:$PATH"
 export LAB_WINDOWS_ISO_PIN=$tmp/pin
 refused() { # DESC WANT-SUBSTRING [env...]
@@ -197,22 +226,26 @@ refused() { # DESC WANT-SUBSTRING [env...]
 	grep -q '^virt-install' "$STUB_LOG" && bad "$desc: a VM was started"
 	return 0
 }
-cp images/windows-2025-eval.sha256 "$tmp/pin"
-refused "the checked-in pin (header only)" "no checksum is pinned for the ISO in" "X=1"
-printf '%s  x\n' "not-a-hash" >"$tmp/pin"
+grep -v ' windows-server-2025-eval.iso$' images/windows-2025-eval.sha256 >"$tmp/pin"
+refused "a pin file without the Windows ISO line" "no checksum is pinned for the ISO in" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "not-a-hash" "$vline" >"$tmp/pin"
 refused "a malformed pin" "is not a sha256" "X=1"
-printf '%s  windows-server-2025-eval.iso\n' "$(printf b | sha256sum | cut -d' ' -f1)" >"$tmp/pin"
-refused "a pin that differs from the ISO" "replace the pinned line in" "X=1"
 printf '%s  windows-server-2025-eval.iso\n' "$isosum" >"$tmp/pin"
+refused "no virtio pin line" "no sha256 is pinned for virtio-win-0.1.302.iso" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s  virtio-win-0.1.302.iso\n' "$isosum" "$(printf c | sha256sum | cut -d' ' -f1)" >"$tmp/pin"
+refused "a virtio ISO that differs from its pin" "download https://fedorapeople.org" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$(printf b | sha256sum | cut -d' ' -f1)" "$vline" >"$tmp/pin"
+refused "a pin that differs from the ISO" "replace the pinned line in" "X=1"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$isosum" "$vline" >"$tmp/pin"
 refused "an ISO that is not there" "is not there" "LAB_WINDOWS_ISO_DIR=$tmp/none"
 mkdir -p "$tmp/noiso" && cp "$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso" "$tmp/noiso/"
-refused "no virtio ISO" "virtio-win.iso" "LAB_WINDOWS_ISO_DIR=$tmp/noiso"
+refused "no virtio ISO" "virtio-win-0.1.302.iso is not there" "LAB_WINDOWS_ISO_DIR=$tmp/noiso"
 refused "the cell's source domain exists" "tear the cell down first" "STUB_DOMINFO_EXISTS=1"
 if $B dnsmasq >"$tmp/o" 2>"$tmp/e"; then bad "a dnsmasq cell was built"; fi
 [ ! -e "$LAB_IMAGE_CACHE/windows-2025-eval.qcow2" ] || bad "a refused build left an image"
 
 # The id covers the pin, so it is read with the pin the build will use.
-printf '%s  windows-server-2025-eval.iso\n' "$isosum" >"$tmp/pin"
+printf '%s  windows-server-2025-eval.iso\n%s\n' "$isosum" "$vline" >"$tmp/pin"
 id=$($B --id windows)
 export STUB_ID=$id
 
@@ -224,6 +257,15 @@ dest=$LAB_IMAGE_CACHE/windows-2025-eval
 [ -f "$dest.qcow2" ] || bad "no golden image"
 [ "$(cat "$dest.build-id" 2>/dev/null)" = "$id" ] || bad "the build-id sidecar is not the cell's id"
 [ ! -e "$dest.qcow2.part" ] || bad "a .part file is left"
+dated=$dest-$(date -u +%Y%m%d)
+for x in qcow2 build-id sources; do
+	[ -f "$dated.$x" ] || bad "no dated copy $dated.$x"
+	[ "$(stat -c %a "$dated.$x" 2>/dev/null)" = 444 ] || bad "the dated copy $dated.$x is not read-only"
+done
+cmp -s "$dest.qcow2" "$dated.qcow2" || bad "the dated copy differs from the image"
+[ "$(stat -c %i "$dest.qcow2")" != "$(stat -c %i "$dated.qcow2" 2>/dev/null)" ] || bad "the dated copy is a hard link"
+cmp -s "$dest.build-id" "$dated.build-id" || bad "the dated build-id differs"
+grep -qE '^[0-9a-f]{64}  virtio-win-0\.1\.302\.iso$' "$dest.sources" || bad "the sources sidecar does not name the pinned virtio ISO"
 [ -z "$(ls -A "$WINDOWS_BUILD_DIR")" ] || bad "the work directory is left: $(ls "$WINDOWS_BUILD_DIR")"
 vi=$(grep '^virt-install' "$STUB_LOG")
 for want in "--clock offset=utc" "--memory 4096" "--vcpus 2" "--os-variant win2k25" "network=net-mgmt,model=virtio,mac=$(echo -n lab-windows-source-mgmt | md5sum | cut -c1-6 | sed -E 's/(..)(..)(..)/52:54:00:\1:\2:\3/')" "--import"; do
@@ -233,7 +275,8 @@ done
 [ "$(grep -o 'device=cdrom' <<<"$vi" | wc -l)" -eq 3 ] || bad "the build VM does not carry three CD-ROMs"
 grep -qF "path=$LAB_IMAGE_CACHE/iso/windows-server-2025-eval.iso,device=cdrom,boot.order=1" <<<"$vi" || bad "the Windows ISO is not first in the boot order"
 grep -q '^volid LABSEED$' "$STUB_LOG" || bad "the seed CD has no LABSEED label"
-[ "$(grep -c '^virsh send-key' "$STUB_LOG")" -ge 1 ] || bad "no key was sent past the boot prompt"
+[ "$(grep -c '^virsh send-key .* KEY_ENTER$' "$STUB_LOG")" -ge 45 ] || bad "fewer than 45 Enter keys were sent past the boot prompt"
+grep '^virsh send-key' "$STUB_LOG" | grep -qv 'KEY_ENTER$' && bad "a key other than Enter was sent: it stops the boot manager's countdown"
 grep -q '^virsh undefine lab-build-windows-2025-eval --nvram' "$STUB_LOG" || bad "the build domain was not removed"
 # Order: install, off, fresh NVRAM, second boot, proof, power off.
 order=$(grep -E '^virt-install|^sudo cp -f .*OVMF_VARS|^virsh start|^ssh-call .*Stop-Computer' "$STUB_LOG" |

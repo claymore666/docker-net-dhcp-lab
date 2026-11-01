@@ -7,6 +7,15 @@
 
 # source_version_cmd TYPE: prints "<label><TAB><command to run on it>".
 # OpenWrt's release and its dnsmasq on one line, run by the image's ash.
+# windows_ps SCRIPT: the ssh command that runs SCRIPT in PowerShell. The
+# image's ssh shell is cmd.exe (a PowerShell shell cost 7 s per call, lab
+# #14), and -EncodedCommand (UTF-16LE base64) keeps quotes out of it.
+windows_ps() {
+	local enc
+	enc=$(printf '%s' "$1" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+	printf 'powershell -NonInteractive -NoProfile -EncodedCommand %s\n' "$enc"
+}
+
 # shellcheck disable=SC2016 # expanded on the source, not here (lab #9)
 openwrt_version='. /etc/openwrt_release && printf "%s, " "$DISTRIB_DESCRIPTION" && /usr/sbin/dnsmasq --version | head -n1'
 source_version_cmd() {
@@ -14,7 +23,7 @@ source_version_cmd() {
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | fritzbox) printf 'kernel\tuname -r\n' ;;
 	routeros) printf 'routeros\t:put [/system resource get version]\n' ;;
 	openwrt) printf '%s\t%s\n' openwrt "$openwrt_version" ;;
-	windows) printf 'windows\t[System.Environment]::OSVersion.VersionString\n' ;;
+	windows) printf 'windows\t%s\n' "$(windows_ps '[System.Environment]::OSVersion.VersionString')" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
@@ -57,22 +66,23 @@ source_stock_mask() {
 # source_stock_cmd TYPE NAME and source_live_cmd TYPE PATH: the command
 # that prints that side over ssh. RouterOS (#9) has no shell: the stock
 # side is the export the seed wrote before its first change, the live
-# side the command /export itself. Windows (#14) has PowerShell as its
-# ssh shell: the stock side is the build's baseline export, the live side
-# a fresh export of the running server; neither text carries a quote.
+# side the command /export itself. Windows (#14): the stock side is the
+# build's baseline export, the live side a fresh export of the running
+# server; neither text carries a quote.
 source_stock_cmd() {
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat /root/lab-stock-config/%s\n' "$2" ;;
 	routeros) printf ':put [/file get %s contents]\n' "$2" ;;
-	windows) printf 'Get-Content -Raw C:\\ProgramData\\lab\\%s\n' "$2" ;;
+	windows) windows_ps "Get-Content -Raw C:\\ProgramData\\lab\\$2" ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }
 source_live_cmd() {
+	# shellcheck disable=SC2016 # the text is PowerShell source, not a shell expansion (#14)
 	case "$1" in
 	kea | isc-dhcp | dnsmasq | udhcpd | pihole | openwrt | fritzbox) printf 'sudo cat %s\n' "$2" ;;
 	routeros) printf '%s\n' "$2" ;;
-	windows) printf '$f = Join-Path $env:TEMP lab-live.xml; Export-DhcpServer -File $f -Leases -Force; Get-Content -Raw $f; Remove-Item $f\n' ;;
+	windows) windows_ps '$f = Join-Path $env:TEMP lab-live.xml; Export-DhcpServer -File $f -Leases -Force; Get-Content -Raw $f; Remove-Item $f' ;;
 	*) source_type_unknown "$1" ;;
 	esac
 }

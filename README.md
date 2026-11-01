@@ -319,7 +319,7 @@ scripts/down-cell.sh kea <work-dir>
 | Kea behind a relay | `kea-relay` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 144 PASS, 16 FAIL, 11 BLOCKED, the first run past the relay probe (#91 fixed the probe); the FAIL rows are the plugin's missing T1 renewal behind a relay (plugin #1419). No verdicts in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run: the probe failed on #121 |
 | Kea failover pair (hot standby) | `kea-ha` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 110 PASS, 102 FAIL, 19 BLOCKED, most of the FAIL rows the lab's teardown defect #137 (fixed in #140). Every row BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run (#121) |
 | ISC dhcpd failover pair | `isc-failover` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 204 PASS, 14 FAIL, 8 BLOCKED; C7, C5b and C5c were the judge and a precondition (#128, #129), fixed since |
-| Windows Server 2025 DHCP (v0.5.0, #14) | `windows` | no host run yet: the cell loads and is skipped as `skipped-image` until the image is built (67 BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run); its adapter does not exist yet |
+| Windows Server 2025 DHCP (v0.5.0, #14) | `windows` | not yet on a results page. Plugin v2.7.0, five shapes, 340 rows: 136 PASS, 188 N/A, 10 FAIL, 6 BLOCKED. Two lab commits are in the bundle and differ only in the lease-table reset (15d5bec: `macvlan-ipam` and the C4 rows; b55aee5: the rest). The 10 FAIL are A3, A4, A9, A10, A12 on both ipam shapes, not plugin findings: after a restart Docker gives the container a new MAC, the plugin asks for the old address with the old client identifier (DHCP option 61), and Windows keys leases by that identifier, so the address stays under the old MAC. B2 (reservation by client identifier) and B7 (release on remove) PASS on `bridge`, `macvlan`, `ipvlan`. 3 BLOCKED are C4 (reset the lease table, expect it empty; PASS on `ipvlan` and `bridge-ipam`): on `bridge` the row left is the test container's own lease, renewed during the reset (seen in the capture); on `macvlan` the same, inferred from timing; on `macvlan-ipam` it is a reservation. 3 BLOCKED are F2b (forced option 108): no offer carried it. |
 | A home Fritz.Box (v0.4.0, #13) | `fritzbox-home` | [v0.4.0 Fritz.Box page](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md): 31 PASS, 3 FAIL, 102 N/A; 18 non-disruptive scenarios on macvlan and macvlan-ipam, run by `scripts/fritzbox-home-run.sh` outside the labctl cells. The `fritzbox` cell in `lab.yaml` still has a placeholder adapter (`internal/sourceadapter/fritzbox.go`) |
 
 `scripts/fritzbox-home-run.sh run|cleanup|render` is the home-router run. It
@@ -335,11 +335,13 @@ verdicts rest on the router's own frames in the capture.
 
 Work on `dev` that has no verdicts on a results page yet:
 
-- **Windows Server 2025 image** (#14, v0.5.0, in progress): `scripts/build-windows-image.sh`
-  builds the evaluation image the `windows` cell boots. The cell is in
-  `lab.yaml` and its image hooks are in `up-source.sh`; the adapter and the
-  first host build are still to come, so the cell is skipped as
-  `skipped-image` (67 BLOCKED on the v0.4.0 rc1 page).
+- **Windows Server 2025 cell** (#14, v0.5.0): `scripts/build-windows-image.sh`
+  builds the evaluation image the `windows` cell boots, and the cell has been
+  run on plugin v2.7.0 (the row above). The source is DHCPv4 only and has no
+  Linux tools, so the rows that need a rogue server, a squatter, packet
+  impairment, FORCERENEW, DNS updates, a VLAN pool or the DHCP log report
+  N/A with the reason in each verdict. The build needs the Windows
+  evaluation ISO, which the lab does not ship.
 
 - **Soak scenario E5** (#15): the first verdicts will come from the next host
   run. The v0.4.0 pages ran on lab trees without it, or against the Fritz.Box,
