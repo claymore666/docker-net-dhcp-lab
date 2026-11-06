@@ -190,9 +190,10 @@ if out=$(LAB_IMAGE_CACHE="$cache" UP_SOURCE_RENDER_ONLY=1 ./scripts/up-source.sh
 fi
 
 # Case 8: the windows run path with stubbed virsh, virt-install, qemu-img,
-# sudo, sleep and ssh. ready_windows is ready only when ssh answers AND the
-# marker read through powershell holds exactly the cell's id; the bound is
-# a variable and defaults to 60 tries.
+# sudo, sleep and ssh. ready_windows is ready only when ssh answers, the
+# marker read through powershell holds exactly the cell's id, the LabNet
+# task has ended and seg carries its address (#157); the bound is a
+# variable and defaults to 60 tries.
 w8="$tmp/w8"
 mkdir -p "$w8/bin" "$w8/home/.ssh" "$w8/cache"
 ssh-keygen -q -t ed25519 -N '' -f "$w8/home/.ssh/id_ed25519_lab" -C test
@@ -248,12 +249,15 @@ run8() { # run8 NAME [VAR=value ...]: one up-source.sh windows run in a fresh wo
 }
 calls() { wc -l <"$w8/stub-$1/ssh.log"; }
 
-if ! run8 ok STUB_MARKER="$wid8"$'\r\n' UP_SOURCE_READY_TRIES=3 UP_SOURCE_READY_TICK=0; then
+if ! run8 ok STUB_MARKER="$wid8 Ready 1"$'\r\n' UP_SOURCE_READY_TRIES=3 UP_SOURCE_READY_TICK=0; then
 	echo "up-source-test: windows with the current marker did not come up: $(cat "$w8/out-ok")" >&2
 	fail=1
 elif ! grep -q 'ready at 10.200.255.161' "$w8/out-ok" ||
 	! grep -q 'lab@10.200.255.161 powershell -NonInteractive -EncodedCommand' "$w8/stub-ok/ssh.log" ||
 	! grep -qF 'C:\ProgramData\lab\bootstrap-done' "$w8/stub-ok/ps.log" ||
+	! grep -qF 'Get-ScheduledTask -TaskName LabNet).State' "$w8/stub-ok/ps.log" ||
+	! grep -qF -e "-InterfaceAlias seg -AddressFamily IPv4" "$w8/stub-ok/ps.log" ||
+	! grep -qF "\$_.IPAddress -eq '10.200.16.2' -and \$_.PrefixLength -eq 24 -and \$_.AddressState -eq 'Preferred'" "$w8/stub-ok/ps.log" ||
 	! grep -q -- '--os-variant win2k25' "$w8/stub-ok/virt-install.log"; then
 	echo "up-source-test: windows ready run lacks its ssh/powershell/virt-install evidence: $(cat "$w8/out-ok")" >&2
 	fail=1
@@ -267,7 +271,10 @@ if run8 down STUB_SSH_DOWN=1 UP_SOURCE_READY_TRIES=3 UP_SOURCE_READY_TICK=0 ||
 fi
 
 # Reachable but the marker is another build's: not ready (defeat: ssh alone).
-for bad in "an-older-id" "${wid8}x" "x${wid8}" ""; do
+# The marker alone, a LabNet task still running, a seg without its
+# address: not ready either (#157).
+for bad in "an-older-id Ready 1" "${wid8}x Ready 1" "x${wid8} Ready 1" "" "$wid8" \
+	"$wid8 Running 1" "$wid8 Ready 0" "$wid8 Ready 2" " Ready 1"; do
 	if run8 stale STUB_MARKER="$bad" UP_SOURCE_READY_TRIES=3 UP_SOURCE_READY_TICK=0 ||
 		! grep -q 'windows did not finish inside the bound' "$w8/out-stale" || [ "$(calls stale)" -ne 3 ]; then
 		echo "up-source-test: windows with marker '$bad' counted as ready: $(cat "$w8/out-stale")" >&2
@@ -276,7 +283,7 @@ for bad in "an-older-id" "${wid8}x" "x${wid8}" ""; do
 done
 
 # Slow to come up: two unreachable tries, then ready.
-if ! run8 slow STUB_SSH_FAIL_FIRST=2 STUB_MARKER="$wid8" UP_SOURCE_READY_TRIES=5 UP_SOURCE_READY_TICK=0 ||
+if ! run8 slow STUB_SSH_FAIL_FIRST=2 STUB_MARKER="$wid8 Ready 1" UP_SOURCE_READY_TRIES=5 UP_SOURCE_READY_TICK=0 ||
 	[ "$(calls slow)" -ne 3 ]; then
 	echo "up-source-test: windows that answers on the third try: $(calls slow) calls: $(cat "$w8/out-slow")" >&2
 	fail=1

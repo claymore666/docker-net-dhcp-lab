@@ -728,14 +728,17 @@ func lineDiff(was, now string) string {
 
 // Recover removes every scope and labf object, puts the segment NIC back
 // through the image's own boot script, imports the image's export again
-// and restarts the service (lab #14).
+// and restarts the service (lab #14). The import names the export's
+// scopes: a whole-server import fails on Server 2025 (NAP, 20138) after
+// the scopes are gone (#157).
 func (a *WindowsAdapter) Recover(ctx context.Context) error {
 	_, err := a.run(ctx, `Get-DhcpServerv4Scope | Remove-DhcpServerv4Scope -Force; `+
 		`Get-DhcpServerv4Policy | Where-Object { $_.Name -like '`+winFeature+`*' } | Remove-DhcpServerv4Policy; `+
 		`Get-DhcpServerv4Class | Where-Object { $_.Name -like '`+winFeature+`*' } | ForEach-Object { Remove-DhcpServerv4Class -Name $_.Name -Type $_.Type }; `+
 		`if (Get-DhcpServerv4OptionDefinition -OptionId 108 -ErrorAction SilentlyContinue) { Remove-DhcpServerv4OptionDefinition -OptionId 108 }; `+
 		`& powershell.exe -NoProfile -ExecutionPolicy Bypass -File '`+winLabDir+`\netconfig.ps1'; if ($LASTEXITCODE -ne 0) { throw 'netconfig.ps1 failed' }; `+
-		winImport("")+`Set-DhcpServerSetting -ConflictDetectionAttempts 0; Restart-Service -Name DHCPServer -Force; `+winWaitRunning)
+		`$sid = @(([xml](Get-Content -Raw '`+winBaseline+`')).DHCPServer.IPv4.Scopes.Scope | ForEach-Object { $_.ScopeId }); if ($sid.Count -eq 0) { throw 'the baseline export lists no scope' }; `+
+		winImport(" -ScopeId $sid")+`Set-DhcpServerSetting -ConflictDetectionAttempts 0; Restart-Service -Name DHCPServer -Force; `+winWaitRunning)
 	if err != nil {
 		return fmt.Errorf("recover: %w", err)
 	}

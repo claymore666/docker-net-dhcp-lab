@@ -414,7 +414,9 @@ func TestWindowsRecoverClearsLabObjectsThenImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.scripts[0]
-	order := []string{"Remove-DhcpServerv4Scope", "-like 'labf*'", "netconfig.ps1", "Import-DhcpServer -File '" + winBaseline + "'", "-ConflictDetectionAttempts 0", "Restart-Service"}
+	order := []string{"Remove-DhcpServerv4Scope", "-like 'labf*'", "netconfig.ps1",
+		"(Get-Content -Raw '" + winBaseline + "')).DHCPServer.IPv4.Scopes.Scope", "if ($sid.Count -eq 0) { throw",
+		"Import-DhcpServer -File '" + winBaseline + "' -BackupPath '" + winImportBak + "' -ScopeId $sid -ScopeOverwrite", "-ConflictDetectionAttempts 0", "Restart-Service"}
 	at := 0
 	for _, w := range order {
 		i := strings.Index(s[at:], w)
@@ -422,6 +424,10 @@ func TestWindowsRecoverClearsLabObjectsThenImports(t *testing.T) {
 			t.Fatalf("recover lacks %q after offset %d: %q", w, at, s)
 		}
 		at += i
+	}
+	// A whole-server import fails on Server 2025 after the scopes are gone (#157).
+	if n, m := strings.Count(s, "Import-DhcpServer"), strings.Count(s, "-ScopeId $sid -ScopeOverwrite"); n != 1 || m != 1 {
+		t.Errorf("recover runs %d imports, %d of them by the baseline's scope ids: %q", n, m, s)
 	}
 }
 
