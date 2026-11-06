@@ -283,6 +283,13 @@ if [ "$source_type" = kea ]; then
 	done
 fi
 
+# A docker host labctl power-cycled is named here, not only in its verdicts (#158).
+for f in "$EVIDENCE_DIR/$CELL"-*-host-reset-*.txt; do
+	if [ -e "$f" ]; then
+		echo "run-cell: the $CELL docker host was power-cycled during the run, see $f"
+	fi
+done
+
 echo "== tear down cell $CELL =="
 LAB_EVIDENCE_DIR="$EVIDENCE_DIR" "$REPO_ROOT/scripts/down-cell.sh" "$CELL" "$WORK"
 
