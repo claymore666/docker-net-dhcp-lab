@@ -88,10 +88,12 @@ stop_sshd() {
 # live while writing this test) silently reuses this test's own first
 # connection for the second one and skips host-key checking on it,
 # which would make phase 3 below pass for the wrong reason.
+# IdentitiesOnly: an agent holding six or more keys used up sshd's
+# MaxAuthTries before client_key was offered (#157).
 lab_ssh() {
 	ssh -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null \
 		-o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 \
-		-o ControlMaster=no -o ControlPath=none \
+		-o ControlMaster=no -o ControlPath=none -o IdentitiesOnly=yes \
 		-i "$tmp/client_key" -p "$port" 127.0.0.1 "$@"
 }
 
