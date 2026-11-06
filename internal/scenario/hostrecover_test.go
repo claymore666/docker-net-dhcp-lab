@@ -182,12 +182,13 @@ func TestRunOneNamesTheHostResetInTheVerdict(t *testing.T) {
 	h := newRecovery(t, v, 2)
 	e := Env{Host: host, Source: &fakeAdapter{caps: allNeeds()}, Cell: "openwrt", Shape: ShapeMacvlan,
 		GitSHA: "abc1234", EvidenceDir: t.TempDir(), HostRecovery: h}
-	ran := false
+	ran, out := false, t.TempDir()
 	s := Scenario{Name: "A5b", Run: func(context.Context, Env) Verdict {
 		ran = true
-		return pass("A5b", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
+		return pass("A5b", "openwrt", ShapeMacvlan, "body ran", bodyEvidence(t, out), "abc1234")
 	}}
 	got := RunOne(context.Background(), s, e)
+	mustWrite(t, out, got)
 	if !ran || got.Result != BLOCKED || !strings.Contains(got.Reason, "body passed on a power-cycled host") ||
 		!strings.Contains(got.Reason, "before this scenario the docker host stopped answering ssh") {
 		t.Errorf("ran=%v %s %q: want the body run, BLOCKED, and the reset named", ran, got.Result, got.Reason)
@@ -195,16 +196,19 @@ func TestRunOneNamesTheHostResetInTheVerdict(t *testing.T) {
 
 	host.up, host.noPlugin = false, true
 	got = RunOne(context.Background(), s, e)
+	mustWrite(t, out, got)
 	if got.Result != BLOCKED || !strings.Contains(got.Reason, "plugin not installed") || !strings.Contains(got.Reason, "power-cycled (virsh reset") {
 		t.Errorf("%s %q: want BLOCKED on the plugin, naming the reset that brought the host back", got.Result, got.Reason)
 	}
 
 	h.Max, host.up, host.neverUp = 3, false, true
 	got = RunOne(context.Background(), s, e)
+	mustWrite(t, out, got)
 	if got.Result != BLOCKED || !strings.Contains(got.Reason, "did not bring it back") {
 		t.Errorf("%s %q: want BLOCKED naming the failed reset", got.Result, got.Reason)
 	}
 	got = RunOne(context.Background(), s, e)
+	mustWrite(t, out, got)
 	if got.Result != BLOCKED || strings.Contains(got.Reason, "power-cycled") || len(evidenceFiles(t, h.EvidenceDir)) != 3 {
 		t.Errorf("%s %q: a scenario past Max must block without a reset", got.Result, got.Reason)
 	}
@@ -216,14 +220,17 @@ func TestRunOneNeverHidesAHostLostAfterAPassingScenario(t *testing.T) {
 	h := newRecovery(t, v, 2)
 	e := Env{Host: host, Source: &fakeAdapter{caps: allNeeds()}, Cell: "openwrt", Shape: ShapeMacvlan,
 		GitSHA: "abc1234", EvidenceDir: t.TempDir(), HostRecovery: h}
+	out := t.TempDir()
 	x := Scenario{Name: "X", Run: func(context.Context, Env) Verdict {
 		defer func() { host.up = false }()
-		return pass("X", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
+		return pass("X", "openwrt", ShapeMacvlan, "body ran", bodyEvidence(t, out), "abc1234")
 	}}
 	y := Scenario{Name: "Y", Run: func(context.Context, Env) Verdict {
-		return pass("Y", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
+		return pass("Y", "openwrt", ShapeMacvlan, "body ran", bodyEvidence(t, out), "abc1234")
 	}}
 	vx, vy := RunOne(context.Background(), x, e), RunOne(context.Background(), y, e)
+	mustWrite(t, out, vx)
+	mustWrite(t, out, vy)
 	if vx.Result == PASS && vy.Result == PASS {
 		t.Errorf("X %s, Y %s %q: a host lost after X must show in a verdict worse than PASS", vx.Result, vy.Result, vy.Reason)
 	}
@@ -233,10 +240,30 @@ func TestRunOneNeverHidesAHostLostAfterAPassingScenario(t *testing.T) {
 
 	host.up = false
 	f := Scenario{Name: "F", Run: func(context.Context, Env) Verdict {
-		return fail("F", "openwrt", ShapeMacvlan, "lease missing", nil, "abc1234")
+		return fail("F", "openwrt", ShapeMacvlan, "lease missing", bodyEvidence(t, out), "abc1234")
 	}}
-	if vf := RunOne(context.Background(), f, e); vf.Result != FAIL || !strings.Contains(vf.Reason, "power-cycled") {
-		t.Errorf("F %s %q: a FAIL after a reset stays FAIL and names the reset", vf.Result, vf.Reason)
+	vf := RunOne(context.Background(), f, e)
+	mustWrite(t, out, vf)
+	if vf.Result != FAIL || !strings.Contains(vf.Reason, "power-cycled") || len(vf.Evidence) == 0 {
+		t.Errorf("F %s %q %v: a FAIL after a reset stays FAIL with its evidence and names the reset", vf.Result, vf.Reason, vf.Evidence)
+	}
+}
+
+// bodyEvidence is what a real body hands back: Write refuses a PASS without it.
+func bodyEvidence(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	p := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(p, []byte("body ran\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return map[string]string{"body": p}
+}
+
+// labctl stops the whole shape when a verdict cannot be written (#158).
+func mustWrite(t *testing.T, dir string, v Verdict) {
+	t.Helper()
+	if err := Write(dir, v); err != nil {
+		t.Errorf("Write refused the verdict RunOne returned: %v", err)
 	}
 }
 

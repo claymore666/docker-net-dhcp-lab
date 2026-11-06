@@ -313,8 +313,9 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 		v.Reason += "; before this scenario " + hostNote
 		// The matrix shows no reason on a PASS, so a host lost after the
 		// previous scenario's body would vanish from the published run (#158).
+		// Write refuses a BLOCKED verdict with evidence; the files stay on disk.
 		if v.Result == PASS {
-			v.Result = BLOCKED
+			v.Result, v.Evidence = BLOCKED, nil
 			v.Reason = "body passed on a power-cycled host: " + v.Reason
 		}
 	}
