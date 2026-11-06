@@ -582,6 +582,9 @@ func cmdRun(args []string) int {
 	}
 
 	ctx := context.Background()
+	// Two resets per shape, each waiting up to 5 min (#158).
+	hostRecovery := &scenario.HostRecovery{Cell: cellName, Shape: shape, EvidenceDir: evidenceDir,
+		Max: 2, Wait: 5 * time.Minute, Poll: 5 * time.Second}
 	hi := hostInfo(ctx, hostRunner)
 
 	// The readiness gate every scenario relies on (RunOne's
@@ -589,7 +592,7 @@ func cmdRun(args []string) int {
 	// scenario; NetworkUp runs before that, so it needs its own gate
 	// here (issue #3). A fresh bring-up's plugin can report done, and
 	// even have a live process, before its socket actually answers.
-	if err := scenario.WaitPluginReady(ctx, hostRunner); err != nil {
+	if err := hostRecovery.Gate(ctx, hostRunner, func() error { return scenario.WaitPluginReady(ctx, hostRunner) }); err != nil {
 		logPath := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-plugin-not-ready.log", cellName, shape))
 		if logErr := scenario.CapturePluginLog(ctx, hostRunner, logPath); logErr != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: plugin log capture also failed: %v\n", logErr)
@@ -714,6 +717,7 @@ func cmdRun(args []string) int {
 	env.PreviousPluginTag = cell.DockerHost.PreviousPluginTag
 	env.GitSHA = gitSHA
 	env.HostInfo = hi
+	env.HostRecovery = hostRecovery
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a
 	// minute and hand it to whichever container starts next on the same

@@ -55,6 +55,9 @@ type Env struct {
 	// scenario body has to carry it. Zero value when the read failed;
 	// never blocks a run.
 	HostInfo HostInfo
+	// HostRecovery power-cycles a docker host that stopped answering ssh
+	// before the plugin gate runs again (#158); nil never resets.
+	HostRecovery *HostRecovery
 	// Capture reads the live observer capture (group C, #23); nil
 	// leaves a group C scenario BLOCKED, never judged without it.
 	Capture CaptureReader
@@ -296,10 +299,23 @@ func RunOne(ctx context.Context, s Scenario, e Env) Verdict {
 }
 
 func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
-	if err := ensurePluginKnownState(ctx, e.Host); err != nil {
-		return blocked(s.Name, e.Cell, e.Shape,
-			fmt.Sprintf("plugin not in a known state before this scenario: %v", err), e.GitSHA)
+	err := e.HostRecovery.Gate(ctx, e.Host, func() error { return ensurePluginKnownState(ctx, e.Host) })
+	hostNote := e.HostRecovery.TakeNote()
+	if err != nil {
+		reason := fmt.Sprintf("plugin not in a known state before this scenario: %v", err)
+		if hostNote != "" {
+			reason += "; " + hostNote
+		}
+		return blocked(s.Name, e.Cell, e.Shape, reason, e.GitSHA)
 	}
+	v := runGated(ctx, s, e)
+	if hostNote != "" {
+		v.Reason += "; before this scenario " + hostNote
+	}
+	return v
+}
+
+func runGated(ctx context.Context, s Scenario, e Env) Verdict {
 	// The shape's own bridge, for bridge shape, must actually be present
 	// before this scenario runs, not assumed from an earlier bring-up in
 	// the same run (#3): a missing or broken bridge is rebuilt here, or
