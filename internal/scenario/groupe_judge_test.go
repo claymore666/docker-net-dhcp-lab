@@ -669,3 +669,89 @@ func TestJudgeE1BroadcastRebindStillFails(t *testing.T) {
 	})
 	wantOutcome(t, judgeE1(o), FAIL, "rebind")
 }
+
+// Lab #155: behind a relay the one unicast RELEASE reaches the server as
+// the routed original and as the relay's copy; Kea logs both with the
+// same tid. One client transaction is one release.
+func relayDoubledRelease(tid1, tid2 string) []sourceadapter.ServerEvent {
+	a, b := srvEv("RELEASE", eIP, 31), srvEv("RELEASE", eIP, 31)
+	a.TID, b.TID = tid1, tid2
+	return []sourceadapter.ServerEvent{srvEv("ACK", eIP, 0), srvEv("ACK", eIP, 20), a, b}
+}
+
+func TestJudgeE1CountsADoubledRelayReleaseOnce(t *testing.T) {
+	o := happyE1()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733b")
+	wantOutcome(t, judgeE1(o), PASS, "1 source RELEASE equals releases_sent_v4")
+}
+
+func TestJudgeE2CountsADoubledRelayReleaseOnce(t *testing.T) {
+	o := happyE2()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733B")
+	wantOutcome(t, judgeE2(o), PASS, "released +1")
+}
+
+// Two releases are still two: another tid, a line without a tid, or
+// the same tid from another client each count.
+func TestJudgeE1StillFailsTwoDistinctReleases(t *testing.T) {
+	for name, tids := range map[string][2]string{
+		"different tids": {"0x6c5d733b", "0x11111111"},
+		"no tid at all":  {"", ""},
+		"one without":    {"0x6c5d733b", ""},
+	} {
+		o := happyE1()
+		o.Server = relayDoubledRelease(tids[0], tids[1])
+		if got := judgeE1(o); got.Result != FAIL || !strings.Contains(got.Reason, "2 RELEASE") {
+			t.Errorf("%s: got %s %q, want FAIL naming 2 RELEASE", name, got.Result, got.Reason)
+		}
+	}
+	o := happyE1()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733b")
+	o.Server[3].MAC = "02:00:00:00:00:99"
+	if got := tallyReleases(o.Server); got != 2 {
+		t.Errorf("same tid from two clients: %d releases, want 2", got)
+	}
+}
+
+func tallyReleases(server []sourceadapter.ServerEvent) int {
+	_, releases, _, _ := eTally(server)
+	return releases
+}
+
+// A plugin that really sent the RELEASE twice under one xid is caught by
+// the counter side, not by the log count.
+func TestJudgeE1DoubleSendUnderOneTidStillFailsOnTheCounter(t *testing.T) {
+	o := happyE1()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733b")
+	o.ReleasesSent = 2
+	wantOutcome(t, judgeE1(o), FAIL, "releases_sent_v4 moved by 2")
+}
+
+// Lab #155: the log count merges the relay's copy, so a plugin that put
+// one RELEASE on the client segment twice under one xid is caught by the
+// capture. One frame on the wire is the relay double and still passes.
+func releaseFrames(n int) []DHCPMsg {
+	var out []DHCPMsg
+	for i := 0; i < n; i++ {
+		out = append(out, wireMsg("RELEASE", "0x6c5d733b", eIP, "", "192.0.2.1", 31))
+	}
+	return out
+}
+
+func TestJudgeE1WireHoldingTheReleaseTwiceFailsWhileOneFramePasses(t *testing.T) {
+	o := happyE1()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733b")
+	o.Wire = append(o.Wire, releaseFrames(2)...)
+	wantOutcome(t, judgeE1(o), FAIL, "2 RELEASE frames from the client but releases_sent_v4 moved by 1")
+	o.Wire = append(happyE1().Wire, releaseFrames(1)...)
+	wantOutcome(t, judgeE1(o), PASS, "1 source RELEASE equals releases_sent_v4")
+}
+
+func TestJudgeE2WireHoldingTheReleaseTwiceFailsWhileOneFramePasses(t *testing.T) {
+	o := happyE2()
+	o.Server = relayDoubledRelease("0x6c5d733b", "0x6c5d733b")
+	o.Wire = append(o.Wire, releaseFrames(2)...)
+	wantOutcome(t, judgeE2(o), FAIL, "2 RELEASE frames from the client but releases_sent_v4 moved by 1")
+	o.Wire = append(happyE2().Wire, releaseFrames(1)...)
+	wantOutcome(t, judgeE2(o), PASS, "released +1")
+}

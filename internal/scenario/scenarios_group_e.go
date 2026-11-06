@@ -290,7 +290,11 @@ func hasEventType(evs []sourceadapter.ServerEvent, typ string) bool {
 func writeEvidenceE(e Env, scenario string, raw *eRaw) error {
 	var b strings.Builder
 	for _, ev := range raw.server {
-		fmt.Fprintf(&b, "%s %s %s %s\n", ev.At.UTC().Format(time.RFC3339), ev.Type, ev.MAC, ev.IP)
+		fmt.Fprintf(&b, "%s %s %s %s", ev.At.UTC().Format(time.RFC3339), ev.Type, ev.MAC, ev.IP)
+		if ev.TID != "" {
+			fmt.Fprintf(&b, " tid=%s", ev.TID)
+		}
+		b.WriteString("\n")
 	}
 	if b.Len() == 0 {
 		b.WriteString("# no server events for this client\n")
