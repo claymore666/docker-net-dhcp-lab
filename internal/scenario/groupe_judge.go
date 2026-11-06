@@ -153,12 +153,25 @@ func alignGroups(sg, wg []eGroup) error {
 
 // eTally keeps the four types every source logs (Kea logs only these at
 // INFO, #15 row 5); DISCOVER, REQUEST and OFFER lines never count.
+// A RELEASE counts once per client transaction (Kea's tid and the
+// hardware address): behind a relay the one unicast RELEASE reaches
+// the server twice, as the routed original and as the relay's copy,
+// and Kea logs both with the same tid (lab #155). A line with no tid
+// (dnsmasq, ISC) is one release.
 func eTally(server []sourceadapter.ServerEvent) (acks []sourceadapter.ServerEvent, releases, declines, naks int) {
+	seen := map[[2]string]bool{}
 	for _, ev := range server {
 		switch ev.Type {
 		case "ACK":
 			acks = append(acks, ev)
 		case "RELEASE":
+			if ev.TID != "" {
+				k := [2]string{strings.ToLower(ev.TID), strings.ToLower(ev.MAC)}
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+			}
 			releases++
 		case "DECLINE":
 			declines++
@@ -167,6 +180,24 @@ func eTally(server []sourceadapter.ServerEvent) (acks []sourceadapter.ServerEven
 		}
 	}
 	return acks, releases, declines, naks
+}
+
+// eWireReleaseExcess names a RELEASE the client put on its own segment
+// more often than the plugin counted: the server-side tally merges the
+// relay's two copies of one frame (lab #155), so a plugin that really
+// sent a frame twice under one xid shows only here. A capture that
+// missed the frame (fewer than counted) is not judged.
+func eWireReleaseExcess(wire []DHCPMsg, sent int64) string {
+	n := 0
+	for _, m := range wire {
+		if m.Type == "RELEASE" {
+			n++
+		}
+	}
+	if int64(n) > sent {
+		return fmt.Sprintf("the capture shows %d RELEASE frames from the client but releases_sent_v4 moved by %d", n, sent)
+	}
+	return ""
 }
 
 func eCount(ex []wireExchange, class string) int {
@@ -280,6 +311,9 @@ func judgeE1(o e1Obs) fOutcome {
 	if int64(releases) != o.ReleasesSent {
 		fails = append(fails, fmt.Sprintf("the source logged %d RELEASE but releases_sent_v4 moved by %d", releases, o.ReleasesSent))
 	}
+	if f := eWireReleaseExcess(o.Wire, o.ReleasesSent); f != "" {
+		fails = append(fails, f)
+	}
 	if len(fails) > 0 {
 		return fFail("%s", strings.Join(fails, "; "))
 	}
@@ -352,6 +386,9 @@ func judgeE2(o e2Obs) fOutcome {
 	eq("leases_obtained", eCount(ex, eBound), "the wire's DISCOVER-started exchanges")
 	eq("leases_renewed", eCount(ex, eRenew), "the wire's unicast renewal exchanges")
 	eq("releases_sent", releases, "the source's RELEASE lines")
+	if f := eWireReleaseExcess(o.Wire, delta["releases_sent"]); f != "" {
+		fails = append(fails, f)
+	}
 	eq("naks_received", naks, "the source's NAK lines")
 	for _, m := range o.Wire {
 		if m.Type == "NAK" {

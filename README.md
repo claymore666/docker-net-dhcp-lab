@@ -453,7 +453,12 @@ later calls to the same guest try once each until one succeeds. Starts are space
 not all boot, install the plugin and open ssh at the same moment. A cell
 that fails does not stop the others, is torn down with `down-cell.sh` as
 soon as it exits, and the exit code is 1 if any cell's was not 0, except
-`skipped-image` (below), which is not a failure.
+`skipped-image` (below), which is not a failure. A cell that exits 0 but
+whose verdicts are more than 10 % BLOCKED (`LAB_BLOCKED_MAX_PCT` changes the
+bound) did not measure the product: it is reported as `mostly-blocked`, the
+summary table shows the share in its `blocked` column, and the exit code is 1
+(#156). Healthy cells of the first runs sat at 0 to 5.7 % BLOCKED, the broken
+ones at 21.5 % to 100 %.
 Before the first start it resolves every cell and refuses if two share a
 name, VM name, bridge, management address, observer container, observer
 veth or directory, or if any of those VMs or containers already exists on

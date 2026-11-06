@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // fixedMACFor derives a deterministic, valid locally-administered
@@ -125,6 +127,14 @@ func runA1(ctx context.Context, e Env) Verdict {
 // way the check still requires a lease under the new address and that
 // the source can reach the container there.
 func runA2(ctx context.Context, e Env) Verdict {
+	isIPAMShape := e.Shape == ShapeBridgeIPAM || e.Shape == ShapeMacvlanIPAM
+	releasesOnRestart := false
+	if isIPAMShape {
+		var err error
+		if releasesOnRestart, err = clientHasFeature(e.PluginTag, a2HandoverSince); err != nil {
+			return blocked(NameA2, e.Cell, e.Shape, err.Error(), e.GitSHA)
+		}
+	}
 	name := containerName(e, NameA2)
 	defer removeContainer(ctx, e.Host, name)
 
@@ -148,29 +158,39 @@ func runA2(ctx context.Context, e Env) Verdict {
 	if err := waitContainerRunning(ctx, e.Host, name); err != nil {
 		return fail(NameA2, e.Cell, e.Shape, err.Error(), evBefore, e.GitSHA)
 	}
-	_, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
+	afterMac, afterAddr, afterEndpointID, err := inspectContainer(ctx, e.Host, e.Shape, name)
 	if err != nil {
 		return fail(NameA2, e.Cell, e.Shape, fmt.Sprintf("inspect after restart: %v", err), evBefore, e.GitSHA)
 	}
 
 	// The plugin's own IPAM driver mode mints a fresh MAC on every
-	// restart, but re-sends the previous client identifier from the
-	// endpoint's own lease record (docs/reference.md "Restart
-	// stability (MAC and IP)"): the restarted container's row is found
-	// by that identifier, never by the new MAC docker inspect now
-	// reports (issue #3 part 2, lab fault fix -- looking this up by mac
-	// produced a FAIL for behaviour the plugin documents as normal).
-	isIPAMShape := e.Shape == ShapeBridgeIPAM || e.Shape == ShapeMacvlanIPAM
+	// restart. Before v2.8.0 it re-sent the previous client identifier,
+	// so the row is found by that identifier (issue #3 part 2); from
+	// v2.8.0 it releases and re-requests under the new MAC's identifier
+	// (plugin #1416), and the row is found by address (a2KeptLease).
 	afterSnap := evidencePath(e, NameA2, "leases-after")
 	var afterReason string
+	var afterLease sourceadapter.Lease
 	if isIPAMShape {
 		if beforeLease.ClientID == "" {
 			return fail(NameA2, e.Cell, e.Shape,
 				"before restart: the lease carried no client identifier to look the restarted container up by",
 				evBefore, e.GitSHA)
 		}
-		_, _, ok, err = lookupLeaseByClientID(ctx, e.Source, beforeLease.ClientID, afterSnap)
-		afterReason = fmt.Sprintf("after restart: no lease for client identifier %s (address %s) in the source's own table", beforeLease.ClientID, afterAddr)
+		if releasesOnRestart {
+			// Since plugin v2.8.0 the restart sends a RELEASE and then asks
+			// for the same address under the new MAC's identifier (plugin
+			// #1416); the old identifier's row is gone by design.
+			var leases []sourceadapter.Lease
+			if leases, err = writeLeaseSnapshot(ctx, e.Source, afterSnap); err == nil {
+				afterLease, ok = a2KeptLease(leases, beforeLease.ClientID, afterMac, afterAddr)
+			}
+			afterReason = fmt.Sprintf("after restart: no lease for address %s under the old client identifier %s or the new MAC's %s in the source's own table",
+				afterAddr, beforeLease.ClientID, a2NewClientID(afterMac))
+		} else {
+			afterLease, _, ok, err = lookupLeaseByClientID(ctx, e.Source, beforeLease.ClientID, afterSnap)
+			afterReason = fmt.Sprintf("after restart: no lease for client identifier %s (address %s) in the source's own table", beforeLease.ClientID, afterAddr)
+		}
 	} else {
 		_, _, ok, err = lookupLease(ctx, e.Source, e.Shape, mac, afterAddr, afterEndpointID, afterSnap)
 		afterReason = "after restart: " + leaseFailReason(e.Shape, mac, afterAddr, afterEndpointID)
@@ -201,9 +221,41 @@ func runA2(ctx context.Context, e Env) Verdict {
 		return fail(NameA2, e.Cell, e.Shape,
 			fmt.Sprintf("container restarted and kept address %s, but the source could not reach it within %ds: %v", addr, secs, err), ev, e.GitSHA)
 	}
+	identity := ""
+	if releasesOnRestart && !strings.EqualFold(afterLease.ClientID, beforeLease.ClientID) {
+		identity = fmt.Sprintf(" (client identifier %s -> %s, the v2.8.0 hand-over)", beforeLease.ClientID, afterLease.ClientID)
+	}
 	return pass(NameA2, e.Cell, e.Shape,
-		fmt.Sprintf("container restarted, kept address %s, confirmed in the source's table both times, reachable from the source after %ds", addr, secs),
+		fmt.Sprintf("container restarted, kept address %s%s, confirmed in the source's table both times, reachable from the source after %ds", addr, identity, secs),
 		ev, e.GitSHA)
+}
+
+// a2HandoverSince is the plugin release whose restart releases the old
+// lease and re-requests the address under the new MAC's client
+// identifier (plugin #1416).
+var a2HandoverSince = [3]int{2, 8, 0}
+
+// a2NewClientID is the identifier the plugin sends for a MAC: type byte
+// 0x00 then the six bytes, as measured in lab run 6 on all five sources.
+func a2NewClientID(mac string) string {
+	return "00:" + strings.ToLower(mac)
+}
+
+// a2KeptLease finds the row that holds addr after a restart. Its
+// identity is accepted under the old client identifier (a plugin that
+// keeps it) or the restarted container's new one; a row for the address
+// under any other identity is somebody else's lease and does not count.
+func a2KeptLease(leases []sourceadapter.Lease, oldClientID, newMAC, addr string) (sourceadapter.Lease, bool) {
+	for _, l := range leases {
+		if l.Address != addr {
+			continue
+		}
+		if (oldClientID != "" && strings.EqualFold(l.ClientID, oldClientID)) || strings.EqualFold(l.ClientID, a2NewClientID(newMAC)) ||
+			(l.ClientID == "" && strings.EqualFold(l.MAC, newMAC)) {
+			return l, true
+		}
+	}
+	return sourceadapter.Lease{}, false
 }
 
 // runA3 -- compose down/up: removing and recreating the container (a new
