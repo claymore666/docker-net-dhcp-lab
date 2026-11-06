@@ -8,24 +8,33 @@ test server; this lab checks the plugin against the servers people run.
 Results per release are in [`results/`](results/), one page per lab
 release, with the full evidence attached to that release.
 
-**[1272 PASS, 890 N/A, 160 FAIL, 358 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc2.md)**
-in the newest run on the lab's virtual cells: plugin v2.7.0-rc2 on lab dev
-67c28eb (v0.3.0 plus the #122 fix), eight cells, 2026-10-30. Most FAIL and BLOCKED rows are three
-lab teardown defects (#137, #138, #139, fixed in #140) and host load; the
-plugin finding is the relay cell: no renewal at T1 behind a relay (plugin
-#1419). The page lists the issue behind every non-PASS group. The lab
-fixes made after that run (judges, teardown, OpenWrt, chr, the soak scenario
-E5) have no full host run yet.
+**[1199 PASS, 909 N/A, 20 FAIL, 592 BLOCKED](results/v0.5.0-plugin-v2.8.0-rc1.md)**
+in the newest full run on the lab's virtual cells: plugin v2.8.0-rc1 on lab dev
+fc5c177, eight cells, 2026-11-05. No row points at a plugin defect. 575 of the
+BLOCKED rows are two cells that failed on lab faults: Windows measured nothing
+(#157) and OpenWrt lost its Docker host after 41 PASS rows (#158). Both were
+run again alone on later lab commits:
+[Windows 142 PASS, 2 FAIL, 8 BLOCKED, 188 N/A and OpenWrt 155 PASS, 185 N/A](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md).
+The 2 Windows FAIL come from a run older than the A2 judge fix (#154). The
+seven cells not in that run have no run since plugin v2.7.0: Pi-hole,
+host-ubuntu2404 and kea-ha last ran on v2.7.0-rc2; isc-dhcp, isc-failover,
+host-ubuntu2404-isc-dhcp and chr on v2.7.0-rc1.
 
 A real router has its own page: plugin v2.7.0 against a home Fritz.Box,
 [31 PASS, 3 FAIL, 102 N/A](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md),
 2026-10-31, 18 scenarios that do not disturb the home network, macvlan and
 macvlan-ipam only.
 
-The run before it: [967 PASS, 931 N/A, 79 FAIL, 2110 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc1.md),
+The run before the newest: [1272 PASS, 890 N/A, 160 FAIL, 358 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc2.md),
+plugin v2.7.0-rc2 on lab dev 67c28eb, eight cells, 2026-10-30. Most FAIL and
+BLOCKED rows were three lab teardown defects (#137, #138, #139, fixed in
+#140) and host load; the plugin finding was the relay cell: no renewal at T1
+behind a relay (plugin #1419, fixed in v2.8.0-rc1).
+
+The run before that: [967 PASS, 931 N/A, 79 FAIL, 2110 BLOCKED](results/v0.4.0-plugin-v2.7.0-rc1.md),
 plugin v2.7.0-rc1 on lab v0.3.0, fifteen cells, 2026-10-29. Six cells ran
 their scenarios; six were stopped on every row by one lab defect (#121,
-fixed in #122) and re-run in the newest run. Its plugin finding, D4b
+fixed in #122) and re-run in the v2.7.0-rc2 run. Its plugin finding, D4b
 (the route of a withdrawn prefix, plugin #1412), is fixed in v2.7.0-rc2.
 
 Earlier runs: [1683 PASS, 1384 N/A, 401 FAIL, 293 BLOCKED](results/v0.3.0-plugin-v2.6.0-rc2.md),
@@ -307,19 +316,19 @@ scripts/down-cell.sh kea <work-dir>
 
 | Source | Cell | Host run |
 |---|---|---|
-| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) for kea and dnsmasq, [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) for isc-dhcp |
-| udhcpd | `udhcpd` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
+| Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) for kea and dnsmasq, [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) for isc-dhcp |
+| udhcpd | `udhcpd` | v0.2.0 to v0.4.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md): 111 PASS, 229 N/A, no FAIL (A2 and A10 pass on bridge and macvlan and are N/A on ipvlan and the two IPAM shapes) |
 | Pi-hole | `pihole` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) (all five shapes ran; the v0.3.0 page had the macvlan shape only) |
 | MikroTik CHR | `chr` | no verdicts yet: the base image could not be built in the v0.3.0 page's run (#92, fixed), and in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run the guest never answered the lab (#130; the seed now uploads over the admin login, #144; not re-run) |
-| OpenWrt 25.12 | `openwrt` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 145 PASS, 11 FAIL (the v0.3.0 page's 117 FAIL were the lab's own source probe, fixed in #98) |
+| OpenWrt 25.12 | `openwrt` | [v0.5.0 reruns page](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md): 155 PASS, 185 N/A, no FAIL or BLOCKED. The same cell in the [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) run had 267 BLOCKED rows: a host reboot left the Docker host unreachable (#158, fixed since). Earlier: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md), 145 PASS, 11 FAIL |
 | Kea on an Ubuntu 24.04 Docker host | `host-ubuntu2404` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
 | ISC dhcpd on an Ubuntu 24.04 Docker host | `host-ubuntu2404-isc-dhcp` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) |
-| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
-| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) |
-| Kea behind a relay | `kea-relay` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 144 PASS, 16 FAIL, 11 BLOCKED, the first run past the relay probe (#91 fixed the probe); the FAIL rows are the plugin's missing T1 renewal behind a relay (plugin #1419). No verdicts in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run: the probe failed on #121 |
+| dnsmasq on an Ubuntu 24.04 Docker host | `host-ubuntu2404-dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) |
+| Kea on a Debian 11 Docker host (docker-ce 20.10.24, the plugin's oldest supported engine) | `host-debian11-docker2010` | v0.2.0 and v0.3.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) |
+| Kea behind a relay | `kea-relay` | [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md): 163 PASS, 10 FAIL, 3 BLOCKED. Renewal behind a relay (C12b, C2, C3) passes on all five shapes (plugin #1419); 6 FAIL are the lab's E1 and E2 judge counting a relayed RELEASE twice (#155, fixed), 4 are A2 on the IPAM shapes (#154, fixed). The [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) run had 144 PASS, 16 FAIL, 11 BLOCKED, the FAIL rows the plugin's missing T1 renewal. No verdicts in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run: the probe failed on #121 |
 | Kea failover pair (hot standby) | `kea-ha` | [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md): 110 PASS, 102 FAIL, 19 BLOCKED, most of the FAIL rows the lab's teardown defect #137 (fixed in #140). Every row BLOCKED in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run (#121) |
 | ISC dhcpd failover pair | `isc-failover` | [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md): 204 PASS, 14 FAIL, 8 BLOCKED; C7, C5b and C5c were the judge and a precondition (#128, #129), fixed since |
-| Windows Server 2025 DHCP (v0.5.0, #14) | `windows` | not yet on a results page. Plugin v2.7.0, five shapes, 340 rows: 136 PASS, 188 N/A, 10 FAIL, 6 BLOCKED. Two lab commits are in the bundle and differ only in the lease-table reset (15d5bec: `macvlan-ipam` and the C4 rows; b55aee5: the rest). The 10 FAIL are A3, A4, A9, A10, A12 on both ipam shapes, not plugin findings: after a restart Docker gives the container a new MAC, the plugin asks for the old address with the old client identifier (DHCP option 61), and Windows keys leases by that identifier, so the address stays under the old MAC. B2 (reservation by client identifier) and B7 (release on remove) PASS on `bridge`, `macvlan`, `ipvlan`. 3 BLOCKED are C4 (reset the lease table, expect it empty; PASS on `ipvlan` and `bridge-ipam`): on `bridge` the row left is the test container's own lease, renewed during the reset (seen in the capture); on `macvlan` the same, inferred from timing; on `macvlan-ipam` it is a reservation. 3 BLOCKED are F2b (forced option 108): no offer carried it. |
+| Windows Server 2025 DHCP (v0.5.0, #14) | `windows` | [v0.5.0 reruns page](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md): plugin v2.8.0-rc1, five shapes, 340 rows: 142 PASS, 188 N/A, 2 FAIL, 8 BLOCKED. The 2 FAIL are A2 on the two IPAM shapes and come from a run older than the judge fix #154: the address was kept, under a new client identifier. The 8 BLOCKED are C4 (5 rows: the source still listed leases after the lease table was reset, so the precondition did not hold) and F2b (3 rows: no offer carried option 108). In the [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) run the cell had 308 BLOCKED rows (#157, fixed: the source was declared ready before its segment NIC had an address). An earlier run on plugin v2.7.0 (136 PASS, 10 FAIL, 6 BLOCKED, 188 N/A) has no page; its 10 FAIL were the same A2 judge, on A3, A4, A9, A10 and A12 |
 | A home Fritz.Box (v0.4.0, #13) | `fritzbox-home` | [v0.4.0 Fritz.Box page](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md): 31 PASS, 3 FAIL, 102 N/A; 18 non-disruptive scenarios on macvlan and macvlan-ipam, run by `scripts/fritzbox-home-run.sh` outside the labctl cells. The `fritzbox` cell in `lab.yaml` still has a placeholder adapter (`internal/sourceadapter/fritzbox.go`) |
 
 `scripts/fritzbox-home-run.sh run|cleanup|render` is the home-router run. It
@@ -333,23 +342,37 @@ digest, hands back every address it was given with a DHCPRELEASE, and `cleanup`
 removes what a cut run left. The router's lease table needs a login, so the
 verdicts rest on the router's own frames in the capture.
 
-Work on `dev` that has no verdicts on a results page yet:
+Work on `dev` since the v0.4.0 pages, and what the newest run says about it:
 
-- **Windows Server 2025 cell** (#14, v0.5.0): `scripts/build-windows-image.sh`
-  builds the evaluation image the `windows` cell boots, and the cell has been
-  run on plugin v2.7.0 (the row above). The source is DHCPv4 only and has no
-  Linux tools, so the rows that need a rogue server, a squatter, packet
-  impairment, FORCERENEW, DNS updates, a VLAN pool or the DHCP log report
-  N/A with the reason in each verdict. The build needs the Windows
-  evaluation ISO, which the lab does not ship.
-
-- **Soak scenario E5** (#15): the first verdicts will come from the next host
-  run. The v0.4.0 pages ran on lab trees without it, or against the Fritz.Box,
-  where it is N/A.
+- **Windows Server 2025 cell** (#14): `scripts/build-windows-image.sh`
+  builds the evaluation image the `windows` cell boots. It has verdicts on
+  the [v0.5.0 reruns page](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md).
+  The source is DHCPv4 only and has no Linux tools, so the rows that need a
+  rogue server, a squatter, packet impairment, FORCERENEW, DNS updates, a
+  VLAN pool or the DHCP log report N/A with the reason in each verdict. The
+  build needs the Windows evaluation ISO, which the lab does not ship.
+- **Soak scenario E5** (#15): the first verdicts are on the
+  [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) (25 PASS, 7 N/A,
+  8 BLOCKED across the eight cells). They are first verdicts: the 8 BLOCKED
+  rows are the Windows cell and the part of the OpenWrt cell after its Docker
+  host stopped answering ssh.
 - **Lab fixes since lab dev 67c28eb**: the judge and parser fixes (#123, #124,
   #126, #128, #129, #131, #132, #134, #141, #142), C10 (#125), the shape
   teardown (#137 to #139), the OpenWrt renumber and chr seed (#127, #130,
-  #144) and the retry pass (#79) have no full host run.
+  #144) and the retry pass (#79) ran in the v0.5.0 rc1 run. Newer than that
+  run, and checked only on the reruns page or not at all on a full host run:
+  the A2 judge for the plugin's address hand-over on restart (#154), the E1
+  and E2 judge counting a relayed RELEASE once (#155), a mostly-BLOCKED cell
+  now makes `run-cells.sh` exit non-zero (#156), the Windows source waiting
+  for its segment NIC to have an address (#157) and the host recovery below
+  (#158, #162).
+- **Host recovery** (#158): when a cell's Docker host does not answer ssh at
+  the start of a shape (or at a scenario gate), `labctl` power-cycles that
+  one VM and waits up to 5 minutes for it, at most twice per `labctl` run. A
+  `labctl` run is one shape, so a cell can see up to ten resets. A scenario
+  that passes behind a reset is reported BLOCKED ("body passed on a
+  power-cycled host"), never PASS, because the reset may have hidden the
+  state under test.
 
 **Server events** (#15) have their first verdicts on the v0.4.0 pages: Kea,
 ISC dhcpd and dnsmasq list the DHCP messages they logged, and E1 and E2
