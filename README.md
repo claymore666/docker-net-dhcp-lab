@@ -11,12 +11,14 @@ release, with the full evidence attached to that release.
 **[1199 PASS, 909 N/A, 20 FAIL, 592 BLOCKED](results/v0.5.0-plugin-v2.8.0-rc1.md)**
 in the newest full run on the lab's virtual cells: plugin v2.8.0-rc1 on lab dev
 fc5c177, eight cells, 2026-11-05. No row points at a plugin defect. 575 of the
-BLOCKED rows are two cells that measured nothing (Windows and OpenWrt, lab
-faults #157 and #158); both were run again alone on later lab commits:
+BLOCKED rows are two cells that failed on lab faults: Windows measured nothing
+(#157) and OpenWrt lost its Docker host after 41 PASS rows (#158). Both were
+run again alone on later lab commits:
 [Windows 142 PASS, 2 FAIL, 8 BLOCKED, 188 N/A and OpenWrt 155 PASS, 185 N/A](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md).
 The 2 Windows FAIL come from a run older than the A2 judge fix (#154). The
-seven cells not in that run (Pi-hole, the failover pairs, chr and the
-others) have no run since plugin v2.7.0-rc2.
+seven cells not in that run have no run since plugin v2.7.0: Pi-hole,
+host-ubuntu2404 and kea-ha last ran on v2.7.0-rc2; isc-dhcp, isc-failover,
+host-ubuntu2404-isc-dhcp and chr on v2.7.0-rc1.
 
 A real router has its own page: plugin v2.7.0 against a home Fritz.Box,
 [31 PASS, 3 FAIL, 102 N/A](results/v0.4.0-plugin-v2.7.0-fritzbox-home.md),
@@ -315,7 +317,7 @@ scripts/down-cell.sh kea <work-dir>
 | Source | Cell | Host run |
 |---|---|---|
 | Kea, ISC dhcpd, dnsmasq | `kea`, `isc-dhcp`, `dnsmasq` | v0.1.0 to v0.3.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) for kea and dnsmasq, [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) for isc-dhcp |
-| udhcpd | `udhcpd` | v0.2.0 to v0.4.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md): 111 PASS, 229 N/A, no FAIL (A2 and A10 are N/A on this source) |
+| udhcpd | `udhcpd` | v0.2.0 to v0.4.0 results pages; newest: [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md): 111 PASS, 229 N/A, no FAIL (A2 and A10 pass on bridge and macvlan and are N/A on ipvlan and the two IPAM shapes) |
 | Pi-hole | `pihole` | v0.2.0 and v0.3.0 results pages; newest: [v0.4.0 rc2 page](results/v0.4.0-plugin-v2.7.0-rc2.md) (all five shapes ran; the v0.3.0 page had the macvlan shape only) |
 | MikroTik CHR | `chr` | no verdicts yet: the base image could not be built in the v0.3.0 page's run (#92, fixed), and in the [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md) run the guest never answered the lab (#130; the seed now uploads over the admin login, #144; not re-run) |
 | OpenWrt 25.12 | `openwrt` | [v0.5.0 reruns page](results/v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md): 155 PASS, 185 N/A, no FAIL or BLOCKED. The same cell in the [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) run had 267 BLOCKED rows: a host reboot left the Docker host unreachable (#158, fixed since). Earlier: [v0.4.0 rc1 page](results/v0.4.0-plugin-v2.7.0-rc1.md), 145 PASS, 11 FAIL |
@@ -352,7 +354,8 @@ Work on `dev` since the v0.4.0 pages, and what the newest run says about it:
 - **Soak scenario E5** (#15): the first verdicts are on the
   [v0.5.0 rc1 page](results/v0.5.0-plugin-v2.8.0-rc1.md) (25 PASS, 7 N/A,
   8 BLOCKED across the eight cells). They are first verdicts: the 8 BLOCKED
-  rows are the Windows and OpenWrt cells, which measured nothing in that run.
+  rows are the Windows cell and the part of the OpenWrt cell after its Docker
+  host stopped answering ssh.
 - **Lab fixes since lab dev 67c28eb**: the judge and parser fixes (#123, #124,
   #126, #128, #129, #131, #132, #134, #141, #142), C10 (#125), the shape
   teardown (#137 to #139), the OpenWrt renumber and chr seed (#127, #130,
@@ -365,7 +368,8 @@ Work on `dev` since the v0.4.0 pages, and what the newest run says about it:
   (#158, #162).
 - **Host recovery** (#158): when a cell's Docker host does not answer ssh at
   the start of a shape (or at a scenario gate), `labctl` power-cycles that
-  one VM and waits up to 5 minutes for it, at most twice per run. A scenario
+  one VM and waits up to 5 minutes for it, at most twice per `labctl` run. A
+  `labctl` run is one shape, so a cell can see up to ten resets. A scenario
   that passes behind a reset is reported BLOCKED ("body passed on a
   power-cycled host"), never PASS, because the reset may have hidden the
   state under test.
