@@ -18,3 +18,5 @@ Pages:
 - [v0.4.0 (run on lab v0.3.0), plugin v2.7.0-rc1](v0.4.0-plugin-v2.7.0-rc1.md).
 - [v0.4.0 (run on lab dev 67c28eb, v0.3.0 plus #122), plugin v2.7.0-rc2](v0.4.0-plugin-v2.7.0-rc2.md).
 - [v0.4.0 (run on lab dev 2c3e925), plugin v2.7.0, a home Fritz.Box](v0.4.0-plugin-v2.7.0-fritzbox-home.md).
+- [v0.5.0 (run on lab dev fc5c177), plugin v2.8.0-rc1](v0.5.0-plugin-v2.8.0-rc1.md), eight cells.
+- [v0.5.0 (two cells run again alone, on later lab commits), plugin v2.8.0-rc1](v0.5.0-plugin-v2.8.0-rc1-cell-reruns.md): Windows and OpenWrt, most of whose rows in the page above are BLOCKED.

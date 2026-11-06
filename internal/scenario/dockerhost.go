@@ -657,17 +657,26 @@ func WaitPluginReady(ctx context.Context, r sourceadapter.Runner) error {
 
 func waitPluginReadyTuned(ctx context.Context, r sourceadapter.Runner, timeout, poll time.Duration) error {
 	start := time.Now()
+	var unreachable error
 	for {
-		enabled, _ := r.Run(ctx, fmt.Sprintf("sudo docker plugin inspect -f '{{.Enabled}}' %s 2>/dev/null", pluginAlias))
+		enabled, err := r.Run(ctx, fmt.Sprintf("sudo docker plugin inspect -f '{{.Enabled}}' %s 2>/dev/null", pluginAlias))
 		if strings.TrimSpace(enabled) == "true" {
-			if _, err := r.Run(ctx, "sudo sh -c 'ls "+pluginSocketGlob+"' >/dev/null 2>&1"); err == nil {
+			if _, err = r.Run(ctx, "sudo sh -c 'ls "+pluginSocketGlob+"' >/dev/null 2>&1"); err == nil {
 				fmt.Fprintf(os.Stderr, "WaitPluginReady: %s enabled with an answering socket after %s\n",
 					pluginAlias, time.Since(start).Round(10*time.Millisecond))
 				return nil
 			}
 		}
+		unreachable = nil
+		if sourceadapter.IsConnectError(err) {
+			unreachable = err
+		}
 		elapsed := time.Since(start)
 		if elapsed >= timeout {
+			// The ssh error stays in the chain so HostRecovery can see a dead host (#158).
+			if unreachable != nil {
+				return fmt.Errorf("%s not enabled with an answering socket after %s: %w", pluginAlias, elapsed.Round(10*time.Millisecond), unreachable)
+			}
 			return fmt.Errorf("%s not enabled with an answering socket after %s", pluginAlias, elapsed.Round(10*time.Millisecond))
 		}
 		select {

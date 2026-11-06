@@ -336,12 +336,13 @@ ps_ssh() {
 		lab@"$mgmt_ip" powershell -NonInteractive -EncodedCommand "$enc" 2>/dev/null
 }
 
-# Ready when ssh answers and the marker holds exactly this cell's id: a
-# reachable guest with an older image's marker is not ready (#14).
+# Ready when the marker holds exactly this cell's id (#14), the LabNet
+# boot task has ended and seg carries its address: the marker alone came
+# 85 s before seg was addressed, measured on a cell alone (#157).
 ready_windows() {
-	local got
-	got=$(ps_ssh 'Get-Content -Raw C:\ProgramData\lab\bootstrap-done' | tr -d '\r\n') || return 1
-	[ -n "$got" ] && [ "$got" = "$baked_id" ]
+	local got ip=${seg_addr%%/*} bits=${seg_addr##*/}
+	got=$(ps_ssh "\$m = (Get-Content -Raw C:\\ProgramData\\lab\\bootstrap-done).Trim(); \$t = (Get-ScheduledTask -TaskName LabNet).State; \$s = @(Get-NetIPAddress -InterfaceAlias seg -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { \$_.IPAddress -eq '$ip' -and \$_.PrefixLength -eq $bits -and \$_.AddressState -eq 'Preferred' }).Count; \"\$m \$t \$s\"" | tr -d '\r\n') || return 1
+	[ "$got" = "$baked_id Ready 1" ]
 }
 
 # The wait below is 60 x 10 s unless a test shortens it (#14).

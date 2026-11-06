@@ -277,9 +277,7 @@ func newSourceAdapter(sourceType string, runner sourceadapter.Runner) (sourceada
 	case "fritzbox":
 		return &sourceadapter.FritzboxAdapter{Runner: runner}, nil
 	case "windows":
-		// run-cells.sh skips the cell while its image is absent (lab #14),
-		// so a run never reaches this; the adapter is the next change.
-		return nil, fmt.Errorf("source type windows has no adapter yet (lab #14); the cell is wired and cannot run")
+		return &sourceadapter.WindowsAdapter{Runner: runner}, nil
 	default:
 		return nil, fmt.Errorf("unknown source type %q", sourceType)
 	}
@@ -584,14 +582,18 @@ func cmdRun(args []string) int {
 	}
 
 	ctx := context.Background()
-	hi := hostInfo(ctx, hostRunner)
-
+	// Two resets per shape, each waiting up to 5 min (#158).
+	hostRecovery := &scenario.HostRecovery{Cell: cellName, Shape: shape, EvidenceDir: evidenceDir,
+		Max: 2, Wait: 5 * time.Minute, Poll: 5 * time.Second}
 	// The readiness gate every scenario relies on (RunOne's
 	// ensurePluginKnownState) only runs starting with the first
 	// scenario; NetworkUp runs before that, so it needs its own gate
 	// here (issue #3). A fresh bring-up's plugin can report done, and
 	// even have a live process, before its socket actually answers.
-	if err := scenario.WaitPluginReady(ctx, hostRunner); err != nil {
+	gateErr := hostRecovery.Gate(ctx, hostRunner, func() error { return scenario.WaitPluginReady(ctx, hostRunner) })
+	// Read after the gate, so a host it power-cycled is still named in every verdict (#158).
+	hi := hostInfo(ctx, hostRunner)
+	if err := gateErr; err != nil {
 		logPath := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-plugin-not-ready.log", cellName, shape))
 		if logErr := scenario.CapturePluginLog(ctx, hostRunner, logPath); logErr != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: plugin log capture also failed: %v\n", logErr)
@@ -716,6 +718,7 @@ func cmdRun(args []string) int {
 	env.PreviousPluginTag = cell.DockerHost.PreviousPluginTag
 	env.GitSHA = gitSHA
 	env.HostInfo = hi
+	env.HostRecovery = hostRecovery
 
 	// The two IPAM shapes hold a stopped container's DHCP identity for a
 	// minute and hand it to whichever container starts next on the same

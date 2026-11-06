@@ -22,6 +22,12 @@ try {
     if (-not (Test-Stage 'net')) {
         $netconfig = @'
 $ErrorActionPreference = 'Stop'
+# A NIC on another PCI path is a new adapter to Windows, and the old one,
+# no longer present, keeps its name: the rename below then fails and the
+# NIC stays unaddressed (measured: an image built with a display, booted
+# without one, lab #14). Absent virtio NICs are removed first.
+Get-PnpDevice -Class Net | Where-Object { -not $_.Present -and $_.FriendlyName -like 'Red Hat VirtIO Ethernet*' } |
+    ForEach-Object { & pnputil.exe /remove-device $_.InstanceId | Out-Null }
 $nics = @(
     @{ Mac = '__MGMT_MAC__'; Name = 'mgmt'; Ip = '__MGMT_IP__'; Prefix = __MGMT_PREFIX__; Gw = '__MGMT_GW__' },
     @{ Mac = '__SEG_MAC__'; Name = 'seg'; Ip = '__SEG_IP__'; Prefix = __SEG_PREFIX__; Gw = '' }
@@ -96,8 +102,15 @@ if ($changed -and (Get-Service -Name DHCPServer -ErrorAction SilentlyContinue)) 
         Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\ServerManager\Roles\12' -Name 'ConfigurationState' -Value 2
         Restart-Service -Name DHCPServer -Force
         Add-LocalGroupMember -Group 'DHCP Administrators' -Member 'lab'
-        Add-DhcpServerv4Scope -Name 'lab' -StartRange '__POOL_START__' -EndRange '__POOL_END__' `
+        # A policy range must lie inside the scope, so the scope spans the
+        # main pool and the B5 class pool with the band between excluded;
+        # clients matching no policy are served outside policy ranges (lab #14).
+        Add-DhcpServerv4Scope -Name 'lab' -StartRange '__POOL_START__' -EndRange '__CLASS_POOL_END__' `
             -SubnetMask '255.255.255.0' -State Active -LeaseDuration (New-TimeSpan -Hours 12)
+        Add-DhcpServerv4ExclusionRange -ScopeId '__SEG_NETWORK__' -StartRange '__GAP_START__' -EndRange '__GAP_END__'
+        Add-DhcpServerv4Class -Name 'lab-class-b5' -Type Vendor -Data 'lab-class-b5'
+        Add-DhcpServerv4Policy -Name 'b5' -ScopeId '__SEG_NETWORK__' -Condition OR -VendorClass EQ, 'lab-class-b5'
+        Add-DhcpServerv4PolicyIPRange -Name 'b5' -ScopeId '__SEG_NETWORK__' -StartRange '__CLASS_POOL_START__' -EndRange '__CLASS_POOL_END__'
         Set-DhcpServerv4OptionValue -ScopeId '__SEG_NETWORK__' -Router '__SEG_GATEWAY__' -DnsServer '__SEG_IP__' -Force
         Set-DhcpServerSetting -ConflictDetectionAttempts 0
         Export-DhcpServer -File "$lab\baseline.xml" -Leases -Force
@@ -122,8 +135,12 @@ if ($changed -and (Get-Service -Name DHCPServer -ErrorAction SilentlyContinue)) 
         Set-Content -Path $keys -Value '__PUBKEY__' -Encoding ascii
         & icacls.exe $keys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'icacls failed on the authorized keys file' }
+        # cmd.exe, not PowerShell: a PowerShell shell costs 7 s per ssh call on
+        # this 2-vCPU guest (measured 2026-10-31), which alone exceeds the
+        # scenarios' 10 s reachability window (lab #14). Callers start
+        # powershell themselves.
         New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name 'DefaultShell' -PropertyType String -Force `
-            -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' | Out-Null
+            -Value 'C:\Windows\System32\cmd.exe' | Out-Null
         Start-Service -Name sshd
         Set-Stage 'ssh'
     }

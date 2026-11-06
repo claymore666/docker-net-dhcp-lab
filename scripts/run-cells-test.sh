@@ -826,7 +826,8 @@ sel() { # name, reason, [result], [scenario] -> number of starts of cell a
 	e=$(new_env)
 	meminfo "$e" 60
 	printf 'A1.verdict|%s|%s|%s\n' "$2" "${3:-FAIL}" "${4:-x}" >"$e/state/emit.a.1"
-	cells "$e" -j 1 a
+	# one verdict per cell: this case tests the retry, not the BLOCKED share (case 23)
+	LAB_BLOCKED_MAX_PCT=100 cells "$e" -j 1 a
 	expect "case 21d ($n)" 0 "$e"
 	starts_of "$e" a
 }
@@ -1141,6 +1142,59 @@ expect "case 22g (earlier verdicts, image gone)" 0 "$e"
 [ -f "$e/root/evidence/w/old.verdict" ] || bad "case 22g: an earlier verdict was moved"
 [ ! -e "$e/root/evidence/w/image-not-built.json" ] || bad "case 22g: a marker was written beside earlier verdicts"
 [ ! -e "$e/root/evidence/w/retried" ] || bad "case 22g: the retry pass touched a skipped-image cell"
+
+# Case 23 (#156): a cell that exits 0 with more than 10 % of its verdicts
+# BLOCKED is reported mostly-blocked, non-zero, in the table, the rc file
+# and a line of its own; exactly 10 % and N/A rows do not count; first
+# attempts under retried/ are not verdicts of the final run.
+emit_verdicts() { # file, blocked, na, pass
+	local f=$1 i
+	: >"$f"
+	for ((i = 1; i <= $2; i++)); do printf 'B%d.verdict|lab fault|BLOCKED|B%d\n' "$i" "$i" >>"$f"; done
+	for ((i = 1; i <= $3; i++)); do printf 'N%d.verdict|not applicable|N/A|N%d\n' "$i" "$i" >>"$f"; done
+	for ((i = 1; i <= $4; i++)); do printf 'P%d.verdict|ok|PASS|P%d\n' "$i" "$i" >>"$f"; done
+}
+e=$(new_env)
+meminfo "$e" 60
+emit_verdicts "$e/state/emit.a.1" 2 3 5
+emit_verdicts "$e/state/emit.b.1" 1 4 5
+emit_verdicts "$e/state/emit.c.1" 0 0 10
+cells "$e" -j 3 a b c
+expect "case 23 (mostly-blocked cell)" 1 "$e"
+has "case 23 table a" "$e" "^a +mostly-blocked +[0-9.,-]+ +2/10 "
+has "case 23 table b (exactly 10 %)" "$e" "^b +0 +[0-9.,-]+ +1/10 "
+has "case 23 table c" "$e" "^c +0 +[0-9.,-]+ +0/10 "
+has "case 23 message" "$e" "run-cells: a exited 0 but 2 of 10 verdicts are BLOCKED \\(more than 10 %\\)"
+[ "$(cat "$e/root/logs/a.rc")" = mostly-blocked ] || bad "case 23: a.rc is not mostly-blocked"
+[ "$(cat "$e/root/logs/b.rc")" = 0 ] || bad "case 23: b.rc is not 0"
+if grep -q 'run-cells: [bc] exited 0 but' "$e/out"; then bad "case 23: a cell at or under the threshold was flagged"; fi
+
+# the override, for a run that blocks on purpose
+e=$(new_env)
+meminfo "$e" 60
+emit_verdicts "$e/state/emit.a.1" 2 3 5
+LAB_BLOCKED_MAX_PCT=20 cells "$e" -j 1 a
+expect "case 23 (override at 20 %)" 0 "$e"
+has "case 23 override table" "$e" "^a +0 +[0-9.,-]+ +2/10 "
+
+# a failing cell keeps its own rc; the share is shown but not re-labelled
+e=$(new_env)
+meminfo "$e" 60
+echo "0 3" >"$e/state/spec.a"
+emit_verdicts "$e/state/emit.a.1" 9 0 1
+cells "$e" -j 1 a
+expect "case 23 (nonzero rc stays)" 1 "$e"
+has "case 23 nonzero table" "$e" "^a +3 +[0-9.,-]+ +9/10 "
+
+# retried/ is not counted
+e=$(new_env)
+meminfo "$e" 60
+mkdir -p "$e/root/evidence/a/retried"
+for i in 1 2 3 4 5 6; do printf 'result: BLOCKED\n' >"$e/root/evidence/a/retried/old$i.verdict"; done
+emit_verdicts "$e/state/emit.a.1" 0 0 10
+cells "$e" -j 1 a
+expect "case 23 (retried/ not counted)" 0 "$e"
+has "case 23 retried table" "$e" "^a +0 +[0-9.,-]+ +0/10 "
 
 if [ "$fail" -ne 0 ]; then
 	exit 1

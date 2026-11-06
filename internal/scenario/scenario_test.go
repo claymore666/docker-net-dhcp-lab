@@ -573,7 +573,7 @@ func TestRunA2IPAMShapeLooksUpAfterLeaseByClientIDAcrossMacChange(t *testing.T) 
 		leases:  []sourceadapter.Lease{{MAC: oldMAC, Address: addr, ClientID: clientID}},
 		leases2: []sourceadapter.Lease{{MAC: newMAC, Address: addr, ClientID: clientID}},
 	}
-	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeBridgeIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeBridgeIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha", PluginTag: "v2.7.0"}
 	v := runA2(context.Background(), e)
 	if v.Result != PASS {
 		t.Fatalf("want PASS, got %s (reason %q)", v.Result, v.Reason)
@@ -588,13 +588,100 @@ func TestRunA2IPAMShapeFailsWhenBeforeLeaseHasNoClientID(t *testing.T) {
 	const mac, addr = "aa:bb:cc:dd:ee:01", "10.200.1.179"
 	host := &addrChangeRunner{mac: mac, beforeAddr: addr, afterAddr: addr}
 	source := &fakeAdapter{leases: []sourceadapter.Lease{{MAC: mac, Address: addr}}}
-	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeMacvlanIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha"}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeMacvlanIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha", PluginTag: "v2.7.0"}
 	v := runA2(context.Background(), e)
 	if v.Result != FAIL {
 		t.Fatalf("want FAIL, got %s", v.Result)
 	}
 	if !strings.Contains(v.Reason, "client identifier") {
 		t.Fatalf("reason did not name the missing client identifier: %q", v.Reason)
+	}
+}
+
+// Lab #154: from plugin v2.8.0 a restart releases the old lease and asks
+// for the same address under the new MAC's identifier (plugin #1416), so
+// the old identifier is gone from the source's table. Data below is run
+// 6's dnsmasq bridge-ipam A2 snapshot.
+func a2HandoverEnv(t *testing.T, tag string, after []sourceadapter.Lease) Env {
+	t.Helper()
+	const oldMAC, newMAC, addr = "9a:d1:18:51:c5:55", "22:71:0e:8d:21:f4", "10.200.3.120"
+	host := &addrChangeRunner{mac: oldMAC, afterMac: newMAC, beforeAddr: addr, afterAddr: addr}
+	source := &fakeAdapter{
+		leases:  []sourceadapter.Lease{{MAC: oldMAC, Address: addr, ClientID: "00:" + oldMAC}},
+		leases2: after,
+	}
+	return Env{Host: host, Source: source, Cell: "dnsmasq", Shape: ShapeBridgeIPAM, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha", PluginTag: tag}
+}
+
+func TestRunA2IPAMKeepsTheAddressUnderTheNewIdentifierFromV280(t *testing.T) {
+	newRow := []sourceadapter.Lease{{MAC: "22:71:0e:8d:21:f4", Address: "10.200.3.120", ClientID: "00:22:71:0e:8d:21:f4"}}
+	for _, tag := range []string{"v2.8.0-rc1", "v2.8.0", "ghcr.io/claymore666/docker-net-dhcp:v2.9.1"} {
+		v := runA2(context.Background(), a2HandoverEnv(t, tag, newRow))
+		if v.Result != PASS || !strings.Contains(v.Reason, "00:9a:d1:18:51:c5:55 -> 00:22:71:0e:8d:21:f4") {
+			t.Errorf("%s: got %s %q, want PASS naming both identifiers", tag, v.Result, v.Reason)
+		}
+	}
+}
+
+// The same table under an older plugin is judged as before: the old
+// identifier must still be there.
+func TestRunA2IPAMBeforeV280StillNeedsTheOldIdentifier(t *testing.T) {
+	newRow := []sourceadapter.Lease{{MAC: "22:71:0e:8d:21:f4", Address: "10.200.3.120", ClientID: "00:22:71:0e:8d:21:f4"}}
+	for _, tag := range []string{"v2.7.0", "v2.7.9"} {
+		v := runA2(context.Background(), a2HandoverEnv(t, tag, newRow))
+		if v.Result != FAIL || !strings.Contains(v.Reason, "no lease for client identifier 00:9a:d1:18:51:c5:55") {
+			t.Errorf("%s: got %s %q, want the pre-2.8.0 FAIL", tag, v.Result, v.Reason)
+		}
+	}
+}
+
+// From v2.8.0 the verdict still fails when nobody holds the address, or
+// when a stranger does.
+func TestRunA2IPAMFromV280FailsWithoutOurRowAtTheAddress(t *testing.T) {
+	for name, after := range map[string][]sourceadapter.Lease{
+		"table empty":                       {},
+		"other address":                     {{MAC: "22:71:0e:8d:21:f4", Address: "10.200.3.121", ClientID: "00:22:71:0e:8d:21:f4"}},
+		"stranger's row":                    {{MAC: "aa:aa:aa:aa:aa:aa", Address: "10.200.3.120", ClientID: "00:aa:aa:aa:aa:aa:aa"}},
+		"old identifier at another address": {{MAC: "9a:d1:18:51:c5:55", Address: "10.200.3.121", ClientID: "00:9a:d1:18:51:c5:55"}},
+		"no identifier, stranger's MAC":     {{MAC: "aa:aa:aa:aa:aa:aa", Address: "10.200.3.120"}},
+	} {
+		v := runA2(context.Background(), a2HandoverEnv(t, "v2.8.0", after))
+		if v.Result != FAIL || !strings.Contains(v.Reason, "under the old client identifier") {
+			t.Errorf("%s: got %s %q, want FAIL", name, v.Result, v.Reason)
+		}
+	}
+}
+
+// A source that logs no identifier (a row with only the MAC) is ours
+// when the MAC is the restarted container's.
+func TestRunA2IPAMFromV280AcceptsAnIdentifierlessRowOfTheNewMAC(t *testing.T) {
+	row := []sourceadapter.Lease{{MAC: "22:71:0e:8d:21:f4", Address: "10.200.3.120"}}
+	if v := runA2(context.Background(), a2HandoverEnv(t, "v2.8.0", row)); v.Result != PASS {
+		t.Fatalf("got %s %q", v.Result, v.Reason)
+	}
+}
+
+// A plugin that kept the old identifier (no hand-over) still passes
+// under the new gate: either identifier is accepted.
+func TestRunA2IPAMFromV280AcceptsTheOldIdentifierToo(t *testing.T) {
+	kept := []sourceadapter.Lease{{MAC: "22:71:0e:8d:21:f4", Address: "10.200.3.120", ClientID: "00:9a:d1:18:51:c5:55"}}
+	if v := runA2(context.Background(), a2HandoverEnv(t, "v2.8.0", kept)); v.Result != PASS {
+		t.Fatalf("got %s %q", v.Result, v.Reason)
+	}
+}
+
+// An unparsable tag cannot be told apart from either behaviour: BLOCKED,
+// never a guess. Non-IPAM shapes do not read the tag at all.
+func TestRunA2IPAMBlocksOnAnUnparsableTagAndOtherShapesIgnoreIt(t *testing.T) {
+	v := runA2(context.Background(), a2HandoverEnv(t, "latest", nil))
+	if v.Result != BLOCKED {
+		t.Fatalf("got %s %q, want BLOCKED", v.Result, v.Reason)
+	}
+	host := &addrChangeRunner{mac: "aa:bb:cc:dd:ee:ff", beforeAddr: "10.200.1.100", afterAddr: "10.200.1.100"}
+	source := &fakeAdapter{leases: []sourceadapter.Lease{{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.200.1.100"}}}
+	e := Env{Host: host, Source: source, Cell: "kea", Shape: ShapeBridge, Network: "net1", EvidenceDir: t.TempDir(), GitSHA: "sha", PluginTag: "latest"}
+	if v := runA2(context.Background(), e); v.Result != PASS {
+		t.Fatalf("bridge with an odd tag: got %s %q, want PASS", v.Result, v.Reason)
 	}
 }
 

@@ -39,6 +39,16 @@ RETRY_JOBS=1
 # so a rerun cannot help: E3b ran against a source that did not serve the
 # VLAN (#121). Matched against the verdict's scenario: line (#79).
 RETRY_SKIP='E3b-vlan-parent'
+# A cell whose BLOCKED verdicts exceed this share of its verdict files did
+# not measure the product, whatever run-cell.sh returned (#156). Measured
+# over the evidence of lab host runs 4, 5 and 6: cells that were healthy
+# or hit only a few lab faults ranged 0 to 5.7 % (kea-ha, run 5); cells
+# that a lab or guest fault emptied ranged 21.5 % (dnsmasq, run 5) to 100 %
+# (run 4), among them kea 69 % (run 5), openwrt 78.5 % and windows 90.6 %
+# (run 6, the openwrt cell exited 0). 10 % sits in that gap, nearly twice
+# the highest healthy cell. LAB_BLOCKED_MAX_PCT overrides it for a run
+# that blocks on purpose.
+BLOCKED_MAX_PCT=${LAB_BLOCKED_MAX_PCT:-10}
 CHECK_ONLY=0
 CELLS=()
 while [ $# -gt 0 ]; do
@@ -426,9 +436,39 @@ reap_one() {
 	[ "$rc" -eq 0 ] || teardown_cell "$cell"
 }
 
+# "blocked total" for the verdict files of the cell's evidence (the top
+# level only: retried/ holds first attempts that were replaced), or
+# nothing when the cell has none.
+blocked_counts() {
+	local f b=0 t=0
+	for f in "$ROOT/evidence/$1"/*.verdict; do
+		[ -e "$f" ] || continue
+		t=$((t + 1))
+		if grep -qx -e 'result: BLOCKED' -- "$f"; then b=$((b + 1)); fi
+	done
+	[ "$t" -gt 0 ] || return 0
+	echo "$b $t"
+}
+
+# A cell that exited 0 with most of its verdicts BLOCKED is a failure of
+# the run, not a pass (#156): openwrt returned 0 with 267 of 340 BLOCKED
+# in run 6. Runs after the retry pass, so it judges the final verdicts.
+flag_mostly_blocked() {
+	local cell b t
+	for cell in "${CELLS[@]}"; do
+		[ "${RC[$cell]:-}" = 0 ] || continue
+		read -r b t <<<"$(blocked_counts "$cell")"
+		[ -n "${t:-}" ] || continue
+		[ $((b * 100)) -gt $((BLOCKED_MAX_PCT * t)) ] || continue
+		RC[$cell]=mostly-blocked
+		echo "mostly-blocked" >"$ROOT/logs/$cell.rc"
+		echo "run-cells: $cell exited 0 but $b of $t verdicts are BLOCKED (more than ${BLOCKED_MAX_PCT} %): the cell did not measure the product; reported as mostly-blocked, non-zero"
+	done
+}
+
 print_table() {
-	local cell rc mins
-	printf '%-18s %-14s %8s  %s\n' cell rc minutes log
+	local cell rc mins b t share
+	printf '%-18s %-14s %8s  %-14s %s\n' cell rc minutes blocked log
 	for cell in "${CELLS[@]}"; do
 		rc=${RC[$cell]:-not-started}
 		[ -z "${RETRIED[$cell]:-}" ] || rc="$rc (retried)"
@@ -436,7 +476,11 @@ print_table() {
 		if [ -n "${START[$cell]:-}" ] && [ -n "${END[$cell]:-}" ]; then
 			mins=$(awk -v s="${START[$cell]}" -v e="${END[$cell]}" 'BEGIN {printf "%.1f", (e - s) / 60}')
 		fi
-		printf '%-18s %-14s %8s  %s\n' "$cell" "$rc" "$mins" "$ROOT/logs/$cell.log"
+		share=-
+		b="" t=""
+		read -r b t <<<"$(blocked_counts "$cell")"
+		[ -z "${t:-}" ] || share="$b/$t"
+		printf '%-18s %-14s %8s  %-14s %s\n' "$cell" "$rc" "$mins" "$share" "$ROOT/logs/$cell.log"
 	done
 }
 
@@ -581,11 +625,13 @@ else
 	echo "run-cells: retry pass disabled (--no-retry)"
 fi
 
+flag_mostly_blocked
 print_table
 failed=0
 for cell in "${CELLS[@]}"; do
 	# skipped-image is the one non-zero result that is not a failure; a
-	# skipped-disk, skipped-exists, terminated or missing rc still is.
+	# skipped-disk, skipped-exists, terminated, mostly-blocked or missing
+	# rc still is.
 	case "${RC[$cell]:-}" in 0 | skipped-image) ;; *) failed=1 ;; esac
 done
 exit "$failed"

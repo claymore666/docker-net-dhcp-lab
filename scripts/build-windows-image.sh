@@ -27,8 +27,10 @@ TMPL_DIR=$REPO_ROOT/cloud-init/windows
 
 IMAGE_NAME=windows-2025-eval
 ISO_NAME='windows-server-2025-eval.iso'
-VIRTIO_NAME='virtio-win.iso'
-VIRTIO_URL=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+# A versioned release, not stable-virtio/: the stable name moves and its
+# drivers would change under one build id (lab #14).
+VIRTIO_NAME='virtio-win-0.1.302.iso'
+VIRTIO_URL=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso
 # Setup selects the image by name; the pin file header records the ISO it
 # was written for (lab #14).
 WIN_IMAGE_NAME='Windows Server 2025 SERVERSTANDARDCORE'
@@ -84,6 +86,16 @@ if [ "${seg_addr#*/}" != 24 ] || [ "${pool_start%.*}" != "$seg_prefix" ] || [ "$
 	echo "build-windows-image: REFUSED -- segment $seg_addr is not a /24 holding the pool $pool_start-$pool_end" >&2
 	exit 1
 fi
+# The B5 class pool band, the same two numbers as up-source.sh (the test
+# compares them); the band between the main pool and it is excluded.
+class_first_host=221
+class_last_host=230
+gap_first=$((${pool_end##*.} + 1))
+gap_last=$((class_first_host - 1))
+if [ "$gap_first" -gt "$gap_last" ]; then
+	echo "build-windows-image: REFUSED -- the pool $pool_start-$pool_end reaches the class pool band .$class_first_host-.$class_last_host" >&2
+	exit 1
+fi
 
 # The same scheme as up-source.sh's mac_from, so the NICs the image
 # matches by MAC are the ones the run gives it; the test compares the two.
@@ -103,9 +115,9 @@ else
 	pubkey=$(cat ~/.ssh/id_ed25519_lab.pub)
 fi
 
-# pinned_sum prints the first sha256 of the pin file, or nothing.
+# pinned_sum FILE prints the sha256 the pin file holds for FILE, or nothing.
 pinned_sum() {
-	awk 'NF && $1 !~ /^#/ {print $1; exit}' "$PIN_FILE" 2>/dev/null || true
+	awk -v f="$1" 'NF && $1 !~ /^#/ && $2 == f {print $1; exit}' "$PIN_FILE" 2>/dev/null || true
 }
 
 # win_mac turns aa:bb:.. into the AA-BB-.. form Get-NetAdapter reports.
@@ -122,14 +134,16 @@ subst() {
 	printf '%s\n' "$text"
 }
 
+# One driver tree only: Setup loads every listed path and fails the whole
+# install with 0x80070103 on a second copy of a driver it already loaded
+# (measured: viostor 2k25 loaded, the 2k22 copy then stopped Setup, lab #14).
+# A path that does not exist is skipped (same run: the D: paths came first).
 driver_paths() {
-	local n=0 letter drv tree
+	local n=0 letter drv
 	for letter in D E F G; do
 		for drv in viostor NetKVM; do
-			for tree in 2k25 2k22; do
-				n=$((n + 1))
-				printf '        <PathAndCredentials wcm:action="add" wcm:keyValue="%d"><Path>%s:\\%s\\%s\\amd64</Path></PathAndCredentials>\n' "$n" "$letter" "$drv" "$tree"
-			done
+			n=$((n + 1))
+			printf '        <PathAndCredentials wcm:action="add" wcm:keyValue="%d"><Path>%s:\\%s\\2k25\\amd64</Path></PathAndCredentials>\n' "$n" "$letter" "$drv"
 		done
 	done
 }
@@ -144,7 +158,9 @@ render_seed() {
 		"MGMT_MAC=$(win_mac "$mgmt_mac")" "MGMT_IP=${mgmt_addr%%/*}" "MGMT_PREFIX=${mgmt_addr#*/}" "MGMT_GW=$mgmt_gw" \
 		"SEG_MAC=$(win_mac "$seg_mac")" "SEG_IP=$seg_ip" "SEG_PREFIX=${seg_addr#*/}" \
 		"SEG_NETWORK=${seg_subnet%/*}" "SEG_GATEWAY=$seg_ip" \
-		"POOL_START=$pool_start" "POOL_END=$pool_end" <"$TMPL_DIR/firstlogon.tmpl.ps1" >"$d/firstlogon.ps1"
+		"POOL_START=$pool_start" "POOL_END=$pool_end" \
+		"CLASS_POOL_START=$seg_prefix.$class_first_host" "CLASS_POOL_END=$seg_prefix.$class_last_host" \
+		"GAP_START=$seg_prefix.$gap_first" "GAP_END=$seg_prefix.$gap_last" <"$TMPL_DIR/firstlogon.tmpl.ps1" >"$d/firstlogon.ps1"
 }
 
 # image_id is the sha256 over a render with fixed stand-in passwords and
@@ -156,7 +172,7 @@ image_id() {
 	render_seed "$d" ID-PENDING render-only render-only
 	(
 		cd "$d"
-		echo "$WIN_IMAGE_NAME $ISO_NAME $VM_SHAPE pin=$(pinned_sum)"
+		echo "$WIN_IMAGE_NAME $ISO_NAME $VM_SHAPE pin=$(pinned_sum "$ISO_NAME") virtio=$(pinned_sum "$VIRTIO_NAME")"
 		find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
 	) | sha256sum | cut -d' ' -f1
 	rm -rf "$d"
@@ -236,18 +252,22 @@ refuse() {
 	exit 1
 }
 
-pin=$(pinned_sum)
+pin=$(pinned_sum "$ISO_NAME")
 if [ -z "$pin" ]; then
 	refuse "no checksum is pinned for the ISO in $PIN_FILE; add '<sha256>  $ISO_NAME' under its header"
 fi
 if ! [[ "$pin" =~ ^[0-9a-f]{64}$ ]]; then
 	refuse "the pinned value in $PIN_FILE is not a sha256"
 fi
+vpin=$(pinned_sum "$VIRTIO_NAME")
+[[ "$vpin" =~ ^[0-9a-f]{64}$ ]] || refuse "no sha256 is pinned for $VIRTIO_NAME in $PIN_FILE"
 iso=$ISO_DIR/$ISO_NAME
 virtio=$ISO_DIR/$VIRTIO_NAME
 [ -f "$iso" ] || refuse "$iso is not there; download the Windows Server 2025 evaluation ISO from the Evaluation Center by hand and place it there"
 [ -f "$virtio" ] || refuse "$virtio is not there; download $VIRTIO_URL"
 sum=$(sha256sum "$iso" | awk '{print $1}')
+vsum=$(sha256sum "$virtio" | awk '{print $1}')
+[ "$vsum" = "$vpin" ] || refuse "$virtio is $vsum, $PIN_FILE pins $vpin; download $VIRTIO_URL again"
 [ "$sum" = "$pin" ] || refuse "$iso is $sum, $PIN_FILE pins $pin; if this is a newer evaluation ISO from the Evaluation Center, check the image name and replace the pinned line in $PIN_FILE with the new sum, otherwise put the pinned ISO back"
 if sudo -n virsh dominfo "$domain" >/dev/null 2>&1; then
 	refuse "domain $domain exists and holds this cell's MACs and address; tear the cell down first"
@@ -314,9 +334,12 @@ sudo -n virt-install \
 	--graphics none --noautoconsole --import
 
 # "Press any key to boot from CD" times out on a blank disk unless
-# answered; a few keys in the first half minute carry it past.
-for _ in $(seq 1 15); do
-	sudo -n virsh send-key "$build_dom" KEY_SPACE >/dev/null 2>&1 || true
+# answered. The key is Enter: a key that reaches the Windows Boot Manager
+# stops its countdown, and only Enter then starts Setup (measured: Space
+# left the menu waiting for three hours, lab #14). Keys for 90 s, since
+# OVMF took over a minute to draw its first screen on the lab host.
+for _ in $(seq 1 45); do
+	sudo -n virsh send-key "$build_dom" KEY_ENTER >/dev/null 2>&1 || true
 	sleep "$KEY_SLEEP"
 done
 
@@ -353,6 +376,16 @@ wait_off 300 || refuse "the VM did not power off after the proof"
 sudo -n virsh undefine "$build_dom" --nvram >/dev/null
 mv "$part" "$dest"
 echo "$id" >"$CACHE_DIR/$IMAGE_NAME.build-id"
-printf '%s  %s\n%s  %s\n' "$sum" "$ISO_NAME" "$(sha256sum "$virtio" | awk '{print $1}')" "$VIRTIO_NAME" >"$CACHE_DIR/$IMAGE_NAME.sources"
+printf '%s  %s\n%s  %s\n' "$sum" "$ISO_NAME" "$vsum" "$VIRTIO_NAME" >"$CACHE_DIR/$IMAGE_NAME.sources"
 ok=1
-echo "build-windows-image: $dest built, id $id"
+# A dated, read-only copy with its sidecars: cells boot overlays of $dest,
+# and a failed or expired rebuild rolls back by copying this one over it
+# (the evaluation runs 180 days from install, lab #14).
+keep=$CACHE_DIR/$IMAGE_NAME-$(date -u +%Y%m%d)
+rm -f "$keep.qcow2" "$keep.build-id" "$keep.sources"
+cp --sparse=always "$dest" "$keep.qcow2"
+cp "$CACHE_DIR/$IMAGE_NAME.build-id" "$keep.build-id"
+cp "$CACHE_DIR/$IMAGE_NAME.sources" "$keep.sources"
+chmod 0444 "$keep.qcow2" "$keep.build-id" "$keep.sources"
+cmp -s "$dest" "$keep.qcow2" || refuse "the dated copy $keep.qcow2 differs from $dest"
+echo "build-windows-image: $dest built, id $id; read-only copy $keep.qcow2"
