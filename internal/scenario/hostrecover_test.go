@@ -183,8 +183,9 @@ func TestRunOneNamesTheHostResetInTheVerdict(t *testing.T) {
 		return pass("A5b", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
 	}}
 	got := RunOne(context.Background(), s, e)
-	if !ran || got.Result != PASS || !strings.Contains(got.Reason, "before this scenario the docker host stopped answering ssh") {
-		t.Errorf("ran=%v %s %q: want the body run and the reset named", ran, got.Result, got.Reason)
+	if !ran || got.Result != BLOCKED || !strings.Contains(got.Reason, "body passed on a power-cycled host") ||
+		!strings.Contains(got.Reason, "before this scenario the docker host stopped answering ssh") {
+		t.Errorf("ran=%v %s %q: want the body run, BLOCKED, and the reset named", ran, got.Result, got.Reason)
 	}
 
 	host.up, host.noPlugin = false, true
@@ -201,5 +202,35 @@ func TestRunOneNamesTheHostResetInTheVerdict(t *testing.T) {
 	got = RunOne(context.Background(), s, e)
 	if got.Result != BLOCKED || strings.Contains(got.Reason, "power-cycled") || len(evidenceFiles(t, h.EvidenceDir)) != 3 {
 		t.Errorf("%s %q: a scenario past Max must block without a reset", got.Result, got.Reason)
+	}
+}
+
+func TestRunOneNeverHidesAHostLostAfterAPassingScenario(t *testing.T) {
+	host := &downHost{up: true}
+	v := &fakeVirsh{back: func() { host.up = true }}
+	h := newRecovery(t, v, 2)
+	e := Env{Host: host, Source: &fakeAdapter{caps: allNeeds()}, Cell: "openwrt", Shape: ShapeMacvlan,
+		GitSHA: "abc1234", EvidenceDir: t.TempDir(), HostRecovery: h}
+	x := Scenario{Name: "X", Run: func(context.Context, Env) Verdict {
+		defer func() { host.up = false }()
+		return pass("X", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
+	}}
+	y := Scenario{Name: "Y", Run: func(context.Context, Env) Verdict {
+		return pass("Y", "openwrt", ShapeMacvlan, "body ran", nil, "abc1234")
+	}}
+	vx, vy := RunOne(context.Background(), x, e), RunOne(context.Background(), y, e)
+	if vx.Result == PASS && vy.Result == PASS {
+		t.Errorf("X %s, Y %s %q: a host lost after X must show in a verdict worse than PASS", vx.Result, vy.Result, vy.Reason)
+	}
+	if vy.Result != BLOCKED || !strings.Contains(vy.Reason, "power-cycled") {
+		t.Errorf("Y %s %q: want BLOCKED naming the reset", vy.Result, vy.Reason)
+	}
+
+	host.up = false
+	f := Scenario{Name: "F", Run: func(context.Context, Env) Verdict {
+		return fail("F", "openwrt", ShapeMacvlan, "lease missing", nil, "abc1234")
+	}}
+	if vf := RunOne(context.Background(), f, e); vf.Result != FAIL || !strings.Contains(vf.Reason, "power-cycled") {
+		t.Errorf("F %s %q: a FAIL after a reset stays FAIL and names the reset", vf.Result, vf.Reason)
 	}
 }

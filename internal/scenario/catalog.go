@@ -311,6 +311,12 @@ func runOneInner(ctx context.Context, s Scenario, e Env) Verdict {
 	v := runGated(ctx, s, e)
 	if hostNote != "" {
 		v.Reason += "; before this scenario " + hostNote
+		// The matrix shows no reason on a PASS, so a host lost after the
+		// previous scenario's body would vanish from the published run (#158).
+		if v.Result == PASS {
+			v.Result = BLOCKED
+			v.Reason = "body passed on a power-cycled host: " + v.Reason
+		}
 	}
 	return v
 }
