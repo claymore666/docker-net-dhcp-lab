@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/claymore666/docker-net-dhcp-lab/internal/sourceadapter"
 )
 
 // errSSHRefused is what the run-6 openwrt host gave every call after A5b (#158).
@@ -52,6 +54,9 @@ func (h *downHost) Run(ctx context.Context, cmd string) (string, error) {
 	}
 	if cmd == bootIDCmd {
 		return "new-boot", nil
+	}
+	if strings.Contains(cmd, "{{.Enabled}}") && !h.noPlugin {
+		return "true", nil
 	}
 	return readyHost{&fakeRunOneHostRunner{installed: !h.noPlugin, pgrepOK: true}}.Run(ctx, cmd)
 }
@@ -232,5 +237,73 @@ func TestRunOneNeverHidesAHostLostAfterAPassingScenario(t *testing.T) {
 	}}
 	if vf := RunOne(context.Background(), f, e); vf.Result != FAIL || !strings.Contains(vf.Reason, "power-cycled") {
 		t.Errorf("F %s %q: a FAIL after a reset stays FAIL and names the reset", vf.Result, vf.Reason)
+	}
+}
+
+func TestShapeStartGateResetsADeadHostThroughWaitPluginReady(t *testing.T) {
+	host := &downHost{}
+	v := &fakeVirsh{back: func() { host.up = true }}
+	h := newRecovery(t, v, 2)
+	ctx := context.Background()
+	wait := func() error { return waitPluginReadyTuned(ctx, host, 20*time.Millisecond, 5*time.Millisecond) }
+	if err := h.Gate(ctx, host, wait); err != nil {
+		t.Fatalf("gate after reset: %v", err)
+	}
+	if len(v.calls) == 0 || len(evidenceFiles(t, h.EvidenceDir)) != 1 || h.TakeNote() == "" {
+		t.Errorf("virsh %v: a host refusing ssh at the shape-start gate must be reset and recorded", v.calls)
+	}
+
+	host.noPlugin = true
+	if err := h.Gate(ctx, host, wait); err == nil || len(evidenceFiles(t, h.EvidenceDir)) != 1 {
+		t.Errorf("err %v, virsh %v: a host that answers ssh with no plugin must not be reset", err, v.calls)
+	}
+}
+
+// scriptedHost answers each command through fn, counting calls.
+type scriptedHost struct {
+	calls int
+	fn    func(n int, cmd string) (string, error)
+}
+
+func (h *scriptedHost) Run(_ context.Context, cmd string) (string, error) {
+	h.calls++
+	return h.fn(h.calls, cmd)
+}
+
+func TestWaitPluginReadyNamesOnlyTheLastAttemptsSSHError(t *testing.T) {
+	ctx := context.Background()
+	backNoPlugin := &scriptedHost{fn: func(n int, cmd string) (string, error) {
+		if n <= 2 {
+			return "", errSSHRefused
+		}
+		return "false", nil
+	}}
+	if err := waitPluginReadyTuned(ctx, backNoPlugin, 30*time.Millisecond, 2*time.Millisecond); err == nil || sourceadapter.IsConnectError(err) {
+		t.Errorf("%v: a host that answers again must not read as unreachable", err)
+	}
+	socketRefused := &scriptedHost{fn: func(_ int, cmd string) (string, error) {
+		if strings.Contains(cmd, "{{.Enabled}}") {
+			return "true", nil
+		}
+		return "", errSSHRefused
+	}}
+	if err := waitPluginReadyTuned(ctx, socketRefused, 10*time.Millisecond, 2*time.Millisecond); !sourceadapter.IsConnectError(err) {
+		t.Errorf("%v: a refused socket check must carry the ssh error", err)
+	}
+}
+
+func TestHostRecoveryPrintsOneLinePerResetNamingDomainAndEvidence(t *testing.T) {
+	host := &downHost{}
+	v := &fakeVirsh{back: func() { host.up = true }}
+	h := newRecovery(t, v, 2)
+	var log strings.Builder
+	h.Log = &log
+	if _, tried, err := h.Try(context.Background(), host, errSSHRefused); !tried || err != nil {
+		t.Fatalf("tried=%v err=%v", tried, err)
+	}
+	files := evidenceFiles(t, h.EvidenceDir)
+	want := "labctl run: docker host lab-openwrt-dockerhost reset after an ssh connect error; evidence " + files[0] + "\n"
+	if len(files) != 1 || log.String() != want {
+		t.Errorf("log %q, files %v: want exactly %q", log.String(), files, want)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,11 +23,13 @@ type HostRecovery struct {
 	EvidenceDir string
 	// Virsh runs one virsh command on the lab host; nil means sudo -n virsh.
 	Virsh func(ctx context.Context, args ...string) (string, error)
-	Max   int           // resets allowed per labctl run
-	Wait  time.Duration // bound for ssh and docker to answer after a reset
-	Poll  time.Duration
-	used  int
-	note  string // the last reset, until a verdict takes it
+	// Log gets the one line per reset that run logs show; nil means os.Stderr.
+	Log  io.Writer
+	Max  int           // resets allowed per labctl run
+	Wait time.Duration // bound for ssh and docker to answer after a reset
+	Poll time.Duration
+	used int
+	note string // the last reset, until a verdict takes it
 }
 
 // TakeNote returns the reset not yet named in a verdict, once.
@@ -87,7 +90,11 @@ func (h *HostRecovery) Try(ctx context.Context, r sourceadapter.Runner, gateErr 
 	if werr := os.WriteFile(path, []byte(log.String()), 0o644); werr != nil {
 		rerr = errors.Join(rerr, fmt.Errorf("host reset evidence: %w", werr))
 	}
-	fmt.Fprintf(os.Stderr, "labctl run: docker host %s %s after an ssh connect error; evidence %s\n", dom, action, path)
+	logw := h.Log
+	if logw == nil {
+		logw = os.Stderr
+	}
+	fmt.Fprintf(logw, "labctl run: docker host %s %s after an ssh connect error; evidence %s\n", dom, action, path)
 	if rerr != nil {
 		return "", true, fmt.Errorf("docker host %s %s did not bring it back: %w", dom, action, rerr)
 	}

@@ -585,14 +585,15 @@ func cmdRun(args []string) int {
 	// Two resets per shape, each waiting up to 5 min (#158).
 	hostRecovery := &scenario.HostRecovery{Cell: cellName, Shape: shape, EvidenceDir: evidenceDir,
 		Max: 2, Wait: 5 * time.Minute, Poll: 5 * time.Second}
-	hi := hostInfo(ctx, hostRunner)
-
 	// The readiness gate every scenario relies on (RunOne's
 	// ensurePluginKnownState) only runs starting with the first
 	// scenario; NetworkUp runs before that, so it needs its own gate
 	// here (issue #3). A fresh bring-up's plugin can report done, and
 	// even have a live process, before its socket actually answers.
-	if err := hostRecovery.Gate(ctx, hostRunner, func() error { return scenario.WaitPluginReady(ctx, hostRunner) }); err != nil {
+	gateErr := hostRecovery.Gate(ctx, hostRunner, func() error { return scenario.WaitPluginReady(ctx, hostRunner) })
+	// Read after the gate, so a host it power-cycled is still named in every verdict (#158).
+	hi := hostInfo(ctx, hostRunner)
+	if err := gateErr; err != nil {
 		logPath := filepath.Join(evidenceDir, fmt.Sprintf("%s-%s-plugin-not-ready.log", cellName, shape))
 		if logErr := scenario.CapturePluginLog(ctx, hostRunner, logPath); logErr != nil {
 			fmt.Fprintf(os.Stderr, "labctl run: plugin log capture also failed: %v\n", logErr)

@@ -171,5 +171,12 @@ up-cell: the end' || true
 expect "a bring-up with four named lines did not keep exactly the last two: $(grep '^abort|bridge|' "$tmp/up-many/calls")" '[ "$(grep "^abort|bridge|" "$tmp/up-many/calls")" = "abort|bridge|$(ev up-many)|the cell did not come up (lab error, not a plugin finding): seed-chr: last but one up-cell: the end" ]'
 expect "an earlier bring-up line leaked into the reason" '! grep -qE "first cause|middle" "$tmp/up-many/calls"'
 
+# #158: a docker host labctl power-cycled is named at the end of the cell, and only then.
+mkdir -p "$tmp/reset/evidence"
+echo reset >"$tmp/reset/evidence/t-pair-macvlan-host-reset-1-20261106T130000Z.txt"
+run reset pair || fail=1
+expect "run-cell named no power-cycled docker host" 'grep -qx "run-cell: the t-pair docker host was power-cycled during the run, see $(ev reset)/t-pair-macvlan-host-reset-1-20261106T130000Z.txt" "$tmp/reset/out"'
+expect "run-cell named a power-cycle that did not happen" '! grep -q "power-cycled" "$tmp/main/out"'
+
 [ "$fail" -eq 0 ] && echo "$t: PASS"
 exit "$fail"
