@@ -342,7 +342,7 @@ ps_ssh() {
 ready_windows() {
 	local got ip=${seg_addr%%/*} bits=${seg_addr##*/}
 	got=$(ps_ssh "\$m = (Get-Content -Raw C:\\ProgramData\\lab\\bootstrap-done).Trim(); \$t = (Get-ScheduledTask -TaskName LabNet).State; \$s = @(Get-NetIPAddress -InterfaceAlias seg -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { \$_.IPAddress -eq '$ip' -and \$_.PrefixLength -eq $bits -and \$_.AddressState -eq 'Preferred' }).Count; \"\$m \$t \$s\"" | tr -d '\r\n') || return 1
-	[ -n "$baked_id" ] && [ "$got" = "$baked_id Ready 1" ]
+	[ "$got" = "$baked_id Ready 1" ]
 }
 
 # The wait below is 60 x 10 s unless a test shortens it (#14).
